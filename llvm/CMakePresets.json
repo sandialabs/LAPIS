@@ -35,7 +35,7 @@
       "description": "Default preset for notchpeak",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build",
-      "installDir": "${sourceDir}/install",
+      "installDir": "${sourceDir}/../../llvm-install",
       "cacheVariables": {
         "LLVM_ENABLE_PROJECTS": "mlir",
         "LLVM_TARGETS_TO_BUILD": "X86",
@@ -48,7 +48,8 @@
         "CMAKE_C_COMPILER_LAUNCHER": "ccache",
         "CMAKE_CXX_COMPILER_LAUNCHER": "ccache",
         "LLVM_CCACHE_BUILD": "ON",
-        "CMAKE_BUILD_TYPE": "Debug"
+        "CMAKE_BUILD_TYPE": "Release",
+        "MLIR_ENABLE_BINDINGS_PYTHON": "ON"
       }
     }
   ],

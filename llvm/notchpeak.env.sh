@@ -11,4 +11,4 @@ export CC=`which gcc`
 export CXX=`which g++`
 export CCACHE_DIR=`readlink -f ~/scratchVast/mlirWorkspace/ccache`
 export PATH=`git rev-parse --show-toplevel`/llvm/build/bin:$PATH
-export MLIR_Workspace=$(readlink -f ${0:a:h}/../..)
+export MLIR_Workspace=$(readlink -f ${0:a:h}/..)
