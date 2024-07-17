@@ -1,0 +1,104 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 23,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "default",
+      "description": "Default preset",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "installDir": "${sourceDir}/../LAPIS-install",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "${sourceDir}/../llvm-install",
+        "LLVM_TARGETS_TO_BUILD": "X86",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "LLVM_USE_LINKER": "mold",
+        "LLVM_ENABLE_LLD": "OFF",
+        "MLIR_ENABLE_BINDINGS_PYTHON": "ON",
+        "LAPIS_ENABLE_PART_TENSOR": "ON",
+        "LLVM_PARALLEL_COMPILE_JOBS": "24",
+        "LLVM_PARALLEL_LINK_JOBS": "2",
+        "CMAKE_C_COMPILER_LAUNCHER": "ccache",
+        "CMAKE_CXX_COMPILER_LAUNCHER": "ccache",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "notchpeak",
+      "displayName": "notchpeak",
+      "description": "Default preset",
+      "binaryDir": "${sourceDir}/build",
+      "installDir": "${sourceDir}/../LAPIS-install",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "${sourceDir}/../llvm-install",
+        "LLVM_TARGETS_TO_BUILD": "X86",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "LLVM_ENABLE_LLD": "ON",
+        "MLIR_ENABLE_BINDINGS_PYTHON": "ON",
+        "LAPIS_ENABLE_PART_TENSOR": "ON",
+        "LLVM_PARALLEL_COMPILE_JOBS": "24",
+        "LLVM_PARALLEL_LINK_JOBS": "2",
+        "CMAKE_C_COMPILER_LAUNCHER": "ccache",
+        "CMAKE_CXX_COMPILER_LAUNCHER": "ccache",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "base",
+      "displayName": "base",
+      "description": "base",
+      "configurePreset": "default"
+    },
+    {
+      "name": "default",
+      "inherits": "base",
+      "displayName": "Default",
+      "description": "Default preset",
+      "configurePreset": "default"
+    },
+    {
+      "name": "notchpeak",
+      "inherits": "base",
+      "displayName": "notchpeak",
+      "description": "Default preset for notchpeak",
+      "configurePreset": "notchpeak"
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "default",
+      "description": "default",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "default"
+        },
+        {
+          "type": "build",
+          "name": "default"
+        }
+      ]
+    },
+    {
+      "name": "notchpeak",
+      "description": "default workflow for notchpeak",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "notchpeak"
+        },
+        {
+          "type": "build",
+          "name": "notchpeak"
+        }
+      ]
+    }
+  ]
+}
