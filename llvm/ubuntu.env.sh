@@ -23,23 +23,23 @@ cmake -GNinja -B llvmBuild -S llvm-project/llvm -DLLVM_ENABLE_LLD=OFF \
   -DCMAKE_BUILD_TYPE=MinSizeRel -DLLVM_ENABLE_ASSERTIONS=ON \
   -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
   -DPython3_EXECUTABLE:FILEPATH=`which python3`
-# cmake --build llvmBuild --target install-llvm-headers tools/install/strip \
-#   install-llvm-libraries cmake/modules/install tools/llvm-config/install \
-#   install-mlir-headers install-mlir-libraries install-mlir-opt \
-#   install-mlir-translate tools/mlir/cmake/modules/install
+
+[[ -f llvmBuild/lib/cmake/llvm/LLVMConfig.cmake && \
+   -f llvmBuild/lib/cmake/mlir/MLIRConfig.cmake ]] ||
 cmake --build llvmBuild --target llvm-headers \
   llvm-libraries  \
   mlir-headers mlir-libraries mlir-opt \
   mlir-translate
 
-[[ -f lapisBuild/build.ninja ]] || \
+[[ -f lapisBuild/Makefile ]] || \
 cmake -S LAPIS -B lapisBuild \
   -DLLVM_TARGETS_TO_BUILD="Native" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_PREFIX_PATH="$WORKSPACE/llvmBuild" \
   -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
   -DPython3_EXECUTABLE=`which python3`
-cmake --build lapisBuild -j
+
+[[ -x lapisBuild/bin/lapis-opt ]] || cmake --build lapisBuild -j
 
 [[ -f kokkosBuild/build.ninja ]] || \
 cmake -GNinja -S kokkos -B kokkosBuild \
@@ -47,4 +47,6 @@ cmake -GNinja -S kokkos -B kokkosBuild \
   -DKokkos_ENABLE_SERIAL=ON \
   -DCMAKE_CXX_FLAGS="-fPIC" \
   -DCMAKE_INSTALL_PREFIX=$WORKSPACE/kokkosInstall
+
+[[ -f kokkosInstall/lib/cmake/Kokkos/KokkosConfig.cmake ]] || \
 cmake --build kokkosBuild --target install

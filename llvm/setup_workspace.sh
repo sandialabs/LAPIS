@@ -12,6 +12,11 @@ fi
 [[ -d LAPIS/.git ]] || \
   git clone git@github.com:tensor-compilers/LAPIS.git
 
+[[ -d vmiheer-mlir-playground/.git ]] || \
+  git clone git@github.com:tensor-compilers/vmiheer-mlir-playground.git
+[[ -d parttensor_mpi_backend/.git ]] || \
+  git clone git@github.com:tensor-compilers/parttensor_mpi_backend.git
+
 # Clone Kokkos
 [[ -d kokkos/.git ]] || git clone -b master git@github.com:kokkos/kokkos.git
 
