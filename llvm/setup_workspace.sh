@@ -22,7 +22,6 @@ fi
 
 # Create build/install directories
 mkdir -p llvmBuild
-mkdir -p llvmInstall
 mkdir -p lapisBuild
 mkdir -p kokkosBuild
 mkdir -p kokkosInstall

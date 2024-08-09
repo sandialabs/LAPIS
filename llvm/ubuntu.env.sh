@@ -25,7 +25,8 @@ cmake -GNinja -B llvmBuild -S llvm-project/llvm -DLLVM_ENABLE_LLD=OFF \
   -DPython3_EXECUTABLE:FILEPATH=`which python3`
 
 [[ -f llvmBuild/lib/cmake/llvm/LLVMConfig.cmake && \
-   -f llvmBuild/lib/cmake/mlir/MLIRConfig.cmake ]] ||
+   -f llvmBuild/lib/cmake/mlir/MLIRConfig.cmake && \
+   -e llvmBuild/bin/mlir-opt ]] ||
 cmake --build llvmBuild --target llvm-headers \
   llvm-libraries  \
   mlir-headers mlir-libraries mlir-opt \
@@ -50,3 +51,22 @@ cmake -GNinja -S kokkos -B kokkosBuild \
 
 [[ -f kokkosInstall/lib/cmake/Kokkos/KokkosConfig.cmake ]] || \
 cmake --build kokkosBuild --target install
+CMAKE_PREFIX_PATH+=:$WORKSPACE/kokkosInstall:$WORKSPACE/llvmBuild
+CMAKE_PREFIX_PATH+=:$WORKSPACE/lapisBuild
+export CMAKE_PREFIX_PATH
+
+if [[ ! -f ptMpiBuild/build.ninja ]]; then
+  mkdir -p ptMpiBuild
+  mkdir -p ptMpiInstall
+  cmake -GNinja -S parttensor_mpi_backend -B ptMpiBuild \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=$WORKSPACE/ptMpiInstall
+fi
+
+[[ -f ptMpiInstall/share/parttensor_mpi_backend/cmake/\
+parttensor_mpi_backendConfig.cmake ]] || \
+cmake --build ptMpiBuild --target install
+
+CMAKE_PREFIX_PATH+=:$WORKSPACE/ptMpiInstall
+export CMAKE_PREFIX_PATH
+export PATH=$WORKSPACE/lapisBuild/bin:$PATH
