@@ -16,6 +16,7 @@ source $WORKSPACE/LAPIS/llvm/setup_workspace.sh
 
 [[ -f llvmBuild/build.ninja ]] || \
 cmake -GNinja -B llvmBuild -S llvm-project/llvm -DLLVM_ENABLE_LLD=OFF \
+  -DLLVM_USE_LINKER=mold \
   -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
   -DLLVM_CCACHE_BUILD=ON -DLLVM_PARALLEL_LINK_JOBS=2 \
   -DCMAKE_INSTALL_PREFIX="$WORKSPACE/llvmInstall" -DLLVM_ENABLE_PROJECTS=mlir \
@@ -28,7 +29,7 @@ cmake -GNinja -B llvmBuild -S llvm-project/llvm -DLLVM_ENABLE_LLD=OFF \
    -f llvmBuild/lib/cmake/mlir/MLIRConfig.cmake && \
    -e llvmBuild/bin/mlir-opt ]] ||
 cmake --build llvmBuild --target llvm-headers \
-  llvm-libraries  \
+  llvm-libraries  tools/mlir/python/all \
   mlir-headers mlir-libraries mlir-opt \
   mlir-translate
 
@@ -70,3 +71,17 @@ cmake --build ptMpiBuild --target install
 CMAKE_PREFIX_PATH+=:$WORKSPACE/ptMpiInstall
 export CMAKE_PREFIX_PATH
 export PATH=$WORKSPACE/lapisBuild/bin:$PATH
+
+export LAPIS_SRC=$WORKSPACE/LAPIS
+export KOKKOS_ROOT=$WORKSPACE/kokkosInstall
+
+export LLVM_INS=$WORKSPACE/llvmBuild
+# Uncomment this line for Linux:
+export SUPPORTLIB=${LLVM_INS}/lib/libmlir_c_runner_utils.so
+# Uncomment this line for MacOS:
+# export SUPPORTLIB=${LLVM_INS}/lib/libmlir_c_runner_utils.dylib
+
+export PYTHONPATH=${LLVM_INS}/tools/mlir/python_packages/mlir_core:$PYTHONPATH
+# Uncomment this line if using "installed" llvm instead from build directory:
+# export PYTHONPATH=${LLVM_INS}/python_packages/mlir_core:$PYTHONPATH
+export PYTHONPATH=${WORKSPACE}/lapisBuild/python_packages/lapis:$PYTHONPATH
