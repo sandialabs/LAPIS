@@ -33,9 +33,10 @@ cmake --build llvmBuild --target llvm-headers \
   mlir-headers mlir-libraries mlir-opt \
   mlir-translate
 
-[[ -f lapisBuild/Makefile ]] || \
-cmake -S LAPIS -B lapisBuild \
-  -DLLVM_TARGETS_TO_BUILD="Native" \
+[[ -f lapisBuild/build.ninja ]] || \
+cmake -GNinja -S LAPIS -B lapisBuild -DLLVM_USE_LINKER=mold \
+  -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+  -DLLVM_CCACHE_BUILD=ON -DLLVM_TARGETS_TO_BUILD="Native" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_PREFIX_PATH="$WORKSPACE/llvmBuild" \
   -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
