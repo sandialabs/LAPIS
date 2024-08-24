@@ -1,5 +1,7 @@
 #!/usr/bin/env zsh
 
+export PATH=/usr/local/cuda-12.1/bin:$PATH
+export CUDA_ROOT=/usr/local/cuda-12.1
 [[ -f ~/commons.sh ]] && source ~/commons.sh
 declare -f spack_setup &> /dev/null && spack_setup
 
