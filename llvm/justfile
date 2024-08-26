@@ -1,3 +1,6 @@
 alias lb := buildLapis
+alias llcb := buildllc
+buildllc:
+    cmake --build ${WORKSPACE}/llvmBuild -j --target llc FileCheck mlir-cpu-runner
 buildLapis:
     cmake --build ${WORKSPACE}/lapisBuild -j
