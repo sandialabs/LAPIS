@@ -79,6 +79,7 @@ export LAPIS_SRC=$WORKSPACE/LAPIS
 export KOKKOS_ROOT=$WORKSPACE/kokkosInstall
 
 export LLVM_INS=$WORKSPACE/llvmBuild
+export PATH=$LLVM_INS/bin:$PATH
 # Uncomment this line for Linux:
 export SUPPORTLIB=${LLVM_INS}/lib/libmlir_c_runner_utils.so
 # Uncomment this line for MacOS:
