@@ -27,7 +27,28 @@ struct KokkosMemorySpaceRewriter : public OpRewritePattern<scf::ParallelOp> {
       : OpRewritePattern(context) {}
 
   LogicalResult matchAndRewrite(scf::ParallelOp op, PatternRewriter &rewriter) const override {
-    return failure();
+    op->walk([&](memref::LoadOp child) {
+      if (!child->hasAttr("memorySpace"))
+        child->setAttr("memorySpace", mlir::kokkos::MemorySpaceAttr::get(rewriter.getContext(), kokkos::MemorySpace::Device));
+      else {
+        if(child->getAttrOfType<mlir::kokkos::MemorySpaceAttr>("memorySpace").getValue() == kokkos::MemorySpace::Host) {
+          child->setAttr("memorySpace", mlir::kokkos::MemorySpaceAttr::get(rewriter.getContext(), kokkos::MemorySpace::DualView));
+        }
+      }
+
+      //auto newMemref = child.getMemref();
+      //child.getMemrefMutable().assign(newMemref);
+    });
+    op->walk([&](memref::StoreOp child) {
+      if (!child->hasAttr("memorySpace"))
+        child->setAttr("memorySpace", mlir::kokkos::MemorySpaceAttr::get(rewriter.getContext(), kokkos::MemorySpace::Device));
+      else {
+        if(child->getAttrOfType<mlir::kokkos::MemorySpaceAttr>("memorySpace").getValue() == kokkos::MemorySpace::Host) {
+          child->setAttr("memorySpace", mlir::kokkos::MemorySpaceAttr::get(rewriter.getContext(), kokkos::MemorySpace::DualView));
+        }
+      }
+    });
+    return success();
   }
 };
 
@@ -35,6 +56,6 @@ struct KokkosMemorySpaceRewriter : public OpRewritePattern<scf::ParallelOp> {
 
 void mlir::populateKokkosMemorySpaceAssignmentPatterns(RewritePatternSet &patterns)
 {
-  //patterns.add<KokkosMemorySpaceRewriter>(patterns.getContext());
+  patterns.add<KokkosMemorySpaceRewriter>(patterns.getContext());
 }
 
