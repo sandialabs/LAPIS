@@ -7,7 +7,7 @@ which mold &> /dev/null || module load mold/2.1.0
 cd ..
 spack env activate .
 which python | grep ".spack-env/view" 2>&1 > /dev/null || spack install
-python -c "import numpy" || pip install llvm/notchpeak.requirements.txt
+python -c "import numpy" &> /dev/null || pip install -r llvm/notchpeak.requirements.txt
 
 export CC=`which gcc`
 export CXX=`which g++`
