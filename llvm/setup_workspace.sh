@@ -2,23 +2,29 @@
 
 # Get LLVM with a specific version
 if [[ ! -d llvm-project/.git ]]; then
-  git clone git@github.com:llvm/llvm-project.git
-  cd llvm-project
-  git checkout 4acc3ffbb0af
-  cd ..
+  git clone --depth=1 --branch llvm-upstream \
+    git@github.com:tensor-compilers/llvm-project.git
 fi
 
 # Clone LAPIS
-[[ -d LAPIS/.git ]] || \
+if [[ ! -d LAPIS/.git ]]; then
   git clone git@github.com:tensor-compilers/LAPIS.git
+  pushd LAPIS; git checkout vmiheer/main; popd
+fi
 
-[[ -d vmiheer-mlir-playground/.git ]] || \
+if [[ ! -d vmiheer-mlir-playground/.git ]]; then
   git clone git@github.com:tensor-compilers/vmiheer-mlir-playground.git
-[[ -d parttensor_mpi_backend/.git ]] || \
+  pushd vmiheer-mlir-playground; git checkout lapis-main; popd
+fi
+
+if [[ ! -d parttensor_mpi_backend/.git ]]; then
   git clone git@github.com:tensor-compilers/parttensor_mpi_backend.git
+  pushd parttensor_mpi_backend; git checkout lapis-main; popd
+fi
 
 # Clone Kokkos
-[[ -d kokkos/.git ]] || git clone -b master git@github.com:kokkos/kokkos.git
+[[ -d kokkos/.git ]] || git clone --depth 1 -b master \
+  git@github.com:kokkos/kokkos.git
 
 # Create build/install directories
 mkdir -p llvmBuild
