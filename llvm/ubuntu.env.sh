@@ -14,6 +14,6 @@ export CC=`which gcc-13`
 export CXX=`which g++-13`
 export WORKSPACE=$(readlink -f ${0:a:h}/..)
 
-cd $WORKSPACE/LAPIS
-source llvm/setup_workspace.sh
-source llvm/build_workspace.sh
+cd $WORKSPACE
+source $WORKSPACE/LAPIS/llvm/setup_workspace.sh
+source $WORKSPACE/LAPIS/llvm/build_workspace.sh
