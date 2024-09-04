@@ -10,8 +10,8 @@ spack env activate .
 which python | grep ".spack-env/view" 2>&1 > /dev/null || spack install
 python -c "import numpy" 2>&1 || pip install -r llvm/notchpeak.requirements.txt
 
-export CC=`which gcc-13`
-export CXX=`which g++-13`
+export CC=`which gcc-12`
+export CXX=`which g++-12`
 export WORKSPACE=$(readlink -f ${0:a:h}/..)
 
 cd $WORKSPACE
