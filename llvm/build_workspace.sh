@@ -43,7 +43,7 @@ function build_kokkos() {
     rm -rf $WORKSPACE/kokkosBuild
     mkdir -p $WORKSPACE/kokkosBuild
     cmake -GNinja -DCMAKE_INSTALL_PREFIX=$KOKKOS_ROOT -DKokkos_ENABLE_CUDA=ON \
-      -DKokkos_ENABLE_CUDA_UVM=ON -DKokkos_ARCH_$ARCH=ON -DBUILD_SHARED_LIBS=ON \
+      -DKokkos_ARCH_$ARCH=ON -DBUILD_SHARED_LIBS=ON \
       -S $WORKSPACE/kokkos -B $WORKSPACE/kokkosBuild -G Ninja
     cmake --build $WORKSPACE/kokkosBuild -j $NUMPROCS --target install
     set +x
