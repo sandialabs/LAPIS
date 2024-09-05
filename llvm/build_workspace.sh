@@ -35,6 +35,30 @@ cmake -GNinja -S LAPIS -B lapisBuild $(llvm_cmake_linker_options) \
 
 [[ -x lapisBuild/bin/lapis-opt ]] || cmake --build lapisBuild -j
 
+function build_kokkos() {
+  local ARCH=$1
+  KOKKOS_ROOT=$WORKSPACE/kokkos_install_$ARCH
+  if [[ ! -d $KOKKOS_ROOT ]]; then
+    set -x
+    rm -rf $WORKSPACE/kokkosBuild
+    mkdir -p $WORKSPACE/kokkosBuild
+    cmake -GNinja -DCMAKE_INSTALL_PREFIX=$KOKKOS_ROOT -DKokkos_ENABLE_CUDA=ON \
+      -DKokkos_ENABLE_CUDA_UVM=ON -DKokkos_ARCH_$ARCH=ON -DBUILD_SHARED_LIBS=ON \
+      -S $WORKSPACE/kokkos -B $WORKSPACE/kokkosBuild -G Ninja
+    cmake --build $WORKSPACE/kokkosBuild -j $NUMPROCS --target install
+    set +x
+  fi
+}
+
+if [[ $ON_NOTCHPEAK -eq 1 ]]; then
+  for i in MAXWELL50 MAXWELL52 MAXWELL53 PASCAL60 PASCAL61 VOLTA70 VOLTA72 \
+    TURING75 AMPERE80 AMPERE86; do
+    build_kokkos $i
+  done
+else
+  build_kokkos TURING75
+fi
+
 [[ -f kokkosBuild/build.ninja ]] || \
 cmake -GNinja -S kokkos -B kokkosBuild \
   -DCMAKE_BUILD_TYPE=Release \
@@ -42,10 +66,16 @@ cmake -GNinja -S kokkos -B kokkosBuild \
   -DCMAKE_CXX_FLAGS="-fPIC" \
   -DCMAKE_INSTALL_PREFIX=$WORKSPACE/kokkosInstall
 
-# on notchpeak kokkosInstall uss lib64 vs ubuntu uses lib
-[[ -f $(print -C 1 kokkosInstall/**/KokkosConfig.cmake | head -1) ]] || \
-cmake --build kokkosBuild --target install
-CMAKE_PREFIX_PATH+=:$WORKSPACE/kokkosInstall:$WORKSPACE/llvmBuild
+if [[ ! -x lapisBuild/nv_sm_arch ]]; then
+  nvcc $WORKSPACE/kokkos/cmake/compile_tests/cuda_compute_capability.cc \
+    -DSM_ONLY -o lapisBuild/nv_sm_arch
+fi
+
+export KOKKOS_ROOT=$(readlink -f $(print -C 1 \
+  $WORKSPACE/kokkos_install*$(lapisBuild/nv_sm_arch) | head -1))
+[[ -d $KOKKOS_ROOT ]] || export KOKKOS_ROOT=$WORKSPACE/kokkos_install
+[[ -d $KOKKOS_ROOT ]] || { echo "KOKKOS_ROOT does not exist" }
+
 CMAKE_PREFIX_PATH+=:$WORKSPACE/lapisBuild
 export CMAKE_PREFIX_PATH
 
@@ -66,7 +96,6 @@ export CMAKE_PREFIX_PATH
 export PATH=$WORKSPACE/lapisBuild/bin:$PATH
 
 export LAPIS_SRC=$WORKSPACE/LAPIS
-export KOKKOS_ROOT=$WORKSPACE/kokkosInstall
 
 export LLVM_INS=$WORKSPACE/llvmBuild
 export PATH=$LLVM_INS/bin:$PATH
