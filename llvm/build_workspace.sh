@@ -64,17 +64,18 @@ cmake -GNinja -S kokkos -B kokkosBuild \
   -DCMAKE_BUILD_TYPE=Release \
   -DKokkos_ENABLE_SERIAL=ON \
   -DCMAKE_CXX_FLAGS="-fPIC" \
-  -DCMAKE_INSTALL_PREFIX=$WORKSPACE/kokkosInstall
+  -DCMAKE_INSTALL_PREFIX=$WORKSPACE/kokkos_install && \
+cmake --build kokkosBuild --target install
 
 if [[ ! -x lapisBuild/nv_sm_arch ]]; then
   nvcc $WORKSPACE/kokkos/cmake/compile_tests/cuda_compute_capability.cc \
     -DSM_ONLY -o lapisBuild/nv_sm_arch
 fi
 
-export KOKKOS_ROOT=$(readlink -f $(print -C 1 \
+export Kokkos_ROOT=$(readlink -f $(print -C 1 \
   $WORKSPACE/kokkos_install*$(lapisBuild/nv_sm_arch) | head -1))
-[[ -d $KOKKOS_ROOT ]] || export KOKKOS_ROOT=$WORKSPACE/kokkos_install
-[[ -d $KOKKOS_ROOT ]] || { echo "KOKKOS_ROOT does not exist" }
+[[ -d $Kokkos_ROOT ]] || export Kokkos_ROOT=$WORKSPACE/kokkos_install
+[[ -d $Kokkos_ROOT ]] || { echo "Kokkos_ROOT does not exist" }
 
 CMAKE_PREFIX_PATH+=:$WORKSPACE/lapisBuild
 export CMAKE_PREFIX_PATH
@@ -83,8 +84,9 @@ if [[ ! -f ptMpiBuild/build.ninja ]]; then
   mkdir -p ptMpiBuild
   mkdir -p ptMpiInstall
   cmake -GNinja -S parttensor_mpi_backend -B ptMpiBuild \
-    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_BUILD_TYPE=Release -DUSE_CUDA=ON \
     -DCMAKE_INSTALL_PREFIX=$WORKSPACE/ptMpiInstall
+  cmake --build ptMpiBuild --target install
 fi
 
 [[ -f ptMpiInstall/share/parttensor_mpi_backend/cmake/\
