@@ -1,0 +1,93 @@
+# This is a Spack Environment file.
+#
+# It describes a set of packages to be installed, along with
+# configuration settings.
+spack:
+  # add package specs to the `specs` list
+  specs:
+  - python@3.9
+  - autoconf@2.71
+  - bzip2
+  - libffi
+  - cmake
+  - py-pip
+  - openmpi@4.1.6+cuda
+  view: true
+  compilers:
+  - compiler:
+      spec: gcc@=11.2.0
+      paths:
+        cc: /uufs/chpc.utah.edu/sys/spack/linux-rocky8-nehalem/gcc-8.5.0/gcc-11.2.0-wc2i7djjsrbmf7or7prpvcjf4xlcijdf/bin/gcc
+        cxx: /uufs/chpc.utah.edu/sys/spack/linux-rocky8-nehalem/gcc-8.5.0/gcc-11.2.0-wc2i7djjsrbmf7or7prpvcjf4xlcijdf/bin/g++
+        f77: /uufs/chpc.utah.edu/sys/spack/linux-rocky8-nehalem/gcc-8.5.0/gcc-11.2.0-wc2i7djjsrbmf7or7prpvcjf4xlcijdf/bin/gfortran
+        fc: /uufs/chpc.utah.edu/sys/spack/linux-rocky8-nehalem/gcc-8.5.0/gcc-11.2.0-wc2i7djjsrbmf7or7prpvcjf4xlcijdf/bin/gfortran
+      flags: {}
+      operating_system: rocky8
+      target: x86_64
+      modules: []
+      environment: {}
+      extra_rpaths: []
+  concretizer:
+    targets:
+      granularity: generic
+  packages:
+    swig:
+      externals: []
+    gettext:
+      externals: []
+    ccache:
+      externals: []
+    tar:
+      externals: []
+    sed:
+      externals: []
+    diffutils:
+      externals: []
+    m4:
+      externals: []
+    bison:
+      externals: []
+    autoconf:
+      externals: []
+    openssh:
+      externals: []
+    gawk:
+      externals: []
+    cvs:
+      externals: []
+    perl:
+      externals: []
+    texinfo:
+      externals: []
+    automake:
+      externals: []
+    pkgconf:
+      externals: []
+    curl:
+      externals: []
+    groff:
+      externals: []
+    openssl:
+      externals: []
+    coreutils:
+      externals: []
+    gmake:
+      externals: []
+    flex:
+      externals: []
+    findutils:
+      externals: []
+    ninja:
+      externals: []
+    cmake:
+      externals: []
+    binutils:
+      externals: []
+    libtool:
+      externals: []
+    python:
+      externals: []
+    git:
+      externals: []
+    subversion:
+      externals: []
