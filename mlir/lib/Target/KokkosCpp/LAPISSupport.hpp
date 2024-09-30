@@ -243,6 +243,11 @@ namespace LAPIS
       }
     }
 
+    void deallocate() {
+      device_view = DeviceView();
+      host_view = HostView();
+    }
+
     DeviceView device_view;
     HostView host_view;
     DualViewBase* parent;
