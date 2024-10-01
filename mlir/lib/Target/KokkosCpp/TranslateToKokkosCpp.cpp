@@ -1347,7 +1347,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::RangePara
       return failure();
     emitter << ' ' << emitter.getOrCreateName(iv);
   }
-  int depth = kokkos::getOpParallelDepth(op);
+  int depth = kokkos::getOpParallelDepth(op) - 1;
   if(isReduction) {
     for(Value result : op->getResults()) {
       emitter << ", ";
@@ -1616,7 +1616,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::SingleOp 
     case kokkos::SingleLevel::PerThread:
       emitter << "Kokkos::PerThread"; break;
   }
-  emitter << "(team), [=](";
+  emitter << "(team), [&](";
   // prefix output arguments with "l" to follow common Kokkos convention
   int count = 0;
   for(Value result : op->getResults()) {
@@ -1657,7 +1657,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::UpdateRed
     return op.emitError("Currently, emitter can only handle reductions that are built-in to Kokkos");
   //auto& declOS = emitter.decl_ostream();
   // Get the depth of the enclosing parallel, which determines the name of the local reduction value
-  int depth = kokkos::getOpParallelDepth(op);
+  int depth = kokkos::getOpParallelDepth(op) - 1;
   std::string partialReduction = std::string("lreduce") + std::to_string(depth);
   Value contribute = op.getUpdate();
   Region& body = op.getReductionOperator();
