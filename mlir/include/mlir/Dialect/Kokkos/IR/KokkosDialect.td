@@ -124,8 +124,7 @@ def TeamParallelOp : Kokkos_Op<"team_parallel",
 
   let arguments = (ins Index:$leagueSize,
                        Index:$teamSizeHint,
-                       Index:$vectorLengthHint,
-                       Variadic<AnyType>:$initVals);
+                       Index:$vectorLengthHint);
   let results = (outs Variadic<AnyType>:$results);
   let regions = (region SizedRegion<1>:$region);
 
@@ -143,7 +142,7 @@ def TeamParallelOp : Kokkos_Op<"team_parallel",
   ];
 
   let extraClassDeclaration = [{
-    unsigned getNumReductions() { return getInitVals().size(); }
+    unsigned getNumReductions() { return getNumResults(); }
     // leagueSize is an operand, so getLeagueSize() already exists.
     Value getTeamSize() { return getLoopBody().front().getArguments()[1]; }
     Value getLeagueRank() { return getLoopBody().front().getArguments()[2]; }
@@ -178,8 +177,7 @@ def ThreadParallelOp : Kokkos_Op<"thread_parallel",
   }];
 
   let arguments = (ins Index:$numIters,
-                       Index:$vectorLengthHint,
-                       Variadic<AnyType>:$initVals);
+                       Index:$vectorLengthHint);
   let results = (outs Variadic<AnyType>:$results);
   let regions = (region SizedRegion<1>:$region);
 
@@ -191,7 +189,7 @@ def ThreadParallelOp : Kokkos_Op<"thread_parallel",
   ];
 
   let extraClassDeclaration = [{
-    unsigned getNumReductions() { return getInitVals().size(); }
+    unsigned getNumReductions() { return getNumResults(); }
     Value getInductionVar() { return getLoopBody().front().getArguments()[0]; }
 
     // Get the reduction op for this parallel, if any. It may be directly nested or inside a single.
