@@ -215,8 +215,8 @@ void TeamParallelOp::build(
   result.addTypes(resultTypes);
 
   OpBuilder::InsertionGuard guard(builder);
-  SmallVector<Type, 8> argTypes(5, builder.getIndexType());
-  SmallVector<Location, 8> argLocs(5, result.location);
+  SmallVector<Type, 8> argTypes(4, builder.getIndexType());
+  SmallVector<Location, 8> argLocs(4, result.location);
   Region *bodyRegion = result.addRegion();
   builder.createBlock(bodyRegion, {}, argTypes, argLocs);
   TeamParallelOp::ensureTerminator(*bodyRegion, builder, result.location);

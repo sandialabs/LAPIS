@@ -641,15 +641,8 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
 
 static LogicalResult printOperation(KokkosCppEmitter &emitter,
                                     memref::CopyOp op) {
-  //TODO: if source and/or target are strided subviews, must write a parallel loop and generate the strided accesses.
-  //If neither are strided subviews, then Kokkos::deep_copy will be valid (may change layout, but will be within same memspace).
-  if(emitter.isStridedSubview(op.getTarget()) || emitter.isStridedSubview(op.getSource()))
-  {
-    return op.emitError("strided subviews not supported yet in memref.copy.");
-  }
-  // Note: operands coming in will both be in HostSpace, since
-  // gpu-gpu, gpu-host and host-gpu copies will use gpu.memcpy instead.
-  emitter << "Kokkos::deep_copy(Kokkos::DefaultHostExecutionSpace(), ";
+  // TODO: deal with case where source and target have different spaces and different layouts.
+  emitter << "Kokkos::deep_copy(";
   if(failed(emitter.emitValue(op.getTarget())))
     return failure();
   emitter << ", ";
@@ -1416,15 +1409,12 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::TeamParal
     }
   }
   emitter << ") {\n";
-  // Compute the outer induction variable in terms of league rank, team rank and team size.
-  emitter << "  size_t induction = team.league_rank() * team.team_size() + team.team_rank();\n";
-  // And exit immediately if this thread has nothing to do.
-  // This is OK because ThreadParallel can't contain any team-wide synchronization.
-  emitter << "  if(induction >= ";
-  if(failed(emitter.emitValue(op.getNumIters())))
-    return failure();
-  emitter << ") return;\n";
-  emitter.assignName("induction", op.getInductionVar());
+  // Within the body of this loop, replace uses of the 5 block operands with
+  // the correct values from the Kokkos team handle.
+  emitter.assignName("team.league_size()", op.getLeagueSize());
+  emitter.assignName("team.team_size()", op.getTeamSize());
+  emitter.assignName("team.league_rank()", op.getLeagueRank());
+  emitter.assignName("team.team_rank()", op.getTeamRank());
   // Emit body ops.
   emitter.ostream().indent();
   for(Operation& bodyOp : op.getRegion().getOps()) {
@@ -1448,26 +1438,45 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::TeamParal
   std::string vectorLength = "vectorLength_" + emitter.getUniqueIdentifier();
   emitter << "size_t " << vectorLength << " = Kokkos::min<size_t>(";
   emitter << vectorLengthTarget << ", LAPIS::TeamPolicy::vector_length_max());\n";
-  // Since we have a lambda and a vector length, we can now query a temporary TeamPolicy for the best team size
+  // Since we have a lambda and a vector length, we can now query a temporary TeamPolicy for the
+  // best team size (if op was not given a team size hint)
   std::string teamSize = "teamSize_" + emitter.getUniqueIdentifier();
-  emitter << "size_t " << teamSize << " = LAPIS::TeamPolicy(1, 1, " << vectorLength << ").team_size_recommended(" << lambda << ", ";
+  emitter << "size_t " << teamSize << " = ";
+  if(failed(emitter.emitValue(op.getTeamSizeHint())))
+    return failure();
+  emitter << ";\n";
+  emitter << "if(" << teamSize << ") {\n";
+  emitter.ostream().indent();
+  // Team size hint was given, so just cap it at team_size_max
+  emitter << teamSize << " = Kokkos::min<size_t>(" << teamSize << ", ";
+  emitter << "LAPIS::TeamPolicy(1, 1, " << vectorLength << ").team_size_max(" << lambda << ", ";
+  if(isReduction)
+    emitter << "Kokkos::ParallelReduceTag{}";
+  else
+    emitter << "Kokkos::ParallelForTag{}";
+  emitter << "));\n";
+  emitter.ostream().unindent();
+  emitter << "}\n";
+  emitter << "else {\n";
+  emitter.ostream().indent();
+  emitter << teamSize << " = ";
+  emitter << "LAPIS::TeamPolicy(1, 1, " << vectorLength << ").team_size_recommended(" << lambda << ", ";
   if(isReduction)
     emitter << "Kokkos::ParallelReduceTag{}";
   else
     emitter << "Kokkos::ParallelForTag{}";
   emitter << ");\n";
-  // Get league size from team size and number of outer iters op performs
-  std::string leagueSize = "leagueSize_" + emitter.getUniqueIdentifier();
-  emitter << "size_t " << leagueSize << " = (";
-  if(failed(emitter.emitValue(op.getNumIters())))
-    return failure();
-  emitter << " + " << teamSize << " - 1) / " << teamSize << ";\n";
+  emitter.ostream().unindent();
+  emitter << "}\n";
   // Finally, launch the lambda with the correct policy.
   if(isReduction)
     emitter << "Kokkos::parallel_reduce";
   else
     emitter << "Kokkos::parallel_for";
-  emitter << "(LAPIS::TeamPolicy(" << leagueSize << ", " << teamSize << ", " << vectorLength << "), " << lambda;
+  emitter << "(LAPIS::TeamPolicy(";
+  if(failed(emitter.emitValue(op.getLeagueSize())))
+    return failure();
+  emitter << ", " << teamSize << ", " << vectorLength << "), " << lambda;
   if(isReduction) {
     // Determine what kind of reduction is being done, if any
     kokkos::UpdateReductionOp reduction = op.getReduction();
@@ -2101,9 +2110,9 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
   os.indent();
   //FOR DEBUGGING THE EMITTED CODE:
   //The next 3 lines makes the generated function pause to let you attach a debugger
-  os << "std::cout << \"Starting MLIR function on process \" << getpid() << '\\n';\n";
-  os << "std::cout << \"Optionally attach debugger now, then press <Enter> to continue: \";\n";
-  os << "std::cin.get();\n";
+  //os << "std::cout << \"Starting MLIR function on process \" << getpid() << '\\n';\n";
+  //os << "std::cout << \"Optionally attach debugger now, then press <Enter> to continue: \";\n";
+  //os << "std::cin.get();\n";
   //Create/allocate device Kokkos::Views for the memref inputs.
   //TODO: if executing on on host, we might as well use the NumPy buffers directly
   if(!emitter.supportingSparse())

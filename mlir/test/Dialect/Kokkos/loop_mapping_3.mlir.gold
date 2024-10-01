@@ -10,33 +10,33 @@ module {
     %dim_1 = memref.dim %arg0, %c2 : memref<?x?x?x?xf32>
     %dim_2 = memref.dim %arg0, %c3 : memref<?x?x?x?xf32>
     %0 = "kokkos.team_parallel"(%dim, %c0, %c0) ({
-    ^bb0(%arg4: index, %arg5: index, %arg6: index, %arg7: index, %arg8: index):
-      %1 = kokkos.range_parallel (%arg9) -> (%dim_0) -> f32 {
-        %2 = scf.for %arg10 = %c0 to %dim_1 step %c1 iter_args(%arg11 = %cst) -> (f32) {
-          %3 = kokkos.range_parallel (%arg12) -> (%dim_2) -> f32 {
-            %5 = memref.load %arg0[%arg7, %arg9, %arg10, %arg12] : memref<?x?x?x?xf32>
+    ^bb0(%arg4: index, %arg5: index, %arg6: index, %arg7: index):
+      %1 = kokkos.range_parallel (%arg8) -> (%dim_0) -> f32 {
+        %2 = scf.for %arg9 = %c0 to %dim_1 step %c1 iter_args(%arg10 = %cst) -> (f32) {
+          %3 = kokkos.range_parallel (%arg11) -> (%dim_2) -> f32 {
+            %5 = memref.load %arg0[%arg6, %arg8, %arg9, %arg11] : memref<?x?x?x?xf32>
             "kokkos.update_reduction"(%5, %cst) ({
-            ^bb0(%arg13: f32, %arg14: f32):
-              %6 = arith.addf %arg13, %arg14 : f32
+            ^bb0(%arg12: f32, %arg13: f32):
+              %6 = arith.addf %arg12, %arg13 : f32
               kokkos.yield %6 : f32
             }) : (f32, f32) -> ()
             kokkos.yield
           } {executionSpace = 2 : i64, parallelLevel = 3 : i64}
           "kokkos.single"() <{level = 1 : i64}> ({
-            memref.store %3, %arg1[%arg7, %arg9, %arg10] : memref<?x?x?xf32>
+            memref.store %3, %arg1[%arg6, %arg8, %arg9] : memref<?x?x?xf32>
             kokkos.yield
           }) : () -> ()
-          %4 = arith.addf %arg11, %3 : f32
+          %4 = arith.addf %arg10, %3 : f32
           scf.yield %4 : f32
         }
         "kokkos.single"() <{level = 1 : i64}> ({
-          memref.store %2, %arg2[%arg7, %arg9] : memref<?x?xf32>
+          memref.store %2, %arg2[%arg6, %arg8] : memref<?x?xf32>
           kokkos.yield
         }) : () -> ()
         "kokkos.single"() <{level = 1 : i64}> ({
           "kokkos.update_reduction"(%2, %cst) ({
-          ^bb0(%arg10: f32, %arg11: f32):
-            %3 = arith.addf %arg10, %arg11 : f32
+          ^bb0(%arg9: f32, %arg10: f32):
+            %3 = arith.addf %arg9, %arg10 : f32
             kokkos.yield %3 : f32
           }) : (f32, f32) -> ()
           kokkos.yield
@@ -44,14 +44,14 @@ module {
         kokkos.yield
       } {executionSpace = 2 : i64, parallelLevel = 2 : i64}
       "kokkos.single"() <{level = 0 : i64}> ({
-        memref.store %1, %arg3[%arg7] : memref<?xf32>
+        memref.store %1, %arg3[%arg6] : memref<?xf32>
         kokkos.yield
       }) : () -> ()
       "kokkos.team_barrier"() : () -> ()
       "kokkos.single"() <{level = 0 : i64}> ({
         "kokkos.update_reduction"(%1, %cst) ({
-        ^bb0(%arg9: f32, %arg10: f32):
-          %2 = arith.addf %arg9, %arg10 : f32
+        ^bb0(%arg8: f32, %arg9: f32):
+          %2 = arith.addf %arg8, %arg9 : f32
           kokkos.yield %2 : f32
         }) : (f32, f32) -> ()
         kokkos.yield
