@@ -239,6 +239,27 @@ public:
   }
 };
 
+template <PartTensorDistBackend backend>
+class PartTensorUpdateSliceWithActiveMaskConverter
+    : public OpConversionPattern<UpdateSliceWithActiveMaskOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(UpdateSliceWithActiveMaskOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Note using the namespace sparse_tensor here is not significant.
+    // It just happens to be convenient to reuse the existing utility.
+    Location loc = op->getLoc();
+    // replace %a = part_tensor.get_slice : part_tensor, ... -> sparse_tensor
+    // with    %a1 = call @getSlice(%a) : (partTensor) -> i8*
+    //         %a2 = unrealized_conversion_cast %a1 : i8* to %sparseTensor
+    createFuncCall(rewriter, loc,
+                   getBackendPrefix(backend) + "updateSliceWithActiveMask", {},
+                   adaptor.getOperands(), sparse_tensor::EmitCInterface::On);
+    rewriter.replaceOp(op, adaptor.getPartTensor());
+    return success();
+  }
+};
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -312,6 +333,8 @@ void mlir::populatePartTensorConversionPatterns(TypeConverter &typeConverter,
 
     patterns.add<PartTensorUpdateSliceConverter<PartTensorDistBackend::kMPI>>(
         typeConverter, patterns.getContext());
+    patterns.add<PartTensorUpdateSliceWithActiveMaskConverter<
+        PartTensorDistBackend::kMPI>>(typeConverter, patterns.getContext());
   } break;
   default:
     llvm_unreachable("Unknown PartTensorDistBackend");

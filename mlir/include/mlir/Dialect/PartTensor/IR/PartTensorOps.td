@@ -141,10 +141,10 @@ def PartTensor_UpdateSliceOp : PartTensor_Op<"update_slice">,
 			This op updates $parttensor with $spTensor
 		}];
         let results = (outs AnyTensor:$result);
-		let assemblyFormat = " $partTensor `,` $partSpec `,` $activeMask `,` "
-            "$activeMaskDim `,` $spTensor "
-            "attr-dict `:` type($partTensor) `,` type($partSpec)  `,` "
-            "type($activeMask) `,` type($activeMaskDim) `,`type ($spTensor)"
+		let assemblyFormat = " $partTensor `,` $spTensor `,` $partSpec `,` "
+            " $activeMask `,` $activeMaskDim "
+            "attr-dict `:` type($partTensor)  `,` type ($spTensor) `,` "
+            " type($partSpec)  `,` type($activeMask) `,` type($activeMaskDim)"
             " `->` type($result)";
 		}
 
