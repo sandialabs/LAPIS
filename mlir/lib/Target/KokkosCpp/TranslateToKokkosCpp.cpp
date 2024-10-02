@@ -2423,7 +2423,10 @@ void KokkosCppEmitter::registerRuntimeSupportFunctions()
     };
   // SparseTensor functions
   for (std::string funcName :
-       {"sparseCoordinates0",  "sparseCoordinates8",
+       {"getPartitions",       "mpi_getPartitions",   "updateSlice",
+        "mpi_updateSliceWithActiveMask",
+        "mpi_setSlice",        "sparseCoordinates0",  "sparseCoordinates8",
+        "sparseCoordinates0",  "sparseCoordinates8",
         "sparseCoordinates16", "sparseCoordinates32", "sparseCoordinates64",
         "sparsePositions0",    "sparsePositions8",    "sparsePositions16",
         "sparsePositions32",   "sparsePositions64",   "sparseValuesBF16",
