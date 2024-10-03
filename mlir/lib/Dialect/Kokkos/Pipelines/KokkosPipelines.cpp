@@ -34,7 +34,7 @@ using namespace mlir::kokkos;
 // Not working yet: new Kokkos dialect based pipeline.
 void mlir::kokkos::buildSparseKokkosCompiler(
     OpPassManager &pm, const SparseCompilerOptions &options) {
-  pm.addPass(::mlir::createPartTensorConversionPass());
+  pm.addPass(::mlir::createPartTensorConversionPass(options.partTensorBackend));
   pm.addNestedPass<func::FuncOp>(createLinalgGeneralizationPass());
   pm.addPass(createSparsificationAndBufferizationPass(
       getBufferizationOptionsForSparsification(
