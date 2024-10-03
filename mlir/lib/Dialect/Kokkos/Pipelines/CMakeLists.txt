@@ -1,3 +1,7 @@
+IF(LAPIS_ENABLE_PART_TENSOR)
+  SET(PartTensorLibs "MLIRPartTensor MLIRPartTensorTransforms")
+ENDIF()
+
 add_mlir_dialect_library(MLIRKokkosPipelines
   KokkosPipelines.cpp
 
@@ -22,11 +26,10 @@ add_mlir_dialect_library(MLIRKokkosPipelines
   MLIRSCFToControlFlow
   MLIRKokkosDialect
   MLIRKokkosTransforms
-  MLIRPartTensor
-  MLIRPartTensorTransforms
   MLIRSparseTensorDialect
   MLIRSparseTensorTransforms
   MLIRTensorTransforms
   MLIRVectorToLLVM
   MLIRVectorTransforms
+  ${PartTensorLibs}
 )

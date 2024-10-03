@@ -16,11 +16,13 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/Passes.h"
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
-#include "mlir/Dialect/PartTensor/Transforms/Passes.h"
 #include "mlir/Dialect/SparseTensor/IR/SparseTensor.h"
 #include "mlir/Dialect/SparseTensor/Transforms/Passes.h"
 #include "mlir/Dialect/Kokkos/IR/KokkosDialect.h"
 #include "mlir/Dialect/Kokkos/Transforms/Passes.h"
+#ifdef ENABLE_PART_TENSOR
+#include "mlir/Dialect/PartTensor/Transforms/Passes.h"
+#endif
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
 
@@ -34,7 +36,9 @@ using namespace mlir::kokkos;
 // Not working yet: new Kokkos dialect based pipeline.
 void mlir::kokkos::buildSparseKokkosCompiler(
     OpPassManager &pm, const SparseCompilerOptions &options) {
+#ifdef ENABLE_PART_TENSOR
   pm.addPass(::mlir::createPartTensorConversionPass());
+#endif
   pm.addNestedPass<func::FuncOp>(createLinalgGeneralizationPass());
   pm.addPass(createSparsificationAndBufferizationPass(
       getBufferizationOptionsForSparsification(
