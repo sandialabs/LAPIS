@@ -35,7 +35,6 @@ using namespace mlir::kokkos;
 
 void mlir::kokkos::buildSparseKokkosCompiler(
     OpPassManager &pm, const LapisCompilerOptions& options) {
-  // NEW!
 #ifdef ENABLE_PART_TENSOR
   pm.addPass(::mlir::createPartTensorConversionPass());
 #endif

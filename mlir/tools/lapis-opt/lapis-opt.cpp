@@ -12,22 +12,39 @@
 #include "mlir/Dialect/Kokkos/IR/KokkosDialect.h"
 #include "mlir/Dialect/Kokkos/Pipelines/Passes.h"
 #include "mlir/Dialect/Kokkos/Transforms/Passes.h"
-#include "mlir/Dialect/SparseTensor/Pipelines/Passes.h"
 #ifdef ENABLE_PART_TENSOR
-#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/PartTensor/IR/PartTensor.h"
 #include "mlir/Dialect/PartTensor/Pipelines/Passes.h"
 #include "mlir/Dialect/PartTensor/Transforms/Passes.h"
-#include "mlir/Dialect/SparseTensor/IR/SparseTensor.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #endif
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Arith/IR/ValueBoundsOpInterfaceImpl.h"
+#include "mlir/Dialect/Arith/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
+#include "mlir/Dialect/Bufferization/Transforms/FuncBufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Linalg/Transforms/AllInterfaces.h"
+#include "mlir/Dialect/Linalg/Transforms/RuntimeOpVerification.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/MLProgram/IR/MLProgram.h"
+#include "mlir/Dialect/MLProgram/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/SCF/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/SCF/Transforms/BufferDeallocationOpInterfaceImpl.h"
+#include "mlir/Dialect/SparseTensor/IR/SparseTensor.h"
+#include "mlir/Dialect/SparseTensor/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/SparseTensor/Pipelines/Passes.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Tensor/IR/TensorInferTypeOpInterfaceImpl.h"
+#include "mlir/Dialect/Tensor/IR/TensorTilingInterfaceImpl.h"
+#include "mlir/Dialect/Tensor/IR/ValueBoundsOpInterfaceImpl.h"
+#include "mlir/Dialect/Tensor/TransformOps/TensorTransformOps.h"
+#include "mlir/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/Tensor/Transforms/SubsetInsertionOpInterfaceImpl.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/Dialect/Vector/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 
@@ -40,14 +57,34 @@ int main(int argc, char **argv) {
   DialectRegistry registry;
   registry.insert<
 #ifdef ENABLE_PART_TENSOR
+      mlir::part_tensor::PartTensorDialect, 
+#endif
+      mlir::LLVM::LLVMDialect, mlir::vector::VectorDialect,
       mlir::bufferization::BufferizationDialect, mlir::linalg::LinalgDialect,
       mlir::sparse_tensor::SparseTensorDialect, mlir::tensor::TensorDialect,
-      mlir::part_tensor::PartTensorDialect, mlir::LLVM::LLVMDialect,
-      mlir::vector::VectorDialect,
-#endif
       mlir::arith::ArithDialect, mlir::scf::SCFDialect,
       mlir::memref::MemRefDialect, mlir::func::FuncDialect,
+      mlir::ml_program::MLProgramDialect,
       mlir::kokkos::KokkosDialect>();
+
+  // Have to also register dialect extensions.
+  arith::registerBufferizableOpInterfaceExternalModels(registry);
+  arith::registerValueBoundsOpInterfaceExternalModels(registry);
+  bufferization::func_ext::registerBufferizableOpInterfaceExternalModels(registry);
+  builtin::registerCastOpInterfaceExternalModels(registry);
+  linalg::registerAllDialectInterfaceImplementations(registry);
+  linalg::registerRuntimeVerifiableOpInterfaceExternalModels(registry);
+  ml_program::registerBufferizableOpInterfaceExternalModels(registry);
+  scf::registerBufferDeallocationOpInterfaceExternalModels(registry);
+  scf::registerBufferizableOpInterfaceExternalModels(registry);
+  sparse_tensor::registerBufferizableOpInterfaceExternalModels(registry);
+  tensor::registerBufferizableOpInterfaceExternalModels(registry);
+  tensor::registerFindPayloadReplacementOpInterfaceExternalModels(registry);
+  tensor::registerInferTypeOpInterfaceExternalModels(registry);
+  tensor::registerSubsetOpInterfaceExternalModels(registry);
+  tensor::registerTilingInterfaceExternalModels(registry);
+  tensor::registerValueBoundsOpInterfaceExternalModels(registry);
+  vector::registerBufferizableOpInterfaceExternalModels(registry);
 
   // Register LAPIS pipelines and passes
 #ifdef ENABLE_PART_TENSOR
