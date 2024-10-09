@@ -9,12 +9,15 @@ import subprocess
 import tempfile
 import torch
 
+# For running passes/pipelines on a module
 from lapis import ir
 from lapis.ir import Module
-from lapis.dialects import kokkos as kokkos_d
 from lapis.ir import *
 from lapis.passmanager import *
-from lapis.runtime import *
+
+# For emitting a lowered module to Kokkos C++
+from lapis._mlir_libs._lapis import emit_kokkos
+from lapis._mlir_libs._lapis import emit_kokkos_sparse
 
 LOWERING_PIPELINE = "builtin.module(" + ",".join([
     "func.func(refback-generalize-tensor-pad)",
@@ -168,7 +171,7 @@ class KokkosBackend:
             os.makedirs(moduleRoot, exist_ok=True)
             # Generate Kokkos C++ source from the module.
             print("Emitting module as Kokkos C++...")
-            pm.emit_kokkos(module, moduleRoot + "/" + self.package_name + "_module.cpp", moduleRoot + "/" + self.package_name + ".py")
+            emit_kokkos(module, moduleRoot + "/" + self.package_name + "_module.cpp", moduleRoot + "/" + self.package_name + ".py")
             return self.compile_kokkos_to_native(moduleRoot, False)
 
     def compile_sparse(self, module: ir.Module, options: str = ""):
@@ -209,6 +212,6 @@ class KokkosBackend:
         os.makedirs(moduleRoot, exist_ok=True)
         # Generate Kokkos C++ source from the module.
         print("Emitting sparse module as Kokkos C++...")
-        pm.emit_kokkos_sparse(module, moduleRoot + "/" + self.package_name + "_module.cpp", moduleRoot + "/" + self.package_name + ".py", useHierarchical, self.index_instance==self.num_instances)
+        emit_kokkos_sparse(module, moduleRoot + "/" + self.package_name + "_module.cpp", moduleRoot + "/" + self.package_name + ".py", useHierarchical, self.index_instance==self.num_instances)
         return self.compile_kokkos_to_native(moduleRoot, True)
 

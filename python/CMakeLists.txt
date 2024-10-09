@@ -56,8 +56,7 @@ declare_mlir_python_extension(LapisPythonExtensions.Main
 
 target_include_directories(LapisPythonExtensions.Main INTERFACE
   $<BUILD_INTERFACE:${LAPIS_SOURCE_DIR}/mlir/include>
-  $<BUILD_INTERFACE:${LAPIS_BINARY_DIR}/mlir/include>
-  ${MLIR_INSTALL_PREFIX}/src/python/MLIRPythonExtension.Core)
+  $<BUILD_INTERFACE:${LAPIS_BINARY_DIR}/mlir/include>)
 target_link_libraries(LapisPythonExtensions.Main INTERFACE MLIRPythonExtension.Core LapisCAPI)
 
 ################################################################################
