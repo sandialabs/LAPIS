@@ -60,8 +60,7 @@ void mlir::kokkos::buildSparseKokkosCompiler(
       /* enableVLAVectorization */ false,
       /* enableSIMDIndex32 */ false,
       /* enableGPULibgen */ false,
-      sparseOptions.sparseEmitStrategy,
-      sparseOptions.parallelizationStrategy));
+      sparseOptions.sparseEmitStrategy));
 
   // Storage specifier lowering and bufferization wrap-up.
   pm.addPass(createStorageSpecifierToLLVMPass());
