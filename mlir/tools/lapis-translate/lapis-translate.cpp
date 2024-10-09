@@ -14,7 +14,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/InitAllKokkosTranslations.h"
+#include "lapis/InitAllKokkosTranslations.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Tools/mlir-translate/MlirTranslateMain.h"
 

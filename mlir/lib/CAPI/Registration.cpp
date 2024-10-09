@@ -1,7 +1,7 @@
-#include "mlir/InitAllKokkosPasses.h"
-#include "mlir-c/kmDialects.h"
+#include "lapis/InitAllKokkosPasses.h"
+#include "lapis-c/Dialects.h"
+#include "lapis/Dialect/Kokkos/IR/KokkosDialect.h"
 #include "mlir/CAPI/Registration.h"
-#include "mlir/Dialect/Kokkos/IR/KokkosDialect.h"
 
 void lapisRegisterAllPasses() {
   mlir::registerAllKokkosPasses();

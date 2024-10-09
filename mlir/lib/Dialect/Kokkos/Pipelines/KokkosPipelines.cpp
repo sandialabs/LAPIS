@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Dialect/Kokkos/Pipelines/Passes.h"
+#include "lapis/Dialect/Kokkos/Pipelines/Passes.h"
 
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
@@ -18,10 +18,10 @@
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/Dialect/SparseTensor/IR/SparseTensor.h"
 #include "mlir/Dialect/SparseTensor/Transforms/Passes.h"
-#include "mlir/Dialect/Kokkos/IR/KokkosDialect.h"
-#include "mlir/Dialect/Kokkos/Transforms/Passes.h"
+#include "lapis/Dialect/Kokkos/IR/KokkosDialect.h"
+#include "lapis/Dialect/Kokkos/Transforms/Passes.h"
 #ifdef ENABLE_PART_TENSOR
-#include "mlir/Dialect/PartTensor/Transforms/Passes.h"
+#include "lapis/Dialect/PartTensor/Transforms/Passes.h"
 #endif
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"

@@ -24,21 +24,20 @@ declare_mlir_python_sources(LapisPythonSources.linalg_kokkos_backend
   ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lapis"
   ADD_TO_PARENT LapisPythonSources
   SOURCES
-    linalg_kokkos_backend/abc.py
-    linalg_kokkos_backend/KokkosBackend.py
+    KokkosBackend.py
 )
 
-declare_mlir_python_sources(LapisPythonSources.tools
-  ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lapis"
-  ADD_TO_PARENT LapisPythonSources
-  SOURCES
-    tools/mlir_pytaco_api.py
-    tools/mlir_pytaco_utils.py
-    tools/testing_utils.py
-    tools/mlir_pytaco.py
-    tools/mlir_pytaco_io.py
-    tools/mlir_sparse_compiler.py
-)
+#declare_mlir_python_sources(LapisPythonSources.tools
+#  ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lapis"
+#  ADD_TO_PARENT LapisPythonSources
+#  SOURCES
+#    tools/mlir_pytaco_api.py
+#    tools/mlir_pytaco_utils.py
+#    tools/testing_utils.py
+#    tools/mlir_pytaco.py
+#    tools/mlir_pytaco_io.py
+#    tools/mlir_sparse_compiler.py
+#)
 
 ################################################################################
 # Extensions

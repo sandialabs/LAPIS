@@ -13,8 +13,8 @@
 #include "mlir/Dialect/Func/Transforms/FuncConversions.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/Kokkos/IR/KokkosDialect.h"
-#include "mlir/Dialect/Kokkos/Transforms/Passes.h"
+#include "lapis/Dialect/Kokkos/IR/KokkosDialect.h"
+#include "lapis/Dialect/Kokkos/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/Transforms/Patterns.h"
 #include "mlir/Dialect/SparseTensor/IR/SparseTensor.h"
 #include "mlir/Dialect/SparseTensor/Transforms/Passes.h" //for SparseParallelizationStrategy
@@ -28,7 +28,7 @@ namespace mlir {
 
 #define GEN_PASS_DEF_SPARSEKOKKOSCODEGEN
 
-#include "mlir/Dialect/Kokkos/Transforms/Passes.h.inc"
+#include "lapis/Dialect/Kokkos/Transforms/Passes.h.inc"
 } // namespace mlir
 
 using namespace mlir;

@@ -9,6 +9,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "lapis/Target/KokkosCpp/KokkosCppEmitter.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/EmitC/IR/EmitC.h"
@@ -16,7 +17,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Math/IR/Math.h"
-#include "mlir/Dialect/Kokkos/IR/KokkosDialect.h"
+#include "lapis/Dialect/Kokkos/IR/KokkosDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -24,7 +25,6 @@
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Support/IndentedOstream.h"
-#include "mlir/Target/KokkosCpp/KokkosCppEmitter.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"

@@ -1,9 +1,9 @@
-#include "mlir-c/EmitKokkos.h"
+#include "lapis-c/EmitKokkos.h"
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/CAPI/IR.h"
 #include "mlir/CAPI/Support.h"
-#include "mlir/Target/KokkosCpp/KokkosCppEmitter.h"
+#include "lapis/Target/KokkosCpp/KokkosCppEmitter.h"
 
 using namespace mlir;
 

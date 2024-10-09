@@ -33,6 +33,7 @@ lapis_add_llvm_external_project(
   ${CMAKE_CURRENT_SOURCE_DIR}/mlir)
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  message(STATUS "LAPIS: Building against llvm-project installation")
   find_package(MLIR REQUIRED CONFIG)
 
   message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
@@ -50,6 +51,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   include(AddMLIR)
   include(HandleLLVMOptions)
 else()
+  message(STATUS "LAPIS: Building in-tree with llvm-project")
   # Build via external projects mechanism
   set(MLIR_MAIN_SRC_DIR ${LLVM_MAIN_SRC_DIR}/../mlir)
   set(MLIR_INCLUDE_DIR ${MLIR_MAIN_SRC_DIR}/include)

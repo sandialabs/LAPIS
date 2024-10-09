@@ -1,11 +1,10 @@
 #include "mlir/Bindings/Python/PybindAdaptors.h"
-#include "mlir-c/kmDialects.h"
-#include "mlir-c/Registration.h"
-#include "mlir-c/EmitKokkos.h"
+#include "lapis-c/Dialects.h"
+#include "lapis-c/Registration.h"
+#include "lapis-c/EmitKokkos.h"
+#include "lapis/InitAllKokkosPasses.h"
 //#include "mlir-c/Bindings/Python/Interop.h"
 //#include "IRModule.h"
-
-#include "mlir/InitAllKokkosPasses.h"
 
 void lapisRegisterAllPasses() {
   printf("*************** registerAllKokkosPasses() !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
@@ -19,24 +18,21 @@ using namespace mlir::python;
 PYBIND11_MODULE(_lapis, m) {
   lapisRegisterAllPasses();
 
-  m.doc() = "LAPIS dialect registration for Python interface";
+  m.doc() = "LAPIS extension for Python (MLIR pipeline + translation to Kokkos C++)";
 
-  m.def(
-      "register_dialect",
-      [](MlirContext context, bool load) {
-        throw std::runtime_error("Oh shit");
-        /*
-        printf("Hello from register_dialect! load = %d\n", load ? 1:0);
-        MlirDialectHandle handle = mlirGetDialectHandle__kokkos__();
-        printf("Registering...\n");
-        mlirDialectHandleRegisterDialect(handle, context);
-        if (load) {
-          printf("Loading...\n");
-          mlirDialectHandleLoadDialect(handle, context);
-        }
-        */
-      },
-      py::arg("context"), py::arg("load") = true);
+//  m.def(
+//      "register_dialect",
+//      [](MlirContext context, bool load) {
+//        printf("Hello from register_dialect! load = %d\n", load ? 1:0);
+//        MlirDialectHandle handle = mlirGetDialectHandle__kokkos__();
+//        printf("Registering...\n");
+//        mlirDialectHandleRegisterDialect(handle, context);
+//        if (load) {
+//          printf("Loading...\n");
+//          mlirDialectHandleLoadDialect(handle, context);
+//        }
+//      },
+//      py::arg("context"), py::arg("load") = true);
 
 //  m.def("emit_kokkos",
 //          [](PyModule &module, const char* cxxSourceFile, const char* pySourceFile) {

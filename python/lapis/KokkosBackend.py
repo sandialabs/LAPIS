@@ -1,35 +1,20 @@
-# Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-# See https://llvm.org/LICENSE.txt for license information.
-# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-# Also available under a BSD-style license. See LICENSE.
+# Initialize LAPIS python extension.
+import lapis._mlir_libs._lapis
 
 import ctypes
 import numpy as np
-import sys
 import os
+import sys
 import subprocess
-from io import StringIO
 import tempfile
+import torch
 
-print("YOOOOOO")
-print("Module path: ")
-from .._mlir_libs._lapis import register_dialect
-
-print("YOOOOOO 2")
-from lapis.tools import mlir_pytaco_api as pt
-print("YOOOOOO 3")
-from lapis.tools import mlir_pytaco
-print("YOOOOOO 4")
-from mlir import ir
-print("YOOOOOO 5")
-from mlir import passmanager
-
-print("YOOOOOO 6")
-from .abc import LinalgKokkosBackend
-
-__all__ = [
-    "LinalgKokkosBackend",
-]
+from lapis import ir
+from lapis.ir import Module
+from lapis.dialects import kokkos as kokkos_d
+from lapis.ir import *
+from lapis.passmanager import *
+from lapis.runtime import *
 
 LOWERING_PIPELINE = "builtin.module(" + ",".join([
     "func.func(refback-generalize-tensor-pad)",
@@ -88,7 +73,7 @@ LOWERING_PIPELINE = "builtin.module(" + ",".join([
 #    #"reconcile-unrealized-casts",
 #])
 
-class KokkosBackendLinalgOnTensorsBackend(LinalgKokkosBackend):
+class KokkosBackend:
     """Main entry-point for the Kokkos LinAlg backend."""
 
     def __init__(self, dump_mlir = False, before_mlir_filename = "dump.mlir", after_mlir_filename = "after_dump.mlir", index_instance=0, num_instances=0, ws = os.getcwd()):
@@ -164,7 +149,6 @@ class KokkosBackendLinalgOnTensorsBackend(LinalgKokkosBackend):
 
         module_name = "MyModule"
         #original_stderr = sys.stderr
-        #sys.stderr = StringIO()
         asm_for_error_report = module.operation.get_asm(
             large_elements_limit=10, enable_debug_info=True)
         # Lower module in place to make it ready for compiler backends.
@@ -199,7 +183,6 @@ class KokkosBackendLinalgOnTensorsBackend(LinalgKokkosBackend):
 
         module_name = "MySparseModule"
         #original_stderr = sys.stderr
-        #sys.stderr = StringIO()
         # Lower module in place to make it ready for compiler backends.
 
         #module = tensor.get_expression().get_module(tensor, tensor._assignment.indices)

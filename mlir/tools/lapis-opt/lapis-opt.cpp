@@ -9,13 +9,13 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Dialect/Kokkos/IR/KokkosDialect.h"
-#include "mlir/Dialect/Kokkos/Pipelines/Passes.h"
-#include "mlir/Dialect/Kokkos/Transforms/Passes.h"
+#include "lapis/Dialect/Kokkos/IR/KokkosDialect.h"
+#include "lapis/Dialect/Kokkos/Pipelines/Passes.h"
+#include "lapis/Dialect/Kokkos/Transforms/Passes.h"
 #ifdef ENABLE_PART_TENSOR
-#include "mlir/Dialect/PartTensor/IR/PartTensor.h"
-#include "mlir/Dialect/PartTensor/Pipelines/Passes.h"
-#include "mlir/Dialect/PartTensor/Transforms/Passes.h"
+#include "laps/Dialect/PartTensor/IR/PartTensor.h"
+#include "laps/Dialect/PartTensor/Pipelines/Passes.h"
+#include "laps/Dialect/PartTensor/Transforms/Passes.h"
 #endif
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/IR/ValueBoundsOpInterfaceImpl.h"

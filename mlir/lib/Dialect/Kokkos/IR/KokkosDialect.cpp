@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Dialect/Kokkos/IR/KokkosDialect.h"
+#include "lapis/Dialect/Kokkos/IR/KokkosDialect.h"
 #include <utility>
 
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -22,10 +22,10 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/OpImplementation.h"
 
-#include "mlir/Dialect/Kokkos/IR/KokkosEnums.cpp.inc"
+#include "lapis/Dialect/Kokkos/IR/KokkosEnums.cpp.inc"
 
 // #define GET_ATTRDEF_CLASSES
-// #include "mlir/Dialect/Kokkos/IR/KokkosAttrDefs.cpp.inc"
+// #include "lapis/Dialect/Kokkos/IR/KokkosAttrDefs.cpp.inc"
 
 using namespace mlir;
 using namespace mlir::kokkos;
@@ -33,11 +33,11 @@ using namespace mlir::kokkos;
 void KokkosDialect::initialize() {
   //  addAttributes<
   // #define GET_ATTRDEF_LIST
-  // #include "mlir/Dialect/Kokkos/IR/KokkosAttrDefs.cpp.inc"
+  // #include "lapis/Dialect/Kokkos/IR/KokkosAttrDefs.cpp.inc"
   //      >();
   addOperations<
 #define GET_OP_LIST
-#include "mlir/Dialect/Kokkos/IR/Kokkos.cpp.inc"
+#include "lapis/Dialect/Kokkos/IR/Kokkos.cpp.inc"
       >();
 }
 

@@ -17,11 +17,11 @@
 #define MLIR_KOKKOS_PIPELINES_PASSES_H_
 
 #include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVM.h"
-#include "mlir/Dialect/Kokkos/Transforms/Passes.h"
+#include "lapis/Dialect/Kokkos/Transforms/Passes.h"
 #include "mlir/Dialect/SparseTensor/Transforms/Passes.h"
 #include "mlir/Pass/PassOptions.h"
 #if defined(ENABLE_PART_TENSOR)
-#include "mlir/Dialect/PartTensor/Transforms/Passes.h"
+#include "lapis/Dialect/PartTensor/Transforms/Passes.h"
 #endif
 
 using namespace mlir::detail;
