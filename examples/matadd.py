@@ -1,6 +1,7 @@
 import torch
 from torch import Tensor
 import torch_mlir
+from torch_mlir import torchscript
 from lapis import KokkosBackend
 from torch import nn
 
@@ -19,9 +20,7 @@ def main():
     m = Adder()
     m.train(False)
 
-    mlir_module = torch_mlir.compile(
-        m, (a, b), output_type=torch_mlir.OutputType.LINALG_ON_TENSORS
-    )
+    mlir_module = torchscript.compile(m, (a, b), output_type='linalg-on-tensors')
 
     backend = KokkosBackend(dump_mlir=True)
     k_backend = backend.compile(mlir_module)

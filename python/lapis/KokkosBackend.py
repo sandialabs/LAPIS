@@ -196,9 +196,10 @@ class KokkosBackend:
             options = options.replace("kokkos-uses-hierarchical", "")
         else:
             useHierarchical = False
-        pipeline = f'builtin.module(sparse-compiler-kokkos{{{options} reassociate-fp-reductions=1 enable-index-optimizations=1}})'
-        pm = passmanager.PassManager.parse(pipeline, context=module.context)
-        pm.run(module.operation)
+        pipeline = f'builtin.module(sparse-compiler-kokkos{{{options} parallelization-strategy=any-storage-any-loop}})'
+        with module.context as ctx:
+            pm = PassManager.parse(pipeline, context=module.context)
+            pm.run(module.operation)
         if self.dump_mlir:
             with open(self.before_mlir_filename, 'w') as f:
                 f.write(asm_for_error_report)

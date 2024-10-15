@@ -20,7 +20,7 @@ add_compile_definitions("MLIR_PYTHON_PACKAGE_PREFIX=lapis.")
 declare_mlir_python_sources(LapisPythonSources)
 declare_mlir_python_sources(LapisPythonExtensions)
 
-declare_mlir_python_sources(LapisPythonSources.linalg_kokkos_backend
+declare_mlir_python_sources(LapisPythonSources.kokkos_backend
   ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lapis"
   ADD_TO_PARENT LapisPythonSources
   SOURCES
