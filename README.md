@@ -14,7 +14,7 @@ export WORKSPACE=`pwd`
 # Get LLVM with a specific version
 git clone git@github.com:llvm/llvm-project.git
 cd llvm-project
-git checkout 4acc3ffbb0af
+git checkout b6603e1bf11d
 cd ..
 
 # Clone LAPIS
