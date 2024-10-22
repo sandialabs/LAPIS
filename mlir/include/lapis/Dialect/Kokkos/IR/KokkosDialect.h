@@ -16,11 +16,11 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include <optional>
 
-#include "mlir/Dialect/Kokkos/IR/KokkosDialect.h.inc"
-#include "mlir/Dialect/Kokkos/IR/KokkosEnums.h.inc"
+#include "lapis/Dialect/Kokkos/IR/KokkosDialect.h.inc"
+#include "lapis/Dialect/Kokkos/IR/KokkosEnums.h.inc"
 
 #define GET_OP_CLASSES
-#include "mlir/Dialect/Kokkos/IR/Kokkos.h.inc"
+#include "lapis/Dialect/Kokkos/IR/Kokkos.h.inc"
 
 namespace mlir {
 namespace kokkos {

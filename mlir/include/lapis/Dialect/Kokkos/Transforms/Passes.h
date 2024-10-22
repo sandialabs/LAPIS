@@ -18,7 +18,7 @@
 namespace mlir {
 
 #define GEN_PASS_DECL
-#include "mlir/Dialect/Kokkos/Transforms/Passes.h.inc"
+#include "lapis/Dialect/Kokkos/Transforms/Passes.h.inc"
 
 void populateParallelUnitStepPatterns(RewritePatternSet &patterns);
 std::unique_ptr<Pass> createParallelUnitStepPass();
@@ -37,7 +37,7 @@ std::unique_ptr<Pass> createKokkosDualViewManagementPass();
 
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION
-#include "mlir/Dialect/Kokkos/Transforms/Passes.h.inc"
+#include "lapis/Dialect/Kokkos/Transforms/Passes.h.inc"
 
 } // namespace mlir
 

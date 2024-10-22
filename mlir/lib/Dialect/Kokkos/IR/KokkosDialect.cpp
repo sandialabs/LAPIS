@@ -471,9 +471,8 @@ void UpdateReductionOp::build(
 }
 
 #define GET_OP_CLASSES
-#include "mlir/Dialect/Kokkos/IR/Kokkos.cpp.inc"
-
-#include "mlir/Dialect/Kokkos/IR/KokkosDialect.cpp.inc"
+#include "lapis/Dialect/Kokkos/IR/Kokkos.cpp.inc"
+#include "lapis/Dialect/Kokkos/IR/KokkosDialect.cpp.inc"
 
 //===----------------------------------------------------------------------===//
 // convenience methods.
