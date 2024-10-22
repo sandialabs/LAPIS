@@ -5,6 +5,7 @@ import sys
 config.python_executable = "@Python3_EXECUTABLE@"
 config.lapis_src_root = "@LAPIS_SOURCE_DIR@"
 config.lapis_obj_root = "@LAPIS_BINARY_DIR@"
+config.lapis_tool_bin = "@LAPIS_TOOL_BIN@"
 config.lapis_lib_dir = "@LAPIS_BINARY_DIR@/lib"
 
 # Let the main config do the real work.

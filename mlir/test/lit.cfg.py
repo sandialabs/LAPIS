@@ -7,5 +7,4 @@ config.suffixes = ['.mlir']
 
 config.test_source_root = os.path.dirname(__file__)
 config.test_exec_root = os.path.join(config.lapis_obj_root, 'mlir/test')
-
-config.substitutions.append(('%lapis-opt', os.path.join(config.lapis_obj_root, 'bin/lapis-opt')))
+config.substitutions.append(('%lapis-opt', os.path.join(config.lapis_tool_bin, 'lapis-opt')))

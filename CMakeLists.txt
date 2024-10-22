@@ -25,8 +25,6 @@ macro(lapis_add_llvm_external_project name identifier location)
   set(LLVM_EXTERNAL_PROJECTS ${LLVM_EXTERNAL_PROJECTS} CACHE STRING "" FORCE)
 endmacro()
 
-
-
 lapis_add_llvm_external_project(
   lapis-dialects
   LAPIS_DIALECTS
@@ -43,6 +41,9 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   set(LLVM_LIBRARY_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/lib)
   set(MLIR_BINARY_DIR ${CMAKE_BINARY_DIR})
 
+  # Where lapis-opt, lapis-translate are built (need this for Lit tests)
+  set(LAPIS_TOOL_BIN ${CMAKE_BINARY_DIR}/bin)
+
   list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
   list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
 
@@ -57,6 +58,8 @@ else()
   set(MLIR_INCLUDE_DIR ${MLIR_MAIN_SRC_DIR}/include)
   set(MLIR_GENERATED_INCLUDE_DIR ${LLVM_BINARY_DIR}/tools/mlir/include)
   set(MLIR_INCLUDE_DIRS "${MLIR_INCLUDE_DIR};${MLIR_GENERATED_INCLUDE_DIR}")
+  set(MLIR_GENERATED_INCLUDE_DIR ${LLVM_BINARY_DIR}/tools/mlir/include)
+  set(LAPIS_TOOL_BIN ${LLVM_BINARY_DIR}/bin)
 endif()
 
 # Configure CMake.
