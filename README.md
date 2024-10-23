@@ -27,6 +27,21 @@ export WORKSPACE=`pwd`
 The remaining instructions assume that environment variables ``LAPIS_SRC``, ``LLVM_SRC``, ``TORCH_MLIR_SRC``, and ``MPACT_SRC``
 are set to the paths of these repositories.
 
+The following commands will clone the correct versions of all the repositories and set these environment variables.
+```
+git clone git@github.com:MPACT-ORG/mpact-compiler
+cd mpact-compiler
+git submodule update --init --recursive
+export MPACT_SRC=`pwd`
+export TORCH_MLIR_SRC="$MPACT_SRC/externals/torch-mlir"
+export LLVM_SRC="$TORCH_MLIR_SRC/externals/llvm-project"
+cd ..
+git clone git@github.com:sandialabs/LAPIS
+cd LAPIS
+export LAPIS_SRC=`pwd`
+git clone -b master git@github.com:kokkos/kokkos
+```
+
 Building with ninja is not required but useful as it automatically uses all cores for parallel compilation. Pass ``-Gninja`` to
 cmake and then run ``ninja`` instead of ``make``.
 
