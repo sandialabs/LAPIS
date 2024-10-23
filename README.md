@@ -76,6 +76,14 @@ This recipe builds LAPIS as an external project with LLVM.
 torch-mlir and mpact require this recipe, but torch-mlir and mpact are still optional.
 mpact requires torch-mlir, however.
 ```
+# If enabling torch-mlir, need to install Python dependencies first.
+# This can be done inside a python virtual env.
+
+cd $TORCH_MLIR_SRC
+pip install -r requirements.txt
+pip install -r torchvision-requirements.txt
+
+cd $WORKSPACE
 mkdir build
 cd build
 
