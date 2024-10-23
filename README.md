@@ -30,6 +30,7 @@ are set to the paths of these repositories.
 Building with ninja is not required but useful as it automatically uses all cores for parallel compilation. Pass ``-Gninja`` to
 cmake and then run ``ninja`` instead of ``make``.
 
+### Configure and build
 #### Recipe A: build LAPIS against an installation of LLVM/MLIR
 This recipe can be used if torch-mlir and mpact are not required.
 Since LAPIS is configured separately, you can re-run cmake for LAPIS without triggering an entire
@@ -71,8 +72,9 @@ make
 cd ..
 ```
 #### Recipe B: build LAPIS in-tree with LLVM/MLIR, and optionally torch-mlir/mpact
-This recipe builds LAPIS as an external project with LLVM. torch-mlir and mpact require this
-recipe, but this recipe does not require torch-mlir or mpact.
+This recipe builds LAPIS as an external project with LLVM.
+torch-mlir and mpact require this recipe, but torch-mlir and mpact are still optional.
+mpact requires torch-mlir, however.
 ```
 mkdir build
 cd build
