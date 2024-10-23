@@ -4,35 +4,45 @@ Linear Algebra Performance through Intermediate Subprograms (LAPIS) is a compile
 
 ## Configuring and Building
 
-### Set up workspace directory, clone repositories
+### Set up workspace directory
 ```
 # Can have any name, but Workspace is used here
 mkdir Workspace
 cd Workspace
 export WORKSPACE=`pwd`
+```
 
-# Get LLVM with a specific version
-git clone git@github.com:llvm/llvm-project.git
-cd llvm-project
-git checkout b6603e1bf11d
-cd ..
+### Get source code and dependencies
 
-# Clone LAPIS
-git clone git@github.com:tensor-compilers/LAPIS.git
+* LAPIS: this repository, main branch
+* [llvm-project](github.com/llvm/llvm-project.git): required, version b6603e1b. 
+* [kokkos](github.com/kokkos/kokkos): required for building and running the generated C++ code. Any recent release or develop branch will work.
+* [torch-mlir](github.com/llvm/torch-mlir.git): optional, version 6934ab81. 
+  * This includes the correct llvm-project version as a submodule, in ``externals/llvm-project``.
+* [mpact](github.com/MPACT-ORG/mpact-compiler): optional, version 556009cd. Requires torch-mlir. 
+  * This includes the correct torch-mlir version as a submodule, in ``externals/torch-mlir``.
+  * This torch-mlir also has the correct llvm-project as a submodule.
+* Python: optional for dialect development, lowering and C++ emitter. 3.10+ required for running end-to-end examples from PyTorch.
 
-# Clone Kokkos (master branch contains latest release)
-git clone -b master git@github.com:kokkos/kokkos.git
+The remaining instructions assume that environment variables ``LAPIS_SRC``, ``LLVM_SRC``, ``TORCH_MLIR_SRC``, and ``MPACT_SRC``
+are set to the paths of these repositories.
 
-# Create build/install directories
-mkdir lapisBuild
+Building with ninja is not required but useful as it automatically uses all cores for parallel compilation. Pass ``-Gninja`` to
+cmake and then run ``ninja`` instead of ``make``.
+
+#### Recipe A: build LAPIS against an installation of LLVM/MLIR
+This recipe can be used if torch-mlir and mpact are not required.
+Since LAPIS is configured separately, you can re-run cmake for LAPIS without triggering an entire
+rebuild of LLVM. This is why it's recommended for LAPIS development work on dialects, passes, and the Kokkos emitter.
+```
+cd $WORKSPACE
+# Build and install MLIR
 mkdir llvmBuild
 mkdir llvmInstall
-```
-### Configure, build and install LLVM/MLIR
-```
 cd llvmBuild
-# Note: python3 must be in PATH. If "python" points to a modern
+# Note: here, python3 must be in PATH. If "python" points to a modern
 # python 3.x, then Python3_EXECUTABLE can point to `which python` instead.
+# Python bindings are optional and can be turned off.
 cmake \
    -DCMAKE_INSTALL_PREFIX="$WORKSPACE/llvmInstall" \
    -DLLVM_ENABLE_PROJECTS=mlir \
@@ -42,12 +52,12 @@ cmake \
    -DLLVM_ENABLE_ASSERTIONS=ON \
    -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
    -DPython3_EXECUTABLE:FILEPATH=`which python3` \
-   ../llvm-project/llvm
-make -j16 install
+   $LLVM_SRC/llvm
+make install
+
 cd ..
-```
-### Configure and build LAPIS
-```
+mkdir lapisBuild
+cd lapisBuild
 # Python3_EXECUTABLE should match the one used to configure LLVM
 cmake \
    -DLLVM_TARGETS_TO_BUILD="Native" \
@@ -55,13 +65,45 @@ cmake \
    -DCMAKE_PREFIX_PATH="$WORKSPACE/llvmInstall" \
    -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
    -DPython3_EXECUTABLE=`which python3` \
-   ../LAPIS
-make -j16
+   -DLAPIS_ENABLE_PART_TENSOR=OFF \
+   $LAPIS_SRC
+make
 cd ..
 ```
-
-### Build and install Kokkos
+#### Recipe B: build LAPIS in-tree with LLVM/MLIR, and optionally torch-mlir/mpact
+This recipe builds LAPIS as an external project with LLVM. torch-mlir and mpact require this
+recipe, but this recipe does not require torch-mlir or mpact.
 ```
+mkdir build
+cd build
+
+# Base configuration: just LAPIS and LLVM/MLIR
+cmake \
+  -DCMAKE_BUILD_TYPE=MinSizeRel \
+  -DPython3_FIND_VIRTUALENV=ONLY \
+  -DLLVM_ENABLE_PROJECTS=mlir \
+  -DLLVM_EXTERNAL_PROJECTS="lapis" \
+  -DLLVM_TARGETS_TO_BUILD=host \
+  -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
+  -DLLVM_EXTERNAL_LAPIS_SOURCE_DIR="$LAPIS_SRC" \
+  -DLAPIS_ENABLE_PART_TENSOR=OFF \
+  $LLVM_SRC/llvm
+
+# To also enable torch-mlir, set:
+  -DLLVM_EXTERNAL_PROJECTS="torch-mlir;lapis" \
+  -DLLVM_EXTERNAL_TORCH_MLIR_SOURCE_DIR="$TORCH_MLIR_SRC" \
+  -DTORCH_MLIR_ENABLE_PYTORCH_EXTENSIONS=ON \
+
+# To also enable mpact, set:
+  -DLLVM_EXTERNAL_PROJECTS="torch-mlir;mpact;lapis" \
+  -DLLVM_EXTERNAL_MPACT_SOURCE_DIR="$MPACT_SRC" \
+
+# Then run make.
+```
+
+### For both recipes: build and install Kokkos
+```
+cd $WORKSPACE
 mkdir kokkosBuild
 mkdir kokkosInstall
 cd kokkosBuild
@@ -72,58 +114,74 @@ cmake \
   -DCMAKE_CXX_FLAGS="-fPIC" \
   -DCMAKE_INSTALL_PREFIX=$WORKSPACE/kokkosInstall \
   ../kokkos
-make -j16 install
+make install
 cd ..
+# Set KOKKOS_ROOT to the install directory
+export KOKKOS_ROOT=$WORKSPACE/kokkosInstall
 ```
 
 ### Finish setting up environment
+#### Recipe A
 ```
 # WORKSPACE is already be set after the above instructions,
 # but must be set again for each new terminal session
 export WORKSPACE=`pwd`
-export LAPIS_SRC=$WORKSPACE/LAPIS
 
-export LLVM_INS=$WORKSPACE/llvmInstall
+# Set path to the Kokkos installation created above
 export KOKKOS_ROOT=$WORKSPACE/kokkosInstall
 
+export LLVM_INS=$WORKSPACE/llvmInstall
 # Uncomment this line for Linux:
 # export SUPPORTLIB=${LLVM_INS}/lib/libmlir_c_runner_utils.so
 # Uncomment this line for MacOS:
 # export SUPPORTLIB=${LLVM_INS}/lib/libmlir_c_runner_utils.dylib
 
+# Put lapis-opt, lapis-translate in PATH
+export PATH=$PATH:$WORKSPACE/lapisBuild/bin
+
+# Only if python bindings were enabled:
 export PYTHONPATH=${LLVM_INS}/python_packages/mlir_core:$PYTHONPATH
 export PYTHONPATH=${WORKSPACE}/lapisBuild/python_packages/lapis:$PYTHONPATH
-# This is just for LLVM's custom FileCheck (used for running our tests)
-export PATH=$PATH:${WORKSPACE}/llvmBuild/bin
 ```
-### Run an example
+
+#### Recipe B
 ```
-cd $WORKSPACE/LAPIS/examples
-python3 spmv_5.py
+# WORKSPACE is already be set after the above instructions,
+# but must be set again for each new terminal session
+export WORKSPACE=`pwd`
+
+export KOKKOS_ROOT=$WORKSPACE/kokkosInstall
+
+# Uncomment this line for Linux:
+# export SUPPORTLIB=$WORKSPACE/build/lib/libmlir_c_runner_utils.so
+# Uncomment this line for MacOS:
+# export SUPPORTLIB=$WORKSPACE/build/lib/libmlir_c_runner_utils.dylib
+
+export PATH=$PATH:$WORKSPACE/build/bin
+
+# MLIR, LAPIS, torch-mlir and MPACT each build their own python packages
+export PYTHONPATH=$PYTHONPATH:$WORKSPACE/build/tools/mlir/python_packages/mlir_core
+export PYTHONPATH=$PYTHONPATH:$WORKSPACE/build/tools/lapis/python_packages/lapis
+export PYTHONPATH=$PYTHONPATH:$WORKSPACE/build/tools/torch-mlir/python_packages/torch_mlir
+export PYTHONPATH=$PYTHONPATH:$WORKSPACE/build/tools/mpact/python_packages/mpact
 ```
-### Run dialect tests
+
+### Run Kokkos dialect tests
 Prerequisite: install ``lit`` testing utility
 ```
 pip install --user lit
 ```
-Run all tests:
+#### Run tests: recipe A
 ```
 cd $WORKSPACE/lapisBuild/mlir/test
-lit -v .
+# Just Kokkos dialect tests
+lit -v Dialect/Kokkos
 ```
-Run tests for a specific dialect (e.g. Kokkos):
+#### Run tests: recipe B
 ```
-cd $WORKSPACE/lapisBuild/mlir/test/Dialect
-lit -v Kokkos
+cd $WORKSPACE/build/tools/lapis/mlir/test
+lit -v Dialect/Kokkos
 ```
-
-<!--
-TODO: for when torch-mlir support is restored
-
-#export TORCH_MLIR_SRC=/home/knliege/dev/llvm-kokkos/torch-mlir-kokkos
-#export TORCH_MLIR_INS=/home/knliege/local/torch-mlir
-#export PYTHONPATH=${TORCH_MLIR_INS}/python_packages/torch_mlir:$PYTHONPATH
--->
 
 ## Developer Guide
 ### Adding tests
