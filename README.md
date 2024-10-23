@@ -15,11 +15,11 @@ export WORKSPACE=`pwd`
 ### Get source code and dependencies
 
 * LAPIS: this repository, main branch
-* [llvm-project](github.com/llvm/llvm-project.git): required, version b6603e1b. 
-* [kokkos](github.com/kokkos/kokkos): required for building and running the generated C++ code. Any recent release or develop branch will work.
-* [torch-mlir](github.com/llvm/torch-mlir.git): optional, version 6934ab81. 
+* [llvm-project](https://github.com/llvm/llvm-project.git): required, version b6603e1b. 
+* [kokkos](https://github.com/kokkos/kokkos): required for building and running the generated C++ code. Any recent release or develop branch will work.
+* [torch-mlir](https://github.com/llvm/torch-mlir.git): optional, version 6934ab81. 
   * This includes the correct llvm-project version as a submodule, in ``externals/llvm-project``.
-* [mpact](github.com/MPACT-ORG/mpact-compiler): optional, version 556009cd. Requires torch-mlir. 
+* [mpact](https://github.com/MPACT-ORG/mpact-compiler): optional, version 556009cd. Requires torch-mlir. 
   * This includes the correct torch-mlir version as a submodule, in ``externals/torch-mlir``.
   * This torch-mlir also has the correct llvm-project as a submodule.
 * Python: optional for dialect development, lowering and C++ emitter. 3.10+ required for running end-to-end examples from PyTorch.
