@@ -72,7 +72,7 @@ void mlir::kokkos::buildSparseKokkosCompiler(
   // pass is repeated on purpose.
   // TODO(springerm): Add sparse support to the BufferDeallocation pass and add
   // it to this pipeline.
-  pm.addNestedPass<func::FuncOp>(createConvertLinalgToLoopsPass());
+  pm.addNestedPass<func::FuncOp>(createConvertLinalgToParallelLoopsPass());
   pm.addNestedPass<func::FuncOp>(createConvertVectorToSCFPass());
   pm.addNestedPass<func::FuncOp>(memref::createExpandReallocPass());
   pm.addPass(memref::createExpandStridedMetadataPass());

@@ -10,10 +10,8 @@ import tempfile
 import torch
 
 # For running passes/pipelines on a module
-from lapis import ir
-from lapis.ir import Module
-from lapis.ir import *
-from lapis.passmanager import *
+import lapis.ir
+import lapis.passmanager
 
 # For emitting a lowered module to Kokkos C++
 from lapis._mlir_libs._lapis import emit_kokkos
@@ -91,6 +89,7 @@ class KokkosBackend:
             self.package_name = "lapis_package"
         else:
             self.package_name = "lapis_package_"+str(self.index_instance)
+        self.context = lapis.ir.Context()
 
     def compile_kokkos_to_native(self, moduleRoot, linkSparseSupportLib):
         # Now that we have a Kokkos source file, generate the CMake to build it into a shared lib,
@@ -138,43 +137,7 @@ class KokkosBackend:
         if os.path.isfile(buildDir + "/lib" + self.package_name + "_module.dylib"):
             return lapis.LAPISModule(buildDir + "/lib" + self.package_name + "_module.dylib")
 
-    def compile(self, module):
-        """Compiles an imported module, with a flat list of functions.
-        The module is expected to be in linalg-on-tensors + scalar code form.
-        TODO: More clearly define the backend contract. Generally this will
-        extend to support globals, lists, and other stuff.
-
-        Args:
-          module: The MLIR module generated from torch-mlir.
-        Returns:
-          An instance of a wrapper class which has the module's functions as callable methods.
-        """
-
-        module_name = "MyModule"
-        #original_stderr = sys.stderr
-        asm_for_error_report = module.operation.get_asm(
-            large_elements_limit=10, enable_debug_info=True)
-        # Lower module in place to make it ready for compiler backends.
-        with module.context:
-            pm = PassManager.parse(LOWERING_PIPELINE)
-            pm.run(module.operation)
-            if self.dump_mlir:
-                with open(self.before_mlir_filename, 'w') as f:
-                    f.write(asm_for_error_report)
-                    print("Wrote out MLIR dump to "+self.before_mlir_filename)
-                asm_for_error_report = module.operation.get_asm(
-                    large_elements_limit=10, enable_debug_info=True)
-                with open(self.after_mlir_filename, 'w') as f:
-                    f.write(asm_for_error_report)
-                    print("Wrote out ASM to "+self.after_mlir_filename)
-            moduleRoot = self.ws + "/" + self.package_name
-            os.makedirs(moduleRoot, exist_ok=True)
-            # Generate Kokkos C++ source from the module.
-            print("Emitting module as Kokkos C++...")
-            emit_kokkos(module, moduleRoot + "/" + self.package_name + "_module.cpp", moduleRoot + "/" + self.package_name + ".py")
-            return self.compile_kokkos_to_native(moduleRoot, False)
-
-    def compile_sparse(self, module: ir.Module, options: str = ""):
+    def compile_sparse(self, module, options: str = ""):
         """Compiles an imported module, with a flat list of functions.
         The module is expected to be in PyTaco (linalg on sparse tensors) form.
 
@@ -188,27 +151,36 @@ class KokkosBackend:
         #original_stderr = sys.stderr
         # Lower module in place to make it ready for compiler backends.
 
+        # Convert to string and re-parse, to avoid redefining common dialects in registry
+        print("Input module's type:")
+        print(type(module))
+        print("Input module text:")
+        asm = str(module)
+        print(asm)
+        lapisModule = lapis.ir.Module.parse(asm, context=self.context)
+        print("Result module (LAPIS context):")
+        print(str(lapisModule))
+ 
         #module = tensor.get_expression().get_module(tensor, tensor._assignment.indices)
-        asm_for_error_report = module.operation.get_asm(
-            large_elements_limit=10, enable_debug_info=True)
-        if "kokkos-uses-hierarchical" in options:
-            useHierarchical = True
-            options = options.replace("kokkos-uses-hierarchical", "")
-        else:
-            useHierarchical = False
+        #asm_for_error_report = module.operation.get_asm(
+        #    large_elements_limit=10, enable_debug_info=True)
+        #if "kokkos-uses-hierarchical" in options:
+        #    useHierarchical = True
+        #    options = options.replace("kokkos-uses-hierarchical", "")
+        #else:
+        #    useHierarchical = False
         pipeline = f'builtin.module(sparse-compiler-kokkos{{{options} parallelization-strategy=any-storage-any-loop}})'
-        with module.context as ctx:
-            pm = PassManager.parse(pipeline, context=module.context)
-            pm.run(module.operation)
-        if self.dump_mlir:
-            with open(self.before_mlir_filename, 'w') as f:
-                f.write(asm_for_error_report)
-                print("Wrote out MLIR dump to "+self.before_mlir_filename)
-            asm_for_error_report = module.operation.get_asm(
-                large_elements_limit=10, enable_debug_info=True)
-            with open(self.after_mlir_filename, 'w') as f:
-                f.write(asm_for_error_report)
-                print("Wrote out ASM to "+self.after_mlir_filename)
+        pm = PassManager.parse(pipeline, context=self.context)
+        pm.run(module.operation)
+        #if self.dump_mlir:
+        #    with open(self.before_mlir_filename, 'w') as f:
+        #        f.write(asm_for_error_report)
+        #        print("Wrote out MLIR dump to "+self.before_mlir_filename)
+        #    asm_for_error_report = module.operation.get_asm(
+        #        large_elements_limit=10, enable_debug_info=True)
+        #    with open(self.after_mlir_filename, 'w') as f:
+        #        f.write(asm_for_error_report)
+        #        print("Wrote out ASM to "+self.after_mlir_filename)
         moduleRoot = self.ws + "/" + self.package_name
         os.makedirs(moduleRoot, exist_ok=True)
         # Generate Kokkos C++ source from the module.
