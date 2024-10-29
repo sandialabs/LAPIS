@@ -399,9 +399,9 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
 
 static LogicalResult printOperation(KokkosCppEmitter &emitter,
                                     memref::DeallocOp op) {
-  OpResult result = op->getResult(0);
-  kokkos::MemorySpace space = kokkos::getMemSpace(result);
-  if(failed(emitter.emitValue(op.getMemref())))
+  Value toDealloc = op.getOperand();
+  kokkos::MemorySpace space = kokkos::getMemSpace(toDealloc);
+  if(failed(emitter.emitValue(toDealloc)))
     return failure();
   if(space == kokkos::MemorySpace::DualView) {
     // For DualView, call method to free both host and device views
@@ -410,7 +410,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   else {
     // For Kokkos::View, free by assigning a default-constructed instance
     emitter << " = ";
-    if(failed(emitter.emitMemrefType(op.getLoc(), dyn_cast<MemRefType>(op.getMemref().getType()), space)))
+    if(failed(emitter.emitMemrefType(op.getLoc(), dyn_cast<MemRefType>(toDealloc.getType()), space)))
       return failure();
     emitter << "()";
   }
