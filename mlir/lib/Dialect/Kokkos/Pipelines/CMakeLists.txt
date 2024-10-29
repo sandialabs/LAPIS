@@ -1,5 +1,5 @@
 IF(LAPIS_ENABLE_PART_TENSOR)
-  SET(PartTensorLibs "MLIRPartTensor MLIRPartTensorTransforms")
+  SET(PartTensorLibs "MLIRPartTensor;MLIRPartTensorTransforms")
 ENDIF()
 
 add_mlir_dialect_library(MLIRKokkosPipelines
