@@ -45,20 +45,20 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/ExecutionEngine/PartTensorRuntime.h"
 #include "mlir/Dialect/SparseTensor/IR/Enums.h"
-#include "mlir/ExecutionEngine/PartTensor/Storage.h"
 #include "mlir/ExecutionEngine/SparseTensorRuntime.h"
 #include "llvm/ADT/ArrayRef.h"
 #include <cassert>
 #include <cstdint>
+
+#include "lapis/ExecutionEngine/PartTensor/Storage.h"
+#include "lapis/ExecutionEngine/PartTensorRuntime.h"
 
 #ifdef MLIR_CRUNNERUTILS_DEFINE_FUNCTIONS
 
 #include "mlir/ExecutionEngine/CRunnerUtils.h"
 #include "mlir/ExecutionEngine/SparseTensor/ArithmeticUtils.h"
 #include "mlir/ExecutionEngine/SparseTensor/COO.h"
-#include "mlir/ExecutionEngine/SparseTensor/ErrorHandling.h"
 #include "mlir/ExecutionEngine/SparseTensor/File.h"
 #include "mlir/ExecutionEngine/SparseTensor/Storage.h"
 

@@ -15,15 +15,16 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
-#include "mlir/Dialect/PartTensor/IR/PartTensor.h"
-#include "mlir/Dialect/PartTensor/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/Transforms/Patterns.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
+#include "lapis/Dialect/PartTensor/IR/PartTensor.h"
+#include "lapis/Dialect/PartTensor/Transforms/Passes.h"
+
 namespace mlir {
 #define GEN_PASS_DEF_PARTTENSORCONVERSIONPASS
-#include "mlir/Dialect/PartTensor/Transforms/Passes.h.inc"
+#include "lapis/Dialect/PartTensor/Transforms/Passes.h.inc"
 } // namespace mlir
 
 using namespace mlir;

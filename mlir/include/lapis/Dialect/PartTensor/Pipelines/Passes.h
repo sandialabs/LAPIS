@@ -16,9 +16,9 @@
 #ifndef MLIR_DIALECT_PARTTENSOR_PIPELINES_PASSES_H_
 #define MLIR_DIALECT_PARTTENSOR_PIPELINES_PASSES_H_
 
+#include "lapis/Dialect/Kokkos/Pipelines/Passes.h"
+#include "lapis/Dialect/PartTensor/Transforms/Passes.h"
 #include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVM.h"
-#include "mlir/Dialect/Kokkos/Pipelines/Passes.h"
-#include "mlir/Dialect/PartTensor/Transforms/Passes.h"
 #include "mlir/Pass/PassOptions.h"
 
 // for SparseParallelizationStrategy

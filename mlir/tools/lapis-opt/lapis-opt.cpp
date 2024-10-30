@@ -13,9 +13,9 @@
 #include "lapis/Dialect/Kokkos/Pipelines/Passes.h"
 #include "lapis/Dialect/Kokkos/Transforms/Passes.h"
 #ifdef ENABLE_PART_TENSOR
-#include "laps/Dialect/PartTensor/IR/PartTensor.h"
-#include "laps/Dialect/PartTensor/Pipelines/Passes.h"
-#include "laps/Dialect/PartTensor/Transforms/Passes.h"
+#include "lapis/Dialect/PartTensor/IR/PartTensor.h"
+#include "lapis/Dialect/PartTensor/Pipelines/Passes.h"
+#include "lapis/Dialect/PartTensor/Transforms/Passes.h"
 #endif
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/IR/ValueBoundsOpInterfaceImpl.h"

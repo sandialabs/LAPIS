@@ -23,12 +23,12 @@ class AtomicRMWKindAttr;
 } // namespace mlir
 
 #define GET_ATTRDEF_CLASSES
-#include "mlir/Dialect/PartTensor/IR/PartTensorAttrDefs.h.inc"
+#include "lapis/Dialect/PartTensor/IR/PartTensorAttrDefs.h.inc"
 
 #define GET_OP_CLASSES
-#include "mlir/Dialect/PartTensor/IR/PartTensorOps.h.inc"
+#include "lapis/Dialect/PartTensor/IR/PartTensorOps.h.inc"
 
-#include "mlir/Dialect/PartTensor/IR/PartTensorOpsDialect.h.inc"
+#include "lapis/Dialect/PartTensor/IR/PartTensorOpsDialect.h.inc"
 
 namespace mlir {
 namespace part_tensor {

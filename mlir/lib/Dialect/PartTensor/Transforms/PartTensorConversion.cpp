@@ -22,14 +22,15 @@
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/PartTensor/IR/PartTensor.h"
-#include "mlir/Dialect/PartTensor/IR/PartTensorType.h"
-#include "mlir/Dialect/PartTensor/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Transforms/DialectConversion.h"
+
+#include "lapis/Dialect/PartTensor/IR/PartTensor.h"
+#include "lapis/Dialect/PartTensor/IR/PartTensorType.h"
+#include "lapis/Dialect/PartTensor/Transforms/Passes.h"
 
 #include "CodegenUtils.h"
 

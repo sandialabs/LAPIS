@@ -24,7 +24,7 @@ enum class PartTensorDistBackend {
 };
 
 #define GEN_PASS_DECL
-#include "mlir/Dialect/PartTensor/Transforms/Passes.h.inc"
+#include "lapis/Dialect/PartTensor/Transforms/Passes.h.inc"
 
 //===----------------------------------------------------------------------===//
 // The PartTensorConversion pass.
@@ -49,7 +49,7 @@ std::unique_ptr<Pass> createPartTensorConversionPass(PartTensorDistBackend);
 
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION
-#include "mlir/Dialect/PartTensor/Transforms/Passes.h.inc"
+#include "lapis/Dialect/PartTensor/Transforms/Passes.h.inc"
 
 } // namespace mlir
 

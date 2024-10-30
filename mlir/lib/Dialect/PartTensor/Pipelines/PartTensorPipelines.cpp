@@ -6,9 +6,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Dialect/PartTensor/Pipelines/Passes.h"
-#include "mlir/Dialect/PartTensor/Transforms/Passes.h"
-
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
@@ -24,6 +21,9 @@
 #include "mlir/Dialect/SparseTensor/IR/SparseTensor.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
+
+#include "lapis/Dialect/PartTensor/Pipelines/Passes.h"
+#include "lapis/Dialect/PartTensor/Transforms/Passes.h"
 
 using namespace mlir;
 using namespace mlir::part_tensor;

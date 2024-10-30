@@ -6,9 +6,10 @@
 #include "mlir/Dialect/SparseTensor/IR/Enums.h"
 #include "mlir/ExecutionEngine/CRunnerUtils.h"
 #include "mlir/ExecutionEngine/Float16bits.h"
-#include "mlir/ExecutionEngine/PartTensor/Storage.h"
 #include "mlir/ExecutionEngine/SparseTensor/ArithmeticUtils.h"
 #include "mlir/ExecutionEngine/SparseTensorRuntime.h"
+
+#include "lapis/ExecutionEngine/PartTensor/Storage.h"
 
 #include <cinttypes>
 #include <complex>
