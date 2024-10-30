@@ -46,7 +46,7 @@ namespace {
 /// Maps each part tensor type to an opaque pointer.
 static std::optional<Type> convertPartTensorTypes(Type type) {
   if (mlir::part_tensor::getPartTensorEncoding(type) != nullptr)
-    return LLVM::LLVMPointerType::get(IntegerType::get(type.getContext(), 8));
+    return LLVM::LLVMPointerType::get(type.getContext());
   return std::nullopt;
 }
 
@@ -79,7 +79,7 @@ public:
     Type resType = op.getType();
     const Type crdTp = cast<ShapedType>(resType).getElementType();
     Location loc = op->getLoc();
-    MemRefType callRetType = mlir::sparse_tensor::get1DMemRefType(crdTp, false);
+    MemRefType callRetType = MemRefType::get({ShapedType::kDynamic}, crdTp);
     SmallVector<Value> operands{adaptor.getOperands()[0]};
     auto fn = mlir::sparse_tensor::getFunc(
         op->getParentOfType<ModuleOp>(),
