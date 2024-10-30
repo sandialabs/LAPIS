@@ -88,7 +88,6 @@ int main(int argc, char **argv) {
 
   // Register LAPIS pipelines and passes
 #ifdef ENABLE_PART_TENSOR
-  part_tensor::registerPartTensorPipelines();
   mlir::registerPartTensorPasses();
 #endif
 

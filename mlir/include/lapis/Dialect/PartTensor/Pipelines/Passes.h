@@ -29,20 +29,7 @@ using namespace llvm::cl;
 
 namespace mlir {
 namespace part_tensor {
-
-using mlir::kokkos::SparseCompilerOptions;
-//===----------------------------------------------------------------------===//
-// Building and Registering.
-//===----------------------------------------------------------------------===//
-
-/// Adds the "part-compiler" pipeline to the `OpPassManager`.
-void buildPartSparseCompiler(OpPassManager &pm,
-                             const SparseCompilerOptions &options);
-
-/// Registers all pipelines for the `sparse_tensor` dialect.  At present,
-/// this includes only "part-compiler".
-void registerPartTensorPipelines();
-
+using mlir::kokkos::LapisCompilerOptions;
 } // namespace part_tensor
 } // namespace mlir
 
