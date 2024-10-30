@@ -3,7 +3,7 @@
 
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/EnumAttr.td"
-include "mlir/Dialect/PartTensor/IR/PartTensorBase.td"
+include "PartTensorBase.td"
 include "mlir/Dialect/SparseTensor/IR/SparseTensorAttrDefs.td"
 include "mlir/IR/TensorEncoding.td"
 

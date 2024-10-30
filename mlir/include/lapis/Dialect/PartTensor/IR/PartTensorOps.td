@@ -26,7 +26,7 @@
 #define PARTTENSOR_OPS
 
 include "mlir/Dialect/Arith/IR/ArithBase.td"
-include "mlir/Dialect/PartTensor/IR/PartTensorBase.td"
+include "PartTensorBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
 // Base class.
