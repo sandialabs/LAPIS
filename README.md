@@ -92,6 +92,7 @@ cd ..
 This recipe builds LAPIS as an external project with LLVM.
 torch-mlir and mpact require this recipe, but torch-mlir and mpact are still optional.
 mpact requires torch-mlir, however.
+**This requires ninja due to an issue in torch-mlir. make will not work.**
 ```
 # If enabling torch-mlir, need to install Python dependencies first.
 # This can be done inside a python virtual env.
@@ -106,6 +107,7 @@ cd build
 
 # Base configuration: just LAPIS and LLVM/MLIR
 cmake \
+  -GNinja \
   -DCMAKE_BUILD_TYPE=MinSizeRel \
   -DPython3_FIND_VIRTUALENV=ONLY \
   -DLLVM_ENABLE_PROJECTS=mlir \
