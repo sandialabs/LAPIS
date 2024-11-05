@@ -31,6 +31,7 @@ The following commands will clone the correct versions of all the repositories a
 ```
 git clone git@github.com:MPACT-ORG/mpact-compiler
 cd mpact-compiler
+git checkout 556009cd
 git submodule update --init --recursive
 export MPACT_SRC=`pwd`
 export TORCH_MLIR_SRC="$MPACT_SRC/externals/torch-mlir"
