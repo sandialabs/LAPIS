@@ -35,6 +35,7 @@ git submodule update --init --recursive
 export MPACT_SRC=`pwd`
 export TORCH_MLIR_SRC="$MPACT_SRC/externals/torch-mlir"
 export LLVM_SRC="$TORCH_MLIR_SRC/externals/llvm-project"
+cd ..
 git clone git@github.com:sandialabs/LAPIS
 cd LAPIS
 export LAPIS_SRC=`pwd`
