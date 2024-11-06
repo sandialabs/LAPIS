@@ -48,6 +48,8 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 
+#include "Transform/Kernel/KernelPasses.h"
+
 using namespace mlir;
 
 int main(int argc, char **argv) {
@@ -85,6 +87,8 @@ int main(int argc, char **argv) {
   tensor::registerTilingInterfaceExternalModels(registry);
   tensor::registerValueBoundsOpInterfaceExternalModels(registry);
   vector::registerBufferizableOpInterfaceExternalModels(registry);
+
+  kernel::registerKernelFusionDriver();
 
   // Register LAPIS pipelines and passes
 #ifdef ENABLE_PART_TENSOR

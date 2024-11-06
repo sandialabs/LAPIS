@@ -12,6 +12,7 @@ target_link_libraries(lapis-opt
   MLIRSPIRVDialect
   MLIRSupport
   MLIROptLib
+  MLIRKernelPasses
   )
 
 mlir_check_link_libraries(lapis-opt)
