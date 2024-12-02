@@ -20,25 +20,7 @@
 
 using namespace mlir;
 
-namespace mlir {
-// Defined in the test directory, no public header.
-void registerTestRoundtripSPIRV();
-void registerTestRoundtripDebugSPIRV();
-#ifdef MLIR_INCLUDE_TESTS
-void registerTestToLLVMIR();
-#endif
-} // namespace mlir
-
-static void registerTestTranslations() {
-  registerTestRoundtripSPIRV();
-  registerTestRoundtripDebugSPIRV();
-#ifdef MLIR_INCLUDE_TESTS
-  registerTestToLLVMIR();
-#endif
-}
-
 int main(int argc, char **argv) {
   registerAllKokkosTranslations();
-  registerTestTranslations();
   return failed(mlirTranslateMain(argc, argv, "MLIR Translation Testing Tool"));
 }
