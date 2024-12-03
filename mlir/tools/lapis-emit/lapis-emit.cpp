@@ -1,13 +1,9 @@
-#include "lapis-c/EmitKokkos.h"
-#include "lapis/Target/KokkosCpp/KokkosCppEmitter.h"
-#include "mlir/CAPI/IR.h"
-#include "mlir/CAPI/Support.h"
-#include "mlir/IR/BuiltinOps.h"
-#include "mlir/Parser/Parser.h"
-#include "mlir/Pass/PassManager.h"
-#include "llvm/Support/raw_ostream.h"
+//===- lapis-emit.cpp MLIR->Kokkos end-to-end driver -------------------------===//
+
 #include <iostream>
 
+// Dialects, passes and extensions that must be registered
+#include "lapis/InitAllKokkosTranslations.h"
 #include "lapis/Dialect/Kokkos/IR/KokkosDialect.h"
 #include "lapis/Dialect/Kokkos/Pipelines/Passes.h"
 #include "lapis/Dialect/Kokkos/Transforms/Passes.h"
@@ -45,11 +41,30 @@
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Dialect/Vector/Transforms/BufferizableOpInterfaceImpl.h"
 
-using namespace mlir;
+// Kokkos emitter
+#include "lapis/Target/KokkosCpp/KokkosCppEmitter.h"
 
-// Create a fresh MLIR context with dialects required by LAPIS for end-to-end
-// lowering
-static MLIRContext getLAPISContext() {
+// MLIR utilities
+#include "mlir/Support/FileUtilities.h"
+#include "mlir/Parser/Parser.h"
+#include "mlir/Pass/PassManager.h"
+
+// LLVM utilities
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/SourceMgr.h"
+
+using namespace mlir;
+using namespace llvm;
+
+// Default intput is stdin
+cl::opt<std::string> inputFilename("i", cl::desc("MLIR input file (linalg on tensors)"), cl::init("-"));
+cl::opt<std::string> cxxFilename("cxx", cl::desc("Specify filename for C++ source code output"));
+cl::opt<std::string> pyFilename("py", cl::desc("Specify filename for Python wrapper module output"));
+cl::opt<bool> finalModule("final", cl::desc("Whether this module should finalize Kokkos"));
+
+int main(int argc, char **argv) {
+  cl::ParseCommandLineOptions(argc, argv);
+  //Register everything
   DialectRegistry registry;
   registry.insert<
 #ifdef ENABLE_PART_TENSOR
@@ -81,55 +96,43 @@ static MLIRContext getLAPISContext() {
   tensor::registerTilingInterfaceExternalModels(registry);
   tensor::registerValueBoundsOpInterfaceExternalModels(registry);
   vector::registerBufferizableOpInterfaceExternalModels(registry);
-  return MLIRContext(registry, MLIRContext::Threading::DISABLED);
-}
+  MLIRContext context(registry, MLIRContext::Threading::DISABLED);
 
-// Given the source code (ASCII text) for a linalg-level MLIR module,
-// lower to Kokkos dialect and emit Kokkos source code.
-// cxxSourceFile: path to C++ file to emit
-// pySourceFIle: path to python file for ctypes wrapper
-MlirLogicalResult lapisLowerAndEmitKokkos(const char *moduleText,
-                                          const char *cxxSourceFile,
-                                          const char *pySourceFile,
-                                          bool isLastKernel) {
-  // Parse the high-level module
-  MLIRContext context = getLAPISContext();
-  OwningOpRef<ModuleOp> module =
-      parseSourceString<ModuleOp>(moduleText, &context);
-  if (!module) {
-    std::cerr << "Failed to parse module\n";
-    return wrap(failure());
+  // Open input file, or read from stdin
+  std::string errorMessage;
+  std::unique_ptr<MemoryBuffer> inputFile = openInputFile(inputFilename, &errorMessage);
+  if (!inputFile) {
+    std::cerr << "Unable to read MLIR input: " << errorMessage << '\n';
+    return 1;
   }
-  // Lower the module
+  SourceMgr sourceMgr;
+  sourceMgr.AddNewSourceBuffer(std::move(inputFile), SMLoc());
+  SourceMgrDiagnosticHandler sourceMgrHandler(sourceMgr, &context);
+
+  // Parse the input file.
+  OwningOpRef<ModuleOp> module(parseSourceFile<ModuleOp>(sourceMgr, &context));
+  if (!module) {
+    return 1;
+  }
+
   PassManager pm(&context);
   kokkos::LapisCompilerOptions options;
   kokkos::buildSparseKokkosCompiler(pm, options);
   if (failed(pm.run(*module))) {
     std::cerr << "Failed to lower module\n";
-    return wrap(failure());
+    return 1;
   }
   std::error_code ec;
-  llvm::raw_fd_ostream cxxFileHandle(StringRef(cxxSourceFile), ec);
-  llvm::raw_fd_ostream pyFileHandle(StringRef(pySourceFile), ec);
-  LogicalResult result = kokkos::translateToKokkosCpp(
+  llvm::raw_fd_ostream cxxFileHandle(StringRef(cxxFilename), ec);
+  llvm::raw_fd_ostream pyFileHandle(StringRef(pyFilename), ec);
+  if(failed(kokkos::translateToKokkosCpp(
       *module, cxxFileHandle, pyFileHandle, /* enableSparseSupport */ true,
-      /* useHierarchical */ true, isLastKernel);
+      /* useHierarchical */ true, finalModule))) {
+    std::cerr << "Failed to emit Kokkos\n";
+    return 1;
+  }
   pyFileHandle.close();
   cxxFileHandle.close();
-  return wrap(result);
-}
-
-MlirLogicalResult lapisEmitKokkos(MlirModule module, const char *cxxSourceFile,
-                                  const char *pySourceFile, bool isLastKernel) {
-  ModuleOp op = unwrap(module);
-  std::error_code ec;
-  llvm::raw_fd_ostream cxxFileHandle(StringRef(cxxSourceFile), ec);
-  llvm::raw_fd_ostream pyFileHandle(StringRef(pySourceFile), ec);
-  LogicalResult result = kokkos::translateToKokkosCpp(
-      op, cxxFileHandle, pyFileHandle, /* enableSparseSupport */ true,
-      /* useHierarchical */ true, isLastKernel);
-  pyFileHandle.close();
-  cxxFileHandle.close();
-  return wrap(result);
+  return 0;
 }
 
