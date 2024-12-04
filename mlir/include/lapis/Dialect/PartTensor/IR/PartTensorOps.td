@@ -107,7 +107,10 @@ def PartTensor_GetPartitionsOp : PartTensor_Op<"get_partitions", [Pure]>,
              }]; 
          //%slice = partition.get_slice(%total_iteration_space,%partition) -> tensor<2xindex>
          // let assemblyFormat = " $in_part_tensor `,` $part_spec `,` $sparse_tensor attr-dict `:` type($in_part_tensor) `,` type($part_spec) `->` type($result_part_tensor)";
-         let assemblyFormat = " $in_part_tensor `,` $part_spec `,` $sparse_tensor attr-dict `:` type($in_part_tensor) `,` type($part_spec) `,` type($sparse_tensor) `->` type($result_part_tensor)";
+         let assemblyFormat = " $in_part_tensor `,` $part_spec `,` "
+         " $sparse_tensor attr-dict `:` type($in_part_tensor) `,` "
+         " type($part_spec) `,` type($sparse_tensor) `->` "
+         " type($result_part_tensor)";
          }
 
 def PartTensor_UpdateSliceOp : PartTensor_Op<"update_slice">,
@@ -125,6 +128,25 @@ def PartTensor_UpdateSliceOp : PartTensor_Op<"update_slice">,
         type($sparse_tensor) `->` type($result_part_tensor)
       }];
   }
+ def PartTensor_UpdateSliceWithActiveMaskOp :
+     PartTensor_Op<"update_slice_with_active_mask"> {
+        let arguments = (ins AnyTensor:$partTensor,
+            AnyTensor:$spTensor,
+            AnyStridedMemRefOfRank<1>:$partSpec,
+            Index:$activeMask,
+            Index:$activeMaskDim
+        );
+		let summary = "update slice with active mask";
+		let description = [{
+			This op updates $parttensor with $spTensor
+		}];
+        let results = (outs AnyTensor:$result);
+		let assemblyFormat = " $partTensor `,` $spTensor `,` $partSpec `,` "
+            " $activeMask `,` $activeMaskDim "
+            "attr-dict `:` type($partTensor)  `,` type ($spTensor) `,` "
+            " type($partSpec)  `,` type($activeMask) `,` type($activeMaskDim)"
+            " `->` type($result)";
+		}
 
 def PartTensor_GetNumPartitionsOp : PartTensor_Op<"get_num_partitions">,
 	Arguments<(ins AnyTensor:$tensor)>,

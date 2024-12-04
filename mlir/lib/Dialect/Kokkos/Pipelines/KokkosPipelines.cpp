@@ -36,7 +36,7 @@ using namespace mlir::kokkos;
 void mlir::kokkos::buildSparseKokkosCompiler(
     OpPassManager &pm, const LapisCompilerOptions& options) {
 #ifdef ENABLE_PART_TENSOR
-  pm.addPass(::mlir::createPartTensorConversionPass());
+  pm.addPass(::mlir::createPartTensorConversionPass(options.partTensorBackend));
 #endif
     // Rewrite named linalg ops into generic ops and apply fusion.
   pm.addNestedPass<func::FuncOp>(createLinalgGeneralizeNamedOpsPass());

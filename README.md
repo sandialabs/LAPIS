@@ -31,10 +31,12 @@ The following commands will clone the correct versions of all the repositories a
 ```
 git clone git@github.com:MPACT-ORG/mpact-compiler
 cd mpact-compiler
+git checkout 556009cd
 git submodule update --init --recursive
 export MPACT_SRC=`pwd`
 export TORCH_MLIR_SRC="$MPACT_SRC/externals/torch-mlir"
 export LLVM_SRC="$TORCH_MLIR_SRC/externals/llvm-project"
+cd ..
 git clone git@github.com:sandialabs/LAPIS
 cd LAPIS
 export LAPIS_SRC=`pwd`
@@ -90,6 +92,7 @@ cd ..
 This recipe builds LAPIS as an external project with LLVM.
 torch-mlir and mpact require this recipe, but torch-mlir and mpact are still optional.
 mpact requires torch-mlir, however.
+**This requires ninja due to an issue in torch-mlir. make will not work.**
 ```
 # If enabling torch-mlir, need to install Python dependencies first.
 # This can be done inside a python virtual env.
@@ -104,6 +107,7 @@ cd build
 
 # Base configuration: just LAPIS and LLVM/MLIR
 cmake \
+  -GNinja \
   -DCMAKE_BUILD_TYPE=MinSizeRel \
   -DPython3_FIND_VIRTUALENV=ONLY \
   -DLLVM_ENABLE_PROJECTS=mlir \
