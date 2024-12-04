@@ -921,6 +921,14 @@ static LogicalResult printSupportCall(KokkosCppEmitter &emitter, func::CallOp ca
         return failure();
       os << " " << emitter.getOrCreateName(arg) << "_smr = LAPIS::viewToStridedMemref(";
       os << emitter.getOrCreateName(arg);
+      // arg's memory space should be either Host or DualView
+      auto argMemSpace = kokkos::getMemSpace(arg);
+      if(argMemSpace == kokkos::MemorySpace::DualView) {
+        os << ".host_view";
+      }
+      else if(argMemSpace != kokkos::MemorySpace::Host) {
+        return callOp.emitError("Passing memref to support function, whose space is neither host nor DualView");
+      }
       os << ");\n";
       convertedStridedMemrefs.insert(arg);
     }

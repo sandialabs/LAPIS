@@ -540,6 +540,12 @@ MemorySpace getMemSpace(Value v) {
         deviceRepresented = true;
       }
     }
+    else if(isa<memref::LoadOp, memref::StoreOp, memref::AtomicRMWOp>(usingOp)) {
+      // Direct element access outside of any parallel loop must be on host.
+      hostRepresented = true;
+    }
+    // All other cases are ops that use the memref but don't access its memory
+    // (dim, subview, cast, etc)
   }
   // Finally, if v is a result of a call, make sure it's represented correctly.
   // If it's the result of a call to an extern function, assume it's present on
@@ -630,7 +636,7 @@ DenseSet<Value> getMemrefsWritten(Operation *op, kokkos::ExecutionSpace space) {
     else if (auto atomicUpdate = dyn_cast<memref::AtomicRMWOp>(subOp))
       memrefs.insert(atomicUpdate.getMemref());
     else if (auto call = dyn_cast<func::CallOp>(subOp)) {
-      // Assume that all memref-typed arguments can be read by the callee,
+      // Assume that all memref-typed arguments can be written to by the callee,
       // since memrefs of const data cannot be represented in MLIR.
       // TODO: actually check non-extern callees for which memrefs get
       // read/written.
