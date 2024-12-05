@@ -61,6 +61,7 @@ cl::opt<std::string> inputFilename("i", cl::desc("MLIR input file (linalg on ten
 cl::opt<std::string> cxxFilename("cxx", cl::desc("Specify filename for C++ source code output"));
 cl::opt<std::string> pyFilename("py", cl::desc("Specify filename for Python wrapper module output"));
 cl::opt<bool> finalModule("final", cl::desc("Whether this module should finalize Kokkos"));
+cl::opt<bool> dump("dump", cl::desc("Whether to dump the lowered MLIR to file"));
 
 int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv);
@@ -100,6 +101,7 @@ int main(int argc, char **argv) {
 
   // Open input file, or read from stdin
   std::string errorMessage;
+  std::cout << "Hello from lapis-emit: input path is \"" << inputFilename << "\"\n";
   std::unique_ptr<MemoryBuffer> inputFile = openInputFile(inputFilename, &errorMessage);
   if (!inputFile) {
     std::cerr << "Unable to read MLIR input: " << errorMessage << '\n';
@@ -123,8 +125,30 @@ int main(int argc, char **argv) {
     return 1;
   }
   std::error_code ec;
+  if(dump) {
+    std::string dumpPath = cxxFilename + ".mlir";
+    std::cout << "Dumping lowered MLIR to \"" << dumpPath << "\"\n";
+    llvm::raw_fd_ostream mlirDump(StringRef(dumpPath), ec);
+    if(ec) {
+      std::cerr << "Failed to open MLIR dump file\n";
+      return 1;
+    }
+    module->print(mlirDump);
+    mlirDump.close();
+  }
+  std::cout << "Hello from lapis-emit:\n";
+  std::cout << "C++ output = " << cxxFilename << '\n';
+  std::cout << "Python output = " << pyFilename << '\n';
   llvm::raw_fd_ostream cxxFileHandle(StringRef(cxxFilename), ec);
+  if(ec) {
+    std::cerr << "Failed to open C++ output file \"" << cxxFilename << "\"\n";
+    return 1;
+  }
   llvm::raw_fd_ostream pyFileHandle(StringRef(pyFilename), ec);
+  if(ec) {
+    std::cerr << "Failed to open Python output file \"" << pyFilename << "\"\n";
+    return 1;
+  }
   if(failed(kokkos::translateToKokkosCpp(
       *module, cxxFileHandle, pyFileHandle, /* enableSparseSupport */ true,
       /* useHierarchical */ true, finalModule))) {

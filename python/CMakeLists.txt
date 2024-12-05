@@ -18,7 +18,7 @@ add_compile_definitions("MLIR_PYTHON_PACKAGE_PREFIX=lapis.")
 ################################################################################
 
 declare_mlir_python_sources(LapisPythonSources)
-declare_mlir_python_sources(LapisPythonExtensions)
+#declare_mlir_python_sources(LapisPythonExtensions)
 
 declare_mlir_python_sources(LapisPythonSources.kokkos_backend
   ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lapis"
@@ -31,21 +31,21 @@ declare_mlir_python_sources(LapisPythonSources.kokkos_backend
 # Extensions
 ################################################################################
 
-declare_mlir_python_extension(LapisPythonExtensions.Main
-  MODULE_NAME _lapis
-  ADD_TO_PARENT LapisPythonExtensions
-  SOURCES
-    LapisModule.cpp
-  EMBED_CAPI_LINK_LIBS
-    LapisCAPI
-  PRIVATE_LINK_LIBS
-    LLVMSupport
-)
+#declare_mlir_python_extension(LapisPythonExtensions.Main
+#  MODULE_NAME _lapis
+#  ADD_TO_PARENT LapisPythonExtensions
+#  SOURCES
+#    LapisModule.cpp
+#  EMBED_CAPI_LINK_LIBS
+#    LapisCAPI
+#  PRIVATE_LINK_LIBS
+#    LLVMSupport
+#)
 
-target_include_directories(LapisPythonExtensions.Main INTERFACE
-  $<BUILD_INTERFACE:${LAPIS_SOURCE_DIR}/mlir/include>
-  $<BUILD_INTERFACE:${LAPIS_BINARY_DIR}/mlir/include>)
-target_link_libraries(LapisPythonExtensions.Main INTERFACE MLIRPythonExtension.Core LapisCAPI)
+#target_include_directories(LapisPythonExtensions.Main INTERFACE
+#  $<BUILD_INTERFACE:${LAPIS_SOURCE_DIR}/mlir/include>
+#  $<BUILD_INTERFACE:${LAPIS_BINARY_DIR}/mlir/include>)
+#target_link_libraries(LapisPythonExtensions.Main INTERFACE MLIRPythonExtension.Core LapisCAPI)
 
 ################################################################################
 # Generate packages and shared library
@@ -54,37 +54,31 @@ target_link_libraries(LapisPythonExtensions.Main INTERFACE MLIRPythonExtension.C
 ################################################################################
 
 set(_source_components
-  # TODO: Core is now implicitly building/registering all dialects, increasing
-  # build burden by ~5x. Make it stop.
-  # TODO: Reduce dependencies. We need ExecutionEngine and a bunch of passes
-  # for the reference backend, but logically they can be separate. But seemingly
-  # the only way to handle that is to create a separate mlir python package
-  # tree, which seems excessive.
+  #MLIRPythonSources
+  #MLIRPythonExtension.Core
+  #MLIRPythonExtension.RegisterEverything
   LapisPythonSources
-  MLIRPythonSources
-  MLIRPythonExtension.Core
-  MLIRPythonExtension.RegisterEverything
-  LapisPythonExtensions
+  #LapisPythonExtensions
 )
 
-add_mlir_python_common_capi_library(LapisAggregateCAPI
-  INSTALL_COMPONENT LapisPythonModules
-  INSTALL_DESTINATION python_packages/lapis/_mlir_libs
-  OUTPUT_DIRECTORY "${LAPIS_PYTHON_PACKAGES_DIR}/lapis/_mlir_libs"
-  RELATIVE_INSTALL_ROOT "../../../.."
-  DECLARED_SOURCES ${_source_components}
-)
+#add_mlir_python_common_capi_library(LapisAggregateCAPI
+#  INSTALL_COMPONENT LapisPythonModules
+#  INSTALL_DESTINATION python_packages/lapis/_mlir_libs
+#  OUTPUT_DIRECTORY "${LAPIS_PYTHON_PACKAGES_DIR}/lapis/_mlir_libs"
+#  RELATIVE_INSTALL_ROOT "../../../.."
+#  DECLARED_SOURCES ${_source_components}
+#)
 
-target_link_libraries(
-  LapisAggregateCAPI
-  PUBLIC
-  LapisCAPI
-)
+#target_link_libraries(
+#  LapisAggregateCAPI
+#  PUBLIC
+#  LapisCAPI
+#)
 
 add_mlir_python_modules(LapisPythonModules
   ROOT_PREFIX "${LAPIS_PYTHON_PACKAGES_DIR}/lapis/lapis"
   INSTALL_PREFIX "python_packages/lapis"
   DECLARED_SOURCES ${_source_components}
-  COMMON_CAPI_LINK_LIBS
-    LapisAggregateCAPI
+  #COMMON_CAPI_LINK_LIBS
+  #  LapisAggregateCAPI
   )

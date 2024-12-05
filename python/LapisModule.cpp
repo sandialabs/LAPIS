@@ -7,7 +7,7 @@
 void lapisRegisterAllPasses() {
   printf("*************** registerAllKokkosPasses() "
          "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
-  mlir::registerAllKokkosPasses();
+//  mlir::registerAllKokkosPasses();
 }
 
 namespace py = pybind11;
