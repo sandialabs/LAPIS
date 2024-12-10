@@ -22,7 +22,7 @@ def main():
 
     mlir_module = torchscript.compile(m, (a, b), output_type='linalg-on-tensors')
 
-    backend = KokkosBackend(dump_mlir=True)
+    backend = KokkosBackend.KokkosBackend(dump_mlir=True)
     k_backend = backend.compile(mlir_module)
 
     c = k_backend.forward(a, b)
@@ -34,3 +34,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

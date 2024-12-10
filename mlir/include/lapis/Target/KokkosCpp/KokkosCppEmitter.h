@@ -13,13 +13,12 @@ namespace mlir {
 namespace kokkos {
 
 /// Translates the given operation to Kokkos C++ code.
-LogicalResult translateToKokkosCpp(Operation *op, raw_ostream &os,
-                                bool enableSparseSupport = false);
+LogicalResult translateToKokkosCpp(Operation *op, raw_ostream &os);
 
 /// Translates the given operation to Kokkos C++ code, with a Python wrapper module written to py_os.
-LogicalResult translateToKokkosCpp(Operation *op, raw_ostream &os, raw_ostream &py_os,
-                                bool enableSparseSupport = false, bool useHierarchical = false, bool isLastKernel = true);
-} // namespace emitc
+LogicalResult translateToKokkosCpp(Operation *op, raw_ostream &os, raw_ostream &py_os, bool isLastKernel = true);
+
+} // namespace kokkos
 } // namespace mlir
 
 #endif // MLIR_TARGET_KOKKOSCPP_KOKKOSCPPEMITTER_H
