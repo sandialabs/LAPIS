@@ -89,9 +89,9 @@ set(LAPIS_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 
 if("torch-mlir" IN_LIST LLVM_EXTERNAL_PROJECTS)
   message(STATUS "LAPIS has torch-mlir support")
-  set(LAPIS_HAS_TORCH_MILR ON)
+  set(LAPIS_HAS_TORCH_MLIR ON)
 else()
-  set(LAPIS_HAS_TORCH_MILR OFF)
+  set(LAPIS_HAS_TORCH_MLIR OFF)
 endif()
 
 if("mpact" IN_LIST LLVM_EXTERNAL_PROJECTS)
