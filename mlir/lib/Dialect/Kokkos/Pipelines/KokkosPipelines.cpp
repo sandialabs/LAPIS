@@ -88,39 +88,6 @@ void mlir::kokkos::buildSparseKokkosCompiler(
 
   // Ensure all casts are realized.
   pm.addPass(createReconcileUnrealizedCastsPass());
-
-  /* OLD! 
-#ifdef ENABLE_PART_TENSOR
-  pm.addPass(::mlir::createPartTensorConversionPass());
-#endif
-  pm.addNestedPass<func::FuncOp>(createLinalgGeneralizationPass());
-  pm.addPass(createSparsificationAndBufferizationPass(
-      getBufferizationOptionsForSparsification(
-          options.testBufferizationAnalysisOnly),
-      options.sparsificationOptions(), options.sparseTensorConversionOptions(),
-      options.createSparseDeallocs, options.enableRuntimeLibrary,
-      options.enableBufferInitialization, options.vectorLength,
-      options.armSVE,
-      options.force32BitVectorIndices));
-  pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());
-  pm.addNestedPass<func::FuncOp>(
-      mlir::bufferization::createFinalizingBufferizePass());
-  pm.addPass(createLinalgFoldUnitExtentDimsPass());
-  pm.addNestedPass<func::FuncOp>(createConvertLinalgToLoopsPass());
-  pm.addNestedPass<func::FuncOp>(createConvertVectorToSCFPass());
-  pm.addNestedPass<func::FuncOp>(memref::createExpandReallocPass());
-  pm.addPass(memref::createExpandStridedMetadataPass());
-  pm.addPass(createLowerAffinePass());
-  // Lower SCF to Kokkos dialect
-  pm.addPass(createParallelUnitStepPass());
-  pm.addPass(createKokkosLoopMappingPass());
-  //pm.addPass(createKokkosMemorySpaceAssignmentPass());
-  pm.addPass(createKokkosDualViewManagementPass());
-  pm.addPass(createReconcileUnrealizedCastsPass());
-  // Apply CSE (common subexpression elimination) now, since the
-  // output of this pipeline gets fed directly into the Kokkos C++ emitter.
-  pm.addPass(createCSEPass());
-  */
 }
 
 //===----------------------------------------------------------------------===//

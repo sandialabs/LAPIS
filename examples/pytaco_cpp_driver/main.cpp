@@ -1,4 +1,5 @@
-#define PYTACO_CPP_DRIVER
+#define LAPIS_CPP_DRIVER
+
 #include <iostream>
 #include <fstream>
 #include "mlir/Dialect/SparseTensor/IR/Enums.h"

@@ -79,6 +79,8 @@ class KokkosBackend:
         args = ["--cxx=" + cppOut, "--py=" + pyOut]
         if self.dump_mlir:
             args.append("--dump")
+        if self.num_instances == 0 or (self.index_instance == self.num_instances - 1):
+            args.append("--final")
         p = subprocess.Popen([lapisEmit] + args, stdin=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         errs = p.communicate(input=moduleText)[1]
         if p.returncode != 0:

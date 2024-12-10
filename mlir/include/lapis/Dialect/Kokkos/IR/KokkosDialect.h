@@ -4,6 +4,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Dialect.h"
@@ -40,6 +41,13 @@ Value getParentMemref(Value v);
 // Determine the correct memory space (Host, Device or DualView)
 // for v based on where it gets accessed.
 MemorySpace getMemSpace(Value v);
+
+// Determine the correct memory space (Host, Device or DualView)
+// for the global view.
+MemorySpace getMemSpace(memref::GlobalOp global);
+
+// Is the global memref used
+bool isGlobalUsed(memref::GlobalOp global);
 
 // Get the parallel nesting depth of the given Op
 // - If Op itself is a kokkos.parallel or scf.parallel, then that counts as 1
