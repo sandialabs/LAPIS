@@ -647,138 +647,112 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   return success();
 }
 
-//static LogicalResult printOperation(KokkosCppEmitter &emitter,
-//                                    memref::SubViewOp op) {
-//  Value result = op.getResult();
-//  auto sourceType = dyn_cast<MemRefType>(op.getSource().getType());
-//  // The subview will have the same space as the parent
-//  emitter.memrefSpaces[result] = emitter.memrefSpaces[op.getSource()];
-//  int sourceRank = sourceType.getRank();
-//  if(emitter.isStridedSubview(op.getSource()))
-//  {
-//    return op.emitError("NOT SUPPORTED YET: strided subview of strided subview. Would need to figure out how to get extents correct");
-//  }
-//  //SubViewOp behavior
-//  //  - Sizes/Offsets are required
-//  //    - dynamic must take precedence over static, because sometimes both dynamic and static offsets are given but the static values are all -1.
-//  //  - Strides are optional - if neither static nor dynamic strides are given, assume they are all 1
-//  //  - Check the op.getDroppedDims() for a bit vector of which dimensions are kept (1) or discarded (0).
-//  //    - This works just like the Kokkos::subview arguments - kept dims are given as a [begin, end) interval, and discarded as a single index.
-//  emitter << "/* SubViewOp info\n";
-//  emitter << "Source (rank-" << sourceRank << "): ";
-//  if(failed(emitter.emitValue(op.getSource())))
-//    return failure();
-//  emitter << "\n";
-//  emitter << "Sizes (dynamic): ";
-//  for(auto s : op.getSizes())
-//  {
-//    (void) emitter.emitValue(s);
-//    emitter << "  ";
-//  }
-//  emitter << "\n";
-//  emitter << "Offsets (dynamic): ";
-//  for(auto o : op.getOffsets())
-//  {
-//    (void) emitter.emitValue(o);
-//    emitter << "  ";
-//  }
-//  emitter << "\n";
-//  emitter << "Strides (dynamic): ";
-//  for(auto s : op.getStrides())
-//  {
-//    (void) emitter.emitValue(s);
-//    emitter << "  ";
-//  }
-//  emitter << "\n";
-//  emitter << "Sizes (static): ";
-//  for(auto s : op.getStaticSizes())
-//  {
-//    emitter << s << "  ";
-//  }
-//  emitter << "\n";
-//  emitter << "Offsets (static): ";
-//  for(auto o : op.getStaticOffsets())
-//  {
-//    emitter << o << "  ";
-//  }
-//  emitter << "\n";
-//  emitter << "Strides (static): ";
-//  for(auto s : op.getStaticStrides())
-//  {
-//    emitter << s << "  ";
-//  }
-//  emitter << "\n";
-//  emitter << "Dropped Dims: ";
-//  for(size_t i = 0; i < op.getDroppedDims().size(); i++)
-//    emitter << op.getDroppedDims()[i] << " ";
-//  emitter << "\n*/\n";
-//  // TODO: what happens with sizes/staticSizes when a dimension is dropped?
-//  // Is the size for dropped dimension just 1, or is the length of sizes one element shorter per dropped dim?
-//  for(size_t i = 0; i < op.getDroppedDims().size(); i++)
-//  {
-//    if(op.getDroppedDims()[i])
-//      return op.emitError("Do not yet support dropped dimensions in SubViewOp, see TODO.");
-//  }
-//  bool useDynamicSizes = op.getSizes().size();
-//  bool useDynamicOffsets = op.getOffsets().size();
-//  // TODO: need to carefully implement subviews with non-unit strides,
-//  // since Kokkos::subview does not support this. Probably have to compute the strides per-dimension and then construct a LayoutStride object.
-//  bool haveStrides = false;
-//  if(op.getStrides().size())
-//  {
-//    //dynamic strides given, so they could be non-unit
-//    haveStrides = true;
-//  }
-//  for(auto staticStride : op.getStaticStrides())
-//  {
-//    if(staticStride != 1)
-//      haveStrides = true;
-//  }
-//  if(haveStrides)
-//    return op.emitError("Do not yet support non-unit strides in SubViewOp, see TODO.");
-//  auto emitSize = [&](int dim) -> LogicalResult
-//  {
-//    if(useDynamicSizes)
-//    {
-//      if(failed(emitter.emitValue(op.getSizes()[dim])))
-//        return failure();
-//    }
-//    else
-//      emitter << op.getStaticSizes()[dim];
-//    return success();
-//  };
-//  auto emitOffset = [&](int dim) -> LogicalResult
-//  {
-//    if(useDynamicOffsets)
-//    {
-//      if(failed(emitter.emitValue(op.getOffsets()[dim])))
-//        return failure();
-//    }
-//    else
-//      emitter << op.getStaticOffsets()[dim];
-//    return success();
-//  };
-//  emitter << "auto " << emitter.getOrCreateName(result) << " = Kokkos::subview(";
-//  if(failed(emitter.emitValue(op.getSource())))
-//    return failure();
-//  for(int dim = 0; dim < sourceRank; dim++)
-//  {
-//    emitter << ", Kokkos::make_pair<int64_t, int64_t>(";
-//    //interval for each dim is [offset, offset+size)
-//    //TODO: this is only correct for unit strides, see above
-//    if(failed(emitOffset(dim)))
-//      return failure();
-//    emitter << ", ";
-//    if(failed(emitOffset(dim)))
-//      return failure();
-//    emitter << " + ";
-//    if(failed(emitSize(dim)))
-//      return failure();
-//    emitter << ")";
-//  }
-//  emitter << ")";
-//  return success();
-//}
+static LogicalResult printOperation(KokkosCppEmitter &emitter,
+                                    memref::SubViewOp op) {
+  Value result = op.getResult();
+  Value source = op.getSource();
+  auto resultName = emitter.getOrCreateName(result);
+  MemRefType resultType = dyn_cast<MemRefType>(result.getType());
+  int sourceRank = resultType.getRank();
+  auto space = kokkos::getMemSpace(result);
+  const bool useDynamicOffset = !op.getOffsets().empty();
+  const bool useDynamicSizes = !op.getSizes().empty();
+  const bool useDynamicStrides = !op.getStrides().empty();
+  auto emitOffset = [&](int dim) -> LogicalResult {
+    if (useDynamicOffset) {
+      if (failed(emitter.emitValue(op.getOffsets()[dim])))
+        return failure();
+    } else
+      emitter << op.getStaticOffsets()[dim];
+    return success();
+  };
+  auto emitSize = [&](int dim) -> LogicalResult {
+    if (useDynamicSizes) {
+      if (failed(emitter.emitValue(op.getSizes()[dim])))
+        return failure();
+    } else
+      emitter << op.getStaticSizes()[dim];
+    return success();
+  };
+  auto emitStride = [&](int dim) -> LogicalResult {
+    if (useDynamicStrides) {
+      if (failed(emitter.emitValue(op.getStrides()[dim])))
+        return failure();
+    } else
+      emitter << op.getStaticStrides()[dim];
+    return success();
+  };
+  // In general, the result of this op is a strided view.
+  // create the correct LayoutStride object and construct unmanaged views from it.
+  emitter << "Kokkos::LayoutStride " << resultName << "_layout(";
+  // LayoutStride constructor takes alternating extent, stride for each dimension.
+  for(int i = 0; i < sourceRank; i++) {
+    if(i)
+      emitter << ", ";
+    if(failed(emitSize(i)))
+      return failure();
+    emitter << ", ";
+    if(failed(emitStride(i)))
+      return failure();
+  }
+  emitter << ");\n";
+  if(space == kokkos::MemorySpace::DualView) {
+    if(failed(emitter.emitStridedMemrefType(op.getLoc(), resultType, kokkos::MemorySpace::Host))) {
+      return failure();
+    }
+    emitter << " " << resultName << "_host(&";
+    if (failed(emitter.emitValue(source)))
+      return failure();
+    emitter << ".host_view(";
+    for(int i = 0; i < sourceRank; i++) {
+      if(i)
+        emitter << ", ";
+      if(failed(emitOffset(i)))
+        return failure();
+    }
+    emitter << ")";
+    emitter << ", " << resultName << "_layout);\n";
+    if(failed(emitter.emitStridedMemrefType(op.getLoc(), resultType, kokkos::MemorySpace::Device))) {
+      return failure();
+    }
+    emitter << " " << resultName << "_device(&";
+    if (failed(emitter.emitValue(source)))
+      return failure();
+    emitter << ".device_view(";
+    for(int i = 0; i < sourceRank; i++) {
+      if(i)
+        emitter << ", ";
+      if(failed(emitOffset(i)))
+        return failure();
+    }
+    emitter << ")";
+    emitter << ", " << resultName << "_layout);\n";
+    if(failed(emitter.emitStridedMemrefType(op.getLoc(), resultType, kokkos::MemorySpace::DualView))) {
+      return failure();
+    }
+    emitter << " " << resultName << "(" << resultName << "_device, " << resultName << "_host, &";
+    if (failed(emitter.emitValue(source)))
+      return failure();
+    emitter << ");\n";
+  }
+  else {
+    if(failed(emitter.emitStridedMemrefType(op.getLoc(), resultType, space))) {
+      return failure();
+    }
+    emitter << " " << resultName << "(&";
+    if (failed(emitter.emitValue(source)))
+      return failure();
+    emitter << "(";
+    for(int i = 0; i < sourceRank; i++) {
+      if(i)
+        emitter << ", ";
+      if(failed(emitOffset(i)))
+        return failure();
+    }
+    emitter << "), " << resultName << "_layout);\n";
+  }
+  return success();
+}
 
 /*
 static LogicalResult printOperation(KokkosCppEmitter &emitter,
@@ -3255,7 +3229,7 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
           // Memref ops.
           .Case<memref::GlobalOp, memref::GetGlobalOp, memref::AllocOp,
                 memref::AllocaOp, memref::StoreOp, memref::LoadOp,
-                memref::CopyOp, /* memref::SubViewOp, memref::CollapseShapeOp, */
+                memref::CopyOp, memref::SubViewOp, /* memref::CollapseShapeOp, */
                 memref::CastOp, memref::DeallocOp, memref::DimOp,
                 memref::ReinterpretCastOp>(
               [&](auto op) { return printOperation(*this, op); })
