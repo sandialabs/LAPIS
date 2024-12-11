@@ -1,46 +1,53 @@
-# RUN: SUPPORTLIB=%mlir_lib_dir/libmlir_c_runner_utils%shlibext %PYTHON %s | FileCheck %s
+import torch
+from torch import Tensor
+#import torch_mlir
+#from torch_mlir import torchscript
+#from lapis import KokkosBackend
+from torch import nn
+from mpact.mpactbackend import mpact_linalg
 
-import numpy as np
-import os
-import sys
-import tempfile
-import shutil
+class SpMV(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
 
-_SCRIPT_PATH = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(_SCRIPT_PATH)
+    def forward(self, A, x):
+        return torch.mv(A, x)
 
-from lapis.tools import mlir_pytaco_api as pt
-from lapis.tools import mlir_pytaco_io as ptio
-from lapis.tools import testing_utils as utils
+def main():
+    rowptrs = [0, 1, 5, 6, 8, 8]
+    colinds = [1, 0, 2, 3, 4, 2, 0, 1]
+    values = [1.1, 0.3, 2.2, 3.7, -4, -19, -2, 1]
 
-###### This PyTACO part is taken from the TACO open-source project. ######
-# See http://tensor-compiler.org/docs/scientific_computing/index.html.
+    A = torch.sparse_csr_tensor( \
+            torch.tensor(rowptrs, dtype=torch.int32), \
+            torch.tensor(colinds, dtype=torch.int32), \
+            torch.tensor(values, dtype=torch.float))
 
-compressed = pt.compressed
-dense = pt.dense
+    x = torch.ones((5))
 
-# Define formats for storing the sparse matrix and dense vectors.
-csr = pt.format([dense, compressed])
-dv = pt.format([dense])
+    # What A*x should be
+    ygold = [1.1000, 2.2000, -19.0000, -1.0000, 0.0000]
 
-A = pt.tensor([5, 5], [pt.dense, pt.compressed], dtype=pt.float64)
-b = pt.tensor([5], [pt.dense], dtype=pt.float64)
-c = pt.tensor([A.shape[0]], [pt.dense], dtype=pt.float64)
+    m = SpMV()
+    m.train(False)
 
-A.insert([0,1], 3.0)
-A.insert([1,0], 2.0)
-A.insert([1,2], 5.0)
+    module = mpact_linalg(m, A, x)
 
-b.insert([0], 3.0)
-b.insert([1], 4.0)
-b.insert([2], 5.0)
+    print("MLIR at linalg level: ")
+    print(module.operation.get_asm())
 
-i, j = pt.get_index_vars(2) 
-c[i] = A[i,j] * b[j]
+    #mlir_module = torchscript.compile(m, (a, b), output_type='linalg-on-tensors')
 
-##########################################################################
+    #backend = KokkosBackend.KokkosBackend(dump_mlir=True)
+    #k_backend = backend.compile(mlir_module)
 
-# Perform the SpMV computation and write the result to file
-with tempfile.TemporaryDirectory() as test_dir:
-  print("Compiling, running spmv and writing result to c.tns")
-  ptio.write_kokkos("c.tns", c)
+    #c = k_backend.forward(a, b)
+    #print("c from kokkos")
+    #print(c)
+
+    #print("c from pytorch")
+    #print(m.forward(a, b))
+
+if __name__ == "__main__":
+    main()
+

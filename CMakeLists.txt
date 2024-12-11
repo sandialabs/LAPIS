@@ -87,6 +87,20 @@ include_directories(${STANDALONE_BINARY_DIR}/include)
 set(LAPIS_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(LAPIS_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 
+if("torch-mlir" IN_LIST LLVM_EXTERNAL_PROJECTS)
+  message(STATUS "LAPIS has torch-mlir support")
+  set(LAPIS_HAS_TORCH_MLIR ON)
+else()
+  set(LAPIS_HAS_TORCH_MLIR OFF)
+endif()
+
+if("mpact" IN_LIST LLVM_EXTERNAL_PROJECTS)
+  message(STATUS "LAPIS has MPACT support")
+  set(LAPIS_HAS_MPACT ON)
+else()
+  set(LAPIS_HAS_MPACT OFF)
+endif()
+
 link_directories(${LLVM_BUILD_LIBRARY_DIR})
 add_definitions(${LLVM_DEFINITIONS})
 

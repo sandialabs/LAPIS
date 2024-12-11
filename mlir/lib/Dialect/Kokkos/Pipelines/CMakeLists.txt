@@ -26,6 +26,7 @@ add_mlir_dialect_library(MLIRKokkosPipelines
   MLIRSCFToControlFlow
   MLIRKokkosDialect
   MLIRKokkosTransforms
+  MLIRShapeToStandard
   MLIRSparseTensorDialect
   MLIRSparseTensorTransforms
   MLIRTensorTransforms
