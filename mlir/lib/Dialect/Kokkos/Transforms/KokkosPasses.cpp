@@ -112,4 +112,3 @@ std::unique_ptr<Pass> mlir::createSparseAssemblerDirectOutPass()
 {
   return std::make_unique<SparseAssemblerDirectOutPass>();
 }
-

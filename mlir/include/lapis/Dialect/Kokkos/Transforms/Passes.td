@@ -90,7 +90,21 @@ def SparseAssemblerDirectOut : Pass<"sparse-assembler-direct-out", "ModuleOp"> {
     "bufferization::BufferizationDialect",
     "sparse_tensor::SparseTensorDialect",
     "tensor::TensorDialect",
-  ];  
+  ];
+}
+
+def KokkosMdrangeIteration : Pass<"kokkos-mdrange-iteration", "ModuleOp"> {
+  let summary = "Rearange MDRange to improve memory access patterns on GPU";
+  let description = [{
+  }];
+  let constructor = "mlir::createKokkosMdrangeIterationPass()";
+  let dependentDialects = [
+    "arith::ArithDialect",
+    "func::FuncDialect",
+    "kokkos::KokkosDialect",
+    "memref::MemRefDialect",
+    "scf::SCFDialect"
+  ];
 }
 
 #endif // MLIR_DIALECT_KOKKOS_TRANSFORMS_PASSES
