@@ -24,10 +24,6 @@
 #include <iostream> // is there an LLVM way to do this?
 
 namespace mlir {
-#define GEN_PASS_DEF_PARALLELUNITSTEP
-#define GEN_PASS_DEF_KOKKOSLOOPMAPPING
-#define GEN_PASS_DEF_KOKKOSMEMORYSPACEASSIGNMENT
-
 #define GEN_PASS_DEF_KOKKOSMDRANGEITERATION
 
 #include "lapis/Dialect/Kokkos/Transforms/Passes.h.inc"
