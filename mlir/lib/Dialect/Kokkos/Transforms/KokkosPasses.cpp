@@ -93,4 +93,3 @@ std::unique_ptr<Pass> mlir::createKokkosMemorySpaceAssignmentPass()
 {
   return std::make_unique<KokkosMemorySpaceAssignmentPass>();
 }
-
