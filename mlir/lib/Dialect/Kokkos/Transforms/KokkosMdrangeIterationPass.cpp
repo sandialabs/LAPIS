@@ -21,8 +21,6 @@
 
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
-#include <iostream> // is there an LLVM way to do this?
-
 namespace mlir {
 #define GEN_PASS_DEF_KOKKOSMDRANGEITERATION
 
@@ -42,7 +40,6 @@ struct KokkosMdrangeIterationPass
 
   void runOnOperation() override {
     // do nothing
-    std::cerr << __FILE__ << ":" << __LINE__ << "\n";
   }
 };
 
