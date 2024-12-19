@@ -21,6 +21,8 @@
 
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
+#include <iostream> // is there an LLVM way to do this?
+
 namespace mlir {
 #define GEN_PASS_DEF_PARALLELUNITSTEP
 #define GEN_PASS_DEF_KOKKOSLOOPMAPPING
