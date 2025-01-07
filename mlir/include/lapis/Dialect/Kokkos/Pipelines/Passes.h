@@ -76,8 +76,7 @@ struct LapisCompilerOptions
 /// is the standard pipeline for taking sparsity-agnostic IR using
 /// the sparse-tensor type and lowering it to the Kokkos dialect with concrete
 /// representations and algorithms for sparse tensors.
-void buildSparseKokkosCompiler(OpPassManager &pm,
-                         const LapisCompilerOptions &options);
+void buildSparseKokkosCompiler(OpPassManager &pm, const LapisCompilerOptions &options);
 
 /// Registers all pipelines for the `kokkos` dialect.
 void registerKokkosPipelines();

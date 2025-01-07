@@ -24,10 +24,10 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Operation.h"
+#include "mlir/IR/OpDefinition.h"
 #include "mlir/Support/IndentedOstream.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -438,32 +438,34 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   MemRefType resultType = dyn_cast<MemRefType>(result.getType());
   int sourceRank = resultType.getRank();
   auto space = kokkos::getMemSpace(result);
-  const bool useDynamicOffset = !op.getOffsets().empty();
-  const bool useDynamicSizes = !op.getSizes().empty();
-  const bool useDynamicStrides = !op.getStrides().empty();
-  auto emitOffset = [&]() -> LogicalResult {
-    if (useDynamicOffset) {
-      if (failed(emitter.emitValue(op.getOffsets()[0])))
+  // An OpFoldResult is just a variant<Value, Attribute>
+  // (either a runtime value or a static constant).
+  // Need this because op's offset, sizes and strides
+  // can have mixed runtime and static values.
+  auto emitOpFoldResult = [&](OpFoldResult ofr) -> LogicalResult {
+    if(ofr.is<Attribute>()) {
+      Attribute attr = ofr.get<Attribute>();
+      if(failed(emitter.emitAttribute(op.getLoc(), attr)))
         return failure();
-    } else
-      emitter << op.getStaticOffsets()[0];
+    }
+    else {
+      Value value = ofr.get<Value>();
+      if(failed(emitter.emitValue(value)))
+        return failure();
+    }
     return success();
+  };
+  auto sizes = op.getConstifiedMixedSizes();
+  auto strides = op.getConstifiedMixedStrides();
+  OpFoldResult offset = op.getConstifiedMixedOffset();
+  auto emitOffset = [&]() -> LogicalResult {
+    return emitOpFoldResult(offset);
   };
   auto emitSize = [&](int dim) -> LogicalResult {
-    if (useDynamicSizes) {
-      if (failed(emitter.emitValue(op.getSizes()[dim])))
-        return failure();
-    } else
-      emitter << op.getStaticSizes()[dim];
-    return success();
+    return emitOpFoldResult(sizes[dim]);
   };
   auto emitStride = [&](int dim) -> LogicalResult {
-    if (useDynamicStrides) {
-      if (failed(emitter.emitValue(op.getStrides()[dim])))
-        return failure();
-    } else
-      emitter << op.getStaticStrides()[dim];
-    return success();
+    return emitOpFoldResult(strides[dim]);
   };
   // In general, the result of this op is a strided view.
   // create the correct LayoutStride object and construct unmanaged views from it.
@@ -480,6 +482,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   }
   emitter << ");\n";
   if(space == kokkos::MemorySpace::DualView) {
+    std::cout << "  Note: result memspace = DualView\n";
     if(failed(emitter.emitStridedMemrefType(op.getLoc(), resultType, kokkos::MemorySpace::Host))) {
       return failure();
     }
@@ -509,6 +512,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     emitter << ");\n";
   }
   else {
+    std::cout << "  Note: result memspace is not DualView\n";
     if(failed(emitter.emitStridedMemrefType(op.getLoc(), resultType, space))) {
       return failure();
     }
@@ -700,32 +704,38 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     if(failed(emitter.emitStridedMemrefType(op.getLoc(), resultType, kokkos::MemorySpace::Host))) {
       return failure();
     }
-    emitter << " " << resultName << "_host(&";
+    emitter << " " << resultName << "_host(";
     if (failed(emitter.emitValue(source)))
       return failure();
-    emitter << ".host_view(";
+    emitter << ".host_view.data() + ";
     for(int i = 0; i < sourceRank; i++) {
       if(i)
-        emitter << ", ";
+        emitter << " + ";
       if(failed(emitOffset(i)))
         return failure();
+      emitter << " * ";
+      if (failed(emitter.emitValue(source)))
+        return failure();
+      emitter << ".host_view.stride_" << i << "()";
     }
-    emitter << ")";
     emitter << ", " << resultName << "_layout);\n";
     if(failed(emitter.emitStridedMemrefType(op.getLoc(), resultType, kokkos::MemorySpace::Device))) {
       return failure();
     }
-    emitter << " " << resultName << "_device(&";
+    emitter << " " << resultName << "_device(";
     if (failed(emitter.emitValue(source)))
       return failure();
-    emitter << ".device_view(";
+    emitter << ".device_view.data() + ";
     for(int i = 0; i < sourceRank; i++) {
       if(i)
-        emitter << ", ";
+        emitter << " + ";
       if(failed(emitOffset(i)))
         return failure();
+      emitter << " * ";
+      if (failed(emitter.emitValue(source)))
+        return failure();
+      emitter << ".device_view.stride_" << i << "()";
     }
-    emitter << ")";
     emitter << ", " << resultName << "_layout);\n";
     if(failed(emitter.emitStridedMemrefType(op.getLoc(), resultType, kokkos::MemorySpace::DualView))) {
       return failure();
@@ -739,17 +749,21 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     if(failed(emitter.emitStridedMemrefType(op.getLoc(), resultType, space))) {
       return failure();
     }
-    emitter << " " << resultName << "(&";
+    emitter << " " << resultName << "(";
     if (failed(emitter.emitValue(source)))
       return failure();
-    emitter << "(";
+    emitter << ".data() + ";
     for(int i = 0; i < sourceRank; i++) {
       if(i)
-        emitter << ", ";
+        emitter << " + ";
       if(failed(emitOffset(i)))
         return failure();
+      emitter << " * ";
+      if (failed(emitter.emitValue(source)))
+        return failure();
+      emitter << ".stride_" << i << "()";
     }
-    emitter << "), " << resultName << "_layout);\n";
+    emitter << ", " << resultName << "_layout);\n";
   }
   return success();
 }
@@ -1338,7 +1352,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::RangePara
       for(size_t i = 0; i < op.getNumLoops(); i++) {
         if(i > 0)
           emitter << ", ";
-        emitter << "0";
+        emitter << "int64_t(0)";
       }
       emitter << "}, ";
       emitter << "{";
@@ -1346,8 +1360,10 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::RangePara
       for(Value bound : op.getUpperBound()) {
         if(count++)
           emitter << ", ";
+        emitter << "int64_t(";
         if(failed(emitter.emitValue(bound)))
           return failure();
+        emitter << ")";
       }
       emitter << "}";
     }
@@ -1577,17 +1593,14 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::ThreadPar
   // and the maximum vector length determined by Kokkos.
   // If the hint value is 0, it means no hint was provided so arbitrarily use 8 as the target.
   // TODO: is there a better choice for this?
-  std::string vectorLengthTarget = "targetVectorLength_" + emitter.getUniqueIdentifier();
-  emitter << "size_t " << vectorLengthTarget << " = ";
-  if(failed(emitter.emitValue(op.getVectorLengthHint())))
-    return failure();
-  emitter << " ? ";
-  if(failed(emitter.emitValue(op.getVectorLengthHint())))
-    return failure();
-  emitter << " : 8;\n";
   std::string vectorLength = "vectorLength_" + emitter.getUniqueIdentifier();
-  emitter << "size_t " << vectorLength << " = Kokkos::min<size_t>(";
-  emitter << vectorLengthTarget << ", LAPIS::TeamPolicy::vector_length_max());\n";
+  emitter << "int " << vectorLength << " = ";
+  if(failed(emitter.emitValue(op.getVectorLengthHint())))
+    return failure();
+  emitter << " ? LAPIS::threadParallelVectorLength(";
+  if(failed(emitter.emitValue(op.getVectorLengthHint())))
+    return failure();
+  emitter << ") : 8;\n";
   // Since we have a lambda and a vector length, we can now query a temporary TeamPolicy for the best team size
   std::string teamSize = "teamSize_" + emitter.getUniqueIdentifier();
   emitter << "size_t " << teamSize << " = LAPIS::TeamPolicy(1, 1, " << vectorLength << ").team_size_recommended(" << lambda << ", ";
@@ -3348,14 +3361,14 @@ LogicalResult KokkosCppEmitter::emitPythonBoilerplate(bool isLastKernel)
   *py_os << "import numpy\n";
   *py_os << "class LAPISModule:\n";
   *py_os << "  def __init__(self, libPath):\n";
-  *py_os << "    print('Hello from LAPISModule.__init__!')\n";
+  //*py_os << "    print('Hello from LAPISModule.__init__!')\n";
   *py_os << "    self.libHandle = ctypes.CDLL(libPath)\n";
   // Do all initialization immediately
-  *py_os << "    print('Initializing module.')\n";
+  //*py_os << "    print('Initializing module.')\n";
   *py_os << "    self.libHandle.lapis_initialize()\n";
-  *py_os << "    print('Done initializing module.')\n";
+  //*py_os << "    print('Done initializing module.')\n";
   *py_os << "  def __del__(self):\n";
-  *py_os << "    print('Finalizing module.')\n";
+  //*py_os << "    print('Finalizing module.')\n";
   if(isLastKernel)
     *py_os << "    self.libHandle.lapis_finalize()\n";
   //From here, just function wrappers are emitted as class members.

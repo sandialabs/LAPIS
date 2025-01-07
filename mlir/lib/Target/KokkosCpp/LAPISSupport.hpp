@@ -252,5 +252,15 @@ namespace LAPIS
     HostView host_view;
     DualViewBase* parent;
   };
+
+  inline int threadParallelVectorLength(int par) {
+    if (par < 1)
+      return 1;
+    int max_vector_length = TeamPolicy::vector_length_max();
+    int vector_length = 1;
+    while(vector_length < max_vector_length && vector_length * 6 < par) vector_length *= 2;
+    return vector_length;
+  }
+
 } // namespace LAPIS
 
