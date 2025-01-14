@@ -38,8 +38,63 @@ struct KokkosMdrangeIterationPass
   KokkosMdrangeIterationPass() = default;
   KokkosMdrangeIterationPass(const KokkosMdrangeIterationPass& pass) = default;
 
+
+  static void dump_ops(ModuleOp &mod) {
+    mod.walk([&](Operation *op) {
+      if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
+        llvm::outs() << "Found scf.parallel operation:\n";
+        llvm::outs() << "Induction variables and strides:\n";
+        for (auto iv : llvm::zip(parallelOp.getInductionVars(), parallelOp.getStep())) {
+          std::get<0>(iv).print(llvm::outs());
+          llvm::outs() << " with stride ";
+          std::get<1>(iv).print(llvm::outs());
+          llvm::outs() << "\n";
+        }
+        llvm::outs() << "\n\n";
+      }
+
+      if (auto memrefOp = dyn_cast<memref::LoadOp>(op)) {
+        llvm::outs() << "Found memref.load operation:\n";
+        llvm::outs() << "MemRef: ";
+        memrefOp.getMemRef().print(llvm::outs());
+        llvm::outs() << "\nIndex variables:\n";
+        for (Value index : memrefOp.getIndices()) {
+          index.print(llvm::outs());
+          llvm::outs() << "\n";
+        }
+        if (auto memrefType = memrefOp.getMemRef().getType().dyn_cast<MemRefType>()) {
+          llvm::outs() << "MemRef extents:\n";
+          for (int64_t dim : memrefType.getShape()) {
+            llvm::outs() << dim << "\n";
+          }
+        }
+        llvm::outs() << "\n\n";
+      }
+
+      if (auto memrefOp = dyn_cast<memref::StoreOp>(op)) {
+        llvm::outs() << "Found memref.store operation:\n";
+        llvm::outs() << "MemRef: ";
+        memrefOp.getMemRef().print(llvm::outs());
+        llvm::outs() << "\nIndex variables:\n";
+        for (Value index : memrefOp.getIndices()) {
+          index.print(llvm::outs());
+          llvm::outs() << "\n";
+        }
+        if (auto memrefType = memrefOp.getMemRef().getType().dyn_cast<MemRefType>()) {
+          llvm::outs() << "MemRef extents:\n";
+          for (int64_t dim : memrefType.getShape()) {
+            llvm::outs() << dim << "\n";
+          }
+        }
+        llvm::outs() << "\n\n";
+      }
+    });
+  }
+
+
   void runOnOperation() override {
-    // do nothing
+    ModuleOp module = getOperation();
+    dump_ops(module);
   }
 };
 
