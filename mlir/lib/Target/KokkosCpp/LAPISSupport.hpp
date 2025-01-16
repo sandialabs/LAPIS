@@ -4,9 +4,6 @@
 #include <unistd.h>
 #include <iostream>
 
-// If building a CPP driver, we can use the original StridedMemRefType class from MLIR,
-// so do not redefine it here.
-#ifndef PYTACO_CPP_DRIVER
 template <typename T, int N>
 struct StridedMemRefType {
   T *basePtr;
@@ -15,25 +12,6 @@ struct StridedMemRefType {
   int64_t sizes[N];
   int64_t strides[N];
 };
-#endif
-
-// If building a CPP driver, need to provide a version of
-// _mlir_ciface_newSparseTensor() that takes underlying integer types, not enum types like DimLevelType.
-// The MLIR-Kokkos generated code doesn't know about the enum types at all.
-#ifdef PYTACO_CPP_DRIVER
-int8_t* _mlir_ciface_newSparseTensor(
-  StridedMemRefType<index_type, 1> *dimSizesRef,
-  StridedMemRefType<index_type, 1> *lvlSizesRef,
-  StridedMemRefType<int8_t, 1> *lvlTypesRef,
-  StridedMemRefType<index_type, 1> *lvl2dimRef,
-  StridedMemRefType<index_type, 1> *dim2lvlRef, int ptrTp,
-  int indTp, int valTp, int action, int8_t* ptr) {
-    return (int8_t*) _mlir_ciface_newSparseTensor(dimSizesRef, lvlSizesRef,
-      reinterpret_cast<StridedMemRefType<DimLevelType, 1>*>(lvlTypesRef),
-      lvl2dimRef, dim2lvlRef, (OverheadType) ptrTp, (OverheadType) indTp,
-      (PrimaryType) valTp, (Action) action, ptr);
-  }
-#endif
 
 namespace LAPIS
 {
@@ -162,8 +140,24 @@ namespace LAPIS
       : device_view(d), host_view(h), parent(parent_)
     {}
 
-    // Constructor for a host view from an external source (e.g. python)
-    DualView(HostView h)
+    // Constructor for a device view from an external source (e.g. Kokkos-based application)
+    DualView(DeviceView d)
+    {
+      modified_device = true;
+      if constexpr(deviceAccessesHost) {
+        host_view = HostView(d.data(), d.layout());
+      }
+      else {
+        host_view = HostView(Kokkos::view_alloc(Kokkos::WithoutInitializing, d.label() + "_host"), d.layout());
+      }
+      device_view = d;
+      parent = this;
+    }
+
+    // Constructor for a host view from an external source (e.g. python).
+    // Use SFINAE to enable this only when DeviceView and HostView have different types/spaces,
+    // since otherwise it will be a duplicate definition of the DeviceView constructor above.
+    DualView(HostView h, typename std::enable_if_t<!std::is_same_v<DeviceView, HostView>>* = nullptr)
     {
       modified_host = true;
       if constexpr(deviceAccessesHost) {
