@@ -499,8 +499,20 @@ func::FuncOp getCalledFunction(func::CallOp callOp) {
       SymbolTable::lookupNearestSymbolFrom(callOp, sym));
 }
 
+bool funcHasBody(func::FuncOp op) {
+  return op.getCallableRegion() != nullptr;
+}
+
 // Tally the memory spaces where v is accessed, without analyzing v's parent memref(s) if any.
+// We already assume that v has no parent (it's not the result of a cast/reshape like op)
 static MemorySpace getMemSpaceImpl(Value v) {
+  // If v is a function parameter, it's DualView automatically
+  if(getFuncWithParameter(v))
+    return MemorySpace::DualView;
+  // If v is the result of a call to a non-extern function, it's also a DualView automatically
+  func::CallOp producingCall = v.getDefiningOp<func::CallOp>();
+  if(producingCall && funcHasBody(getCalledFunction(producingCall)))
+    return MemorySpace::DualView;
   bool hostRepresented = false;
   bool deviceRepresented = false;
   for (auto &use : v.getUses()) {
@@ -597,6 +609,20 @@ MemorySpace getMemSpace(Value v) {
   }
   // v has no parent, so we can analyze its space top-down now.
   return getMemSpaceImpl(v);
+}
+
+func::FuncOp getFuncWithParameter(Value v) {
+  // Early-out: if an operation produced v, it's definitely not a function parameter
+  if(v.getDefiningOp())
+    return nullptr;
+  Region* r = v.getParentRegion();
+  func::FuncOp f = r->getParentOfType<func::FuncOp>();
+  Region& body = f.getBody();
+  // v is a func parameter iff it's one of body's arguments.
+  for(auto arg : body.getArguments()) {
+    if(arg == v) return f;
+  }
+  return nullptr;
 }
 
 // Overload of getMemSpace for global memref declarations

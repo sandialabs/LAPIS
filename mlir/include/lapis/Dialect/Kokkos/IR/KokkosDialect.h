@@ -38,6 +38,14 @@ func::FuncOp getCalledFunction(func::CallOp callOp);
 // of that op is the parent of v.
 Value getParentMemref(Value v);
 
+// Return the function that has v as a parameter, if it is a parameter.
+// Otherwise return null.
+func::FuncOp getFuncWithParameter(Value v);
+
+// Does this function have a body/definition?
+// (i.e. it's not just a declaration for an extern function)
+bool funcHasBody(func::FuncOp op);
+
 // Determine the correct memory space (Host, Device or DualView)
 // for v based on where it gets accessed.
 MemorySpace getMemSpace(Value v);
