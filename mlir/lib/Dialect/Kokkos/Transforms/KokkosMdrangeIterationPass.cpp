@@ -6,6 +6,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <iostream>
+#include <map>
+#include <utility> // pair
+#include <random>
+
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/EmitC/IR/EmitC.h"
@@ -32,12 +37,393 @@ using namespace mlir::kokkos;
 
 namespace {
 
+
+/* The basic idea:
+
+we have something like this
+
+scf.parallel (%i, %j) {                             (1)
+  memref.store[%j, %i] : memref<10, 20, f32>        (2)
+  scf.parallel (%k, %l) {                           (3)
+    _ = memref.load[%i, %k] : memref<10, ?, f32>    (4)
+  }
+}
+
+Presuming that the scf.parallel will actually be implemented in a "layout-right" iteration order, and given that memrefs are layout right, how to do we want to order the scf.parallel induction variables? e.g. for (1), do we want (%i, %j) or (%j, %i)?
+To answer, we build a cost model of each memref load/store, and choose the induction variable ordering for all scf.parallels that minimizes that cost.
+The foundation of the cost model is the reuse distance of the memref, under the theory that accesses with better locality will be faster due to coalescing/caching.
+The stride of the memref depends on whichever induction variable is the "right-most" one in the scf.parallel region, due to our "layout-right" iteration order assumption.
+
+Some examples:
+
+For (2), the reuse distance w.r.t. %i is 4 (sizeof f32), and the reuse distance with respect to %j is 20 * 4 (size of 1st dimension * sizeof f32)
+
+For (4), the reuse distance with respect to (%i) is 4 * whatever the 1st memref dimension is.
+The reuse distance w.r.t %j is undefined (address does not change when %j changes).
+The reuse distance w.r.t %k is 4.
+The reuse distance w.r.t %l is undefined.
+
+The way to understand this is that if the index variable of the memref is some kind of simple function of the induction variable, we can compute the reuse distance. If it is not a function of the induction variable, or is a function of the induction variable but we don't know the function, we can't compute the reuse distance.
+
+------
+
+So, what kind of simple functions can we compute? This takes the following approach: it tries to compute 
+
+d(memref) / d(induction variable), the partial derivative of the accessed offset w.r.t the induction variable. We can ignore the base address, because it's derivative w.r.t all induction variables is 0
+
+Via the chain rule;
+d(memref) / d(induction variable) = d(memref)         / d(index variable)     *
+                                    d(index variable) / d(induction variable)
+
+Let's take d(index variable) / d(induction variable) first.
+
+------
+
+d(index variable) / d(induction variable) is computed by recursively following the inputs to the operation and applying differentiation rules.
+
+To make this problem tractable, we make two simplifying assumptions:
+
+We only care about about results of the form df / dx = a * x
+We only try to differentiate simple arithmetic functions, e.g. if f(x) = g(x) + h(x), df/dx = dg/dx + dh/dx. Similarly for multiply, divide, etc. Any other f we just give up and say who knows.
+
+------
+
+d(memref) / d(index variable) is in principle simple, it's just the product of all strides of lower dimension than the index variable. In practice, however, most strides are unknown at compile time, so we won't be able to get an actual number, we'll just get expressions like
+
+d(memref) / d(index variable) = stride_0 * stride_2 * sizeof(datatype)
+
+if we're lucky, and all dimensions are known or there are no lower dimensions, then we can get an actual number.
+
+------
+
+So in the end, d(memref) / d(induction variable) ends up being something of this form:
+
+stride_0 * stride_2 * sizeof(datatype) * a * x
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+memref / index var component
+                                         ^^^^^
+                                         index var / induction var component
+
+
+the second component might just be ???, and/or the first component might be a known integer number.
+
+------
+
+In principle, each memref has a different cost for each induction variable ordering.
+In practice, we just consider the induction variable that is incrementing the fastest for each memref - that is, the right-most induction variable for the closest enclosing loop.
+
+The reuse distance is just looked up in the previously computed table of d(memref) / d(induction variable)
+
+------
+
+We generate all possible combinations of
+  * choose an induction variable from each parallel region to be the right-most one.
+We compute the cost under each combination.
+  * Since the cost expression will contain many unknowns, we do monte-carlo simulation of the cost model for each induction variable ordering
+We chosoe the induction variable ordering with the lowest cost
+
+*/
 struct KokkosMdrangeIterationPass
     : public impl::KokkosMdrangeIterationBase<KokkosMdrangeIterationPass> {
 
   KokkosMdrangeIterationPass() = default;
   KokkosMdrangeIterationPass(const KokkosMdrangeIterationPass& pass) = default;
 
+  // generate a log-random integer within a specified range
+  static int getLogRandomInt(int min, int max) {
+      // Create a random device to seed the random number generator
+      std::random_device rd;
+      // Use the Mersenne Twister engine for random number generation
+      std::mt19937 gen(rd());
+
+      // Create a uniform real distribution between log(min) and log(max)
+      std::uniform_real_distribution<> dis(std::log(min), std::log(max));
+
+      // Generate a random number in the log space and exponentiate it
+      double logRandom = dis(gen);
+      int logRandomInt = static_cast<int>(std::exp(logRandom));
+
+      // Ensure the result is within the desired range
+      if (logRandomInt < min) logRandomInt = min;
+      if (logRandomInt > max) logRandomInt = max;
+
+      return logRandomInt;
+  }
+
+  // a context for expression evaluation
+  struct Ctx {
+    std::unordered_map<std::string, int> values;
+  };
+
+  struct Expr {
+
+    enum class Kind {
+      Add, Mul, Constant, Unknown
+    };
+
+    Expr(Kind kind) : kind_(kind) {}
+    Kind kind_;
+
+    virtual int eval(const Ctx &ctx) = 0;
+    virtual void dump(llvm::raw_fd_ostream &os) = 0;
+    virtual ~Expr() {}
+  };
+
+  struct Add : public Expr {
+    Add(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) : Expr(Kind::Add), lhs_(lhs), rhs_(rhs) {}
+    std::shared_ptr<Expr> lhs_;
+    std::shared_ptr<Expr> rhs_;
+
+    virtual int eval(const Ctx &ctx) override {
+      return lhs_->eval(ctx) + rhs_->eval(ctx);
+    }
+
+    virtual void dump(llvm::raw_fd_ostream &os) override {
+      os << "(";
+      lhs_->dump(os);
+      os << "+";
+      rhs_->dump(os);
+      os << ")";
+    }
+
+    static std::shared_ptr<Expr> make(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) {
+      auto lhs_const = llvm::dyn_cast<Constant>(lhs.get());
+      auto rhs_const = llvm::dyn_cast<Constant>(rhs.get());
+
+      if (lhs_const && lhs_const->value_ == 0) {
+          return rhs;
+      } else if (rhs_const && rhs_const->value_ == 0) {
+          return lhs;
+      } else if (rhs_const && lhs_const) {
+        return Constant::make(lhs_const->value_ + rhs_const->value_);
+      }
+
+      return std::make_shared<Add>(lhs, rhs);
+    }
+
+    static bool classof(const Expr *e) {
+      return e->kind_ == Expr::Kind::Add;
+    }
+
+  };
+
+  struct Mul : public Expr {
+    Mul(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) : Expr(Kind::Mul), lhs_(lhs), rhs_(rhs) {}
+    std::shared_ptr<Expr> lhs_;
+    std::shared_ptr<Expr> rhs_;
+
+    virtual int eval(const Ctx &ctx) override {
+      return lhs_->eval(ctx) * rhs_->eval(ctx);
+    }
+
+    virtual void dump(llvm::raw_fd_ostream &os) override {
+      os << "(";
+      lhs_->dump(os);
+      os << "*";
+      rhs_->dump(os);
+      os << ")";
+    }
+
+    static std::shared_ptr<Expr> make(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) {
+      auto lhs_const = llvm::dyn_cast<Constant>(lhs.get());
+      auto rhs_const = llvm::dyn_cast<Constant>(rhs.get());
+
+      if (rhs_const && lhs_const) {
+        return Constant::make(lhs_const->value_ * rhs_const->value_);
+      } else if (lhs_const && lhs_const->value_ == 1) {
+          return rhs;
+      } else if (lhs_const && lhs_const->value_ == 0) {
+          return Constant::make(0);
+      } else if (rhs_const && rhs_const->value_ == 1) {
+          return lhs;
+      } else if (rhs_const && rhs_const->value_ == 0) {
+          return Constant::make(0);
+      }
+
+      return std::make_shared<Mul>(lhs, rhs);
+    }
+
+    static bool classof(const Expr *e) {
+      return e->kind_ == Expr::Kind::Mul;
+    }
+
+  };
+
+  struct Constant : public Expr {
+    Constant(int value) : Expr(Kind::Constant), value_(value) {}
+    int value_;
+
+    virtual int eval(const Ctx &ctx) override {
+      return value_;
+    }
+
+    virtual void dump(llvm::raw_fd_ostream &os) override {
+      os << value_;
+    }
+
+    static std::shared_ptr<Constant> make(int c) {
+      return std::make_shared<Constant>(c);
+    }
+
+    static bool classof(const Expr *e) {
+      return e->kind_ == Expr::Kind::Constant;
+    }
+
+  };
+
+  struct Unknown : public Expr {
+    Unknown(const std::string &name) : Expr(Kind::Unknown), name_(name) {}
+    std::string name_;
+
+    virtual int eval(const Ctx &ctx) override {
+      return ctx.values.at(name_);
+    }
+
+    virtual void dump(llvm::raw_fd_ostream &os) override {
+      os << "(" << name_ << ")";
+    }
+
+    static std::shared_ptr<Unknown> make(const std::string &name) {
+      return std::make_shared<Unknown>(name);
+    }
+
+    static bool classof(const Expr *e) {
+      return e->kind_ == Expr::Kind::Unknown;
+    }
+
+  };
+
+
+
+  // cost model for memref / induction variable pair
+  struct Cost {
+
+    Cost(std::shared_ptr<Expr> stride, std::shared_ptr<Expr> count, int sf) : stride_(stride), count_(count), sf_(sf) {}
+    Cost() = default;
+
+    std::shared_ptr<Expr> stride_; // stride of the memref w.r.t an induction variable
+    std::shared_ptr<Expr> count_;  // number of times the memref is executed
+    int sf_; // scaling factor, 1 for load, 3 for store
+  };
+
+  // partial derivative df/dx
+
+static std::shared_ptr<Expr> df_dx(Value &f, Value &x) {
+  if (f == x) {
+    llvm::outs() << "Info: df_dx of equal values\n";
+    return Constant::make(1);
+  } else if (mlir::isa<BlockArgument>(f) && mlir::isa<BlockArgument>(x)) {
+    llvm::outs() << "Info: df_dx of different block arguments\n";
+    return Constant::make(0);
+  } else {
+    // FIXME: what other scenarios if there is no defining op.
+    if (auto fOp = f.getDefiningOp()) {
+      if (auto xOp = x.getDefiningOp()) {
+        return df_dx(fOp, xOp);
+      }
+    }
+    llvm::outs() << "ERROR: One of the values has no defining operation\n";
+    return nullptr;
+  }
+}
+
+  // FIXME: better written as df_dx(f, x) I guess
+  static std::shared_ptr<Expr> df_dx(Operation *df, Operation *dx) {
+    if (!df) {
+      llvm::outs() << "Warn: df_dx requested on null df\n";
+      return nullptr;
+    } else if (!dx) {
+      llvm::outs() << "Warn: df_dx requested on null dx\n";
+      return nullptr;
+    } else if (df == dx) {
+      // df/dx (dx) = 1
+      return Constant::make(1);
+    } else if (auto constOp = dyn_cast<mlir::arith::ConstantIntOp>(df)) { // f is +
+      return Constant::make(0);
+    } else if (auto addOp = dyn_cast<mlir::arith::AddFOp>(df)) { // f is +
+      // d(lhs + rhs)/dx = dlhs/dx + drhs/dx
+      Value lhs = addOp.getOperand(0);
+      Value rhs = addOp.getOperand(1);
+      std::shared_ptr<Expr> dLhs = df_dx(lhs.getDefiningOp(), dx);
+      std::shared_ptr<Expr> dRhs = df_dx(rhs.getDefiningOp(), dx);
+      if (dLhs && dRhs) {
+        return Add::make(dLhs, dRhs);
+      } 
+    } else if (auto mulOp = dyn_cast<mlir::arith::MulFOp>(df)) { // f is *
+      // d(lhs * rhs)/dx = lhs * drhs/dx + rhs * dlhs/dx
+      // we'll only bother to compute this one if lhs or rhs is a constant
+      Value lhs = mulOp.getOperand(0);
+      Value rhs = mulOp.getOperand(1);
+      
+      if (auto lhsConst = lhs.getDefiningOp<mlir::arith::ConstantIntOp>()) { // FIXME: is this all integral values?
+        // lhs is a constant, so the derivative is lhs * drhs/dx
+        std::shared_ptr<Expr> dRhs = df_dx(rhs.getDefiningOp(), dx);
+        if (dRhs) {
+          return Mul::make(Constant::make(cast<IntegerAttr>(lhsConst.getValue()).getInt()), dRhs); // FIXME: can this cast fail?
+        }
+      }
+      
+      if (auto rhsConst = rhs.getDefiningOp<mlir::arith::ConstantIntOp>()) { // FIXME: is this all integral values?
+        // rhs is a constant, so the derivative is rhs * dlhs/dx
+        std::shared_ptr<Expr> dLhs = df_dx(lhs.getDefiningOp(), dx);
+        if (dLhs) {
+          return Mul::make(Constant::make(cast<IntegerAttr>(rhsConst.getValue()).getInt()), dLhs); // FIXME: can this cast fail?
+        }
+      }
+    } // TODO: sub, div
+
+    llvm::outs() << "WARN: unhandled case in df_dx of ";
+    df->print(llvm::outs());
+    llvm::outs() << " w.r.t.";
+    dx->print(llvm::outs());
+    return nullptr;
+  }
+
+
+
+  // computes d(offset) / d(index variable)
+  // FIXME: is there something that is both a LoadOp and a StoreOp?
+  template <typename Memref>
+  static std::shared_ptr<Expr> do_di(Memref &memrefOp, Value indexVar) {
+
+    static_assert(std::is_same_v<Memref, memref::LoadOp> || std::is_same_v<Memref, memref::StoreOp>, "Memref must be either LoadOp or StoreOp");
+
+    // find the index var
+    int indexVarDim = 0;
+    for (mlir::Value var : memrefOp.getIndices()) {
+      if (var == indexVar) {
+
+        auto memrefType = dyn_cast<MemRefType>(memrefOp.getMemRef().getType()); // FIXME: can this fail?
+
+        // Get the size in bits of the element type
+        mlir::Type elementType = memrefType.getElementType();
+        unsigned sizeInBytes = elementType.getIntOrFloatBitWidth() / CHAR_BIT;
+
+        std::shared_ptr<Expr> res = std::make_shared<Constant>(sizeInBytes);
+        
+        auto memrefShape = memrefType.getShape();
+        for (int dim = 0; dim < indexVarDim; ++dim) {
+          if (memrefShape[dim] == ShapedType::kDynamic) {
+            std::string name = memrefOp.getOperation()->getName().getStringRef().str() + "_extent" + std::to_string(dim); // FIXME: unique name for each memref dimension
+            res = std::make_shared<Mul>(res, Unknown::make(name)); 
+          } else {
+            res = std::make_shared<Mul>(res, std::make_shared<Constant>(memrefShape[dim]));
+          }
+        }
+
+        return res;
+      }
+      ++indexVarDim;
+    }
+
+    // memref address is not a function of this variable
+    llvm::outs() << "Info: ";
+    memrefOp.print(llvm::outs());
+    llvm::outs() << " is not a function of ";
+    indexVar.print(llvm::outs());
+    llvm::outs() << "\n";
+    return std::make_shared<Constant>(0);
+  }
 
   static void dump_ops(ModuleOp &mod) {
     mod.walk([&](Operation *op) {
@@ -62,7 +448,7 @@ struct KokkosMdrangeIterationPass
           index.print(llvm::outs());
           llvm::outs() << "\n";
         }
-        if (auto memrefType = memrefOp.getMemRef().getType().dyn_cast<MemRefType>()) {
+        if (auto memrefType = dyn_cast<MemRefType>(memrefOp.getMemRef().getType())) {
           llvm::outs() << "MemRef extents:\n";
           for (int64_t dim : memrefType.getShape()) {
             llvm::outs() << dim << "\n";
@@ -80,7 +466,7 @@ struct KokkosMdrangeIterationPass
           index.print(llvm::outs());
           llvm::outs() << "\n";
         }
-        if (auto memrefType = memrefOp.getMemRef().getType().dyn_cast<MemRefType>()) {
+        if (auto memrefType = dyn_cast<MemRefType>(memrefOp.getMemRef().getType())) {
           llvm::outs() << "MemRef extents:\n";
           for (int64_t dim : memrefType.getShape()) {
             llvm::outs() << dim << "\n";
@@ -92,9 +478,304 @@ struct KokkosMdrangeIterationPass
   }
 
 
+// return groups of induction variables for
+static std::vector<Value> all_induction_variables(std::vector<scf::ParallelOp> &ops) {
+  std::vector<Value> vars;
+  for (auto &op : ops) {
+    for (auto &var : op.getInductionVars()) {
+      vars.push_back(var);
+    }
+  }
+  return vars;
+}
+
+// map of (Operation*, Value) -> Cost
+// map of the cost model for a given memref / induction variable pair
+// using MemrefInductionCosts = std::map<std::pair<Operation*, Value>, Cost>;
+class MemrefInductionCosts {
+
+public:
+  using key_type = std::pair<Operation*, mlir::Value>;
+  using value_type = Cost;
+  using iterator = typename std::vector<std::pair<key_type, value_type>>::iterator;
+  using const_iterator = typename std::vector<std::pair<key_type, value_type>>::const_iterator;
+
+private:
+  std::vector<std::pair<key_type, value_type>> data_;
+
+  // Find an iterator to a key-value pair by key
+  auto find(const key_type& key) const {
+    return std::find_if(data_.begin(), data_.end(),
+                        [&key](const auto& pair) { return pair.first == key; });
+  }
+
+  auto find(const key_type& key) {
+    return std::find_if(data_.begin(), data_.end(),
+                        [&key](const auto& pair) { return pair.first == key; });
+  }
+
+public:
+ // Access value by key without bounds checking
+  value_type& operator[](const key_type& key) {
+    auto it = find(key);
+    if (it != data_.end()) {
+      return it->second;
+    } else {
+      data_.emplace_back(key, value_type{});
+      return data_.back().second;
+    }
+  }
+
+  // Get an iterator to the beginning
+  iterator begin() {
+    return data_.begin();
+  }
+
+  // Get a const iterator to the beginning
+  const_iterator begin() const {
+    return data_.begin();
+  }
+
+  // Get an iterator to the end
+  iterator end() {
+    return data_.end();
+  }
+
+  // Get a const iterator to the end
+  const_iterator end() const {
+    return data_.end();
+  }
+
+
+
+};
+
+// return induction variables for each parallel op in the module
+static std::vector<std::vector<Value>> all_induction_vars(ModuleOp &mod) {
+    std::vector<std::vector<Value>> ret;
+    mod.walk([&](Operation *op) {
+      if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
+        std::vector<Value> indVars;
+        for (Value &var : parallelOp.getInductionVars()) {
+          indVars.push_back(var);
+        }
+        ret.push_back(indVars);
+      }
+    }); // walk
+   return ret;
+  }
+
+static MemrefInductionCosts analyze_cost(ModuleOp &mod, std::vector<scf::ParallelOp> &stack) {
+
+    MemrefInductionCosts MIC;
+
+    mod.walk([&](Operation *op) {
+      // skip memrefs outside a parallel region
+      if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
+        stack.push_back(parallelOp);
+        MemrefInductionCosts costs = analyze_cost(parallelOp, stack);
+        stack.pop_back();
+        for (const auto &kv : costs) {
+          MIC[kv.first] = kv.second;
+        }
+      }
+    }); // walk
+
+    return MIC;
+  }
+
+static MemrefInductionCosts analyze_cost(scf::ParallelOp &parentOp, std::vector<scf::ParallelOp> &stack) {
+
+    MemrefInductionCosts MIC;
+
+    parentOp.getBody()->walk([&](Operation *op) {
+      if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
+        stack.push_back(parallelOp);
+        MemrefInductionCosts costs = analyze_cost(parallelOp, stack);
+        stack.pop_back();
+        for (const auto &kv : costs) {
+          MIC[kv.first] = kv.second;
+        }
+      } else if (auto memrefOp = dyn_cast<memref::LoadOp>(op)) {
+        llvm::outs() << "nested memref load!\n";
+
+        std::vector<Value> indVars = all_induction_variables(stack);
+
+        // compute the partial derivative of each memref with respect to all induction variables via the chain rule:
+        // d(offset)/d(indvar) = sum( 
+        //    d(offset)/d(index) * d(index)/d(indvar), 
+        //    for each index in indices)
+
+        for (Value indVar : indVars) {
+          std::shared_ptr<Expr> dodi = Constant::make(0);
+          for (Value indexVar : memrefOp.getIndices()) {
+            auto e1 = do_di(memrefOp, indexVar);
+
+            llvm::outs() << "pd of " << memrefOp << " w.r.t " << indexVar << "\n";
+            if (e1) {
+              e1->dump(llvm::outs());
+            } else {
+              llvm::outs() << " undefined ";
+            }
+            llvm::outs() << "\n";
+
+            auto e2 = df_dx(indexVar, indVar);
+
+            llvm::outs() << "pd of " << indexVar << " w.r.t " << indVar << "\n";
+            if (e2) {
+              e2->dump(llvm::outs());
+            } else {
+              llvm::outs() << " undefined ";
+            }
+            llvm::outs() << "\n";
+
+            if (e1 && e2) {
+              dodi = Add::make(dodi, Mul::make(e1, e2));
+            } else {
+              dodi = nullptr;
+              break;
+            }
+          }
+
+          llvm::outs() << "pd of " << memrefOp << " w.r.t " << indVar << "\n";
+          if (dodi) {
+            dodi->dump(llvm::outs());
+          } else {
+            llvm::outs() << " undefined ";
+          }
+          llvm::outs() << "\n";
+
+          // FIXME: compute trip count
+          MIC[std::make_pair(memrefOp, indVar)] = Cost(dodi, Constant::make(1), 1 /*load cost*/);
+        }
+
+
+      } else if (auto memrefOp = dyn_cast<memref::StoreOp>(op)) {
+        llvm::outs() << "nested memref store!\n";
+
+        std::vector<Value> indVars = all_induction_variables(stack);
+
+        // compute the partial derivative of each memref with respect to all induction variables via the chain rule:
+        // d(offset)/d(indvar) = sum( 
+        //    d(offset)/d(index) * d(index)/d(indvar), 
+        //    for each index in indices)
+
+        for (Value indVar : indVars) {
+          std::shared_ptr<Expr> dodi = Constant::make(0);
+          for (Value indexVar : memrefOp.getIndices()) {
+            auto e1 = do_di(memrefOp, indexVar);
+
+            llvm::outs() << "pd of " << memrefOp << " w.r.t " << indexVar << "\n";
+            if (e1) {
+              e1->dump(llvm::outs());
+            } else {
+              llvm::outs() << " undefined ";
+            }
+            llvm::outs() << "\n";
+
+            auto e2 = df_dx(indexVar, indVar);
+
+            llvm::outs() << "pd of " << indexVar << " w.r.t " << indVar << "\n";
+            if (e2) {
+              e2->dump(llvm::outs());
+            } else {
+              llvm::outs() << " undefined ";
+            }
+            llvm::outs() << "\n";
+
+            if (e1 && e2) {
+              dodi = Add::make(dodi, Mul::make(e1, e2));
+            } else {
+              dodi = nullptr;
+              break;
+            }
+          }
+
+          llvm::outs() << "pd of " << memrefOp << " w.r.t " << indVar << "\n";
+          if (dodi) {
+            dodi->dump(llvm::outs());
+          } else {
+            llvm::outs() << " undefined ";
+          }
+          llvm::outs() << "\n";
+
+          // FIXME: compute trip count
+          MIC[std::make_pair(memrefOp, indVar)] = Cost(dodi, Constant::make(1), 3 /*store cost*/);
+        }
+      }
+    });
+
+    return MIC;
+  }
+
+/*
+call f() on a vector containing all permutations of valid indices of the entries of vec
+e.g vec = {
+        {1, 2},
+        {3},
+        {4, 5, 6}
+    };
+yields 
+
+f( {0, 0, 0} ) 
+f( {0, 0, 1} ) 
+f( {0, 0, 2} ) 
+f( {1, 0, 0} ) 
+f( {1, 0, 1} ) 
+f( {1, 0, 2} ) 
+*/
+template <typename Value, typename Lambda>
+void walk_selections(const std::vector<std::vector<Value>>& vec, Lambda &&f) {
+    if (vec.empty()) return;
+
+    std::vector<size_t> indices(vec.size(), 0); // Initialize indices to track positions in each vector
+
+    while (true) {
+        // Print the current combination
+        for (size_t i = 0; i < vec.size(); ++i) {
+            // std::cout << indices[i] << " ";
+            f(indices);
+        }
+        std::cout << std::endl;
+
+        // Find the rightmost vector that has more elements to iterate
+        size_t k = vec.size();
+        while (k > 0) {
+            --k;
+            if (indices[k] < vec[k].size() - 1) {
+                ++indices[k];
+                break;
+            }
+            indices[k] = 0; // Reset this index and move to the previous vector
+        }
+
+        // If we've reset all indices, we're done
+        if (k == 0 && indices[0] == 0) {
+            break;
+        }
+    }
+}
+
   void runOnOperation() override {
     ModuleOp module = getOperation();
+    llvm::outs() << "====\ndump_ops\n====\n";
     dump_ops(module);
+
+    llvm::outs() << "====\nanalyze_cost\n====\n";
+    // FIXME: some helper function to tighten up `stack` scope
+    // model the cost
+    std::vector<scf::ParallelOp> stack;
+    MemrefInductionCosts costs = analyze_cost(module, stack);
+
+    llvm::outs() << "====\nall_induction_vars\n====\n";
+    std::vector<std::vector<Value>> parallelRegions = all_induction_vars(module);
+    for (const auto &r : parallelRegions) {
+      for (const auto &v : r) {
+        llvm::outs() << v << "\n";
+      }
+    }
+
+    llvm::outs() << "====\ndone\n====\n";
   }
 };
 
