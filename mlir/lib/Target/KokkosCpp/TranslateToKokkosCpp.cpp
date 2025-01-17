@@ -2276,6 +2276,10 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
     auto memrefType = dyn_cast<MemRefType>(retType);
     if(memrefType)
     {
+      if(numResults == size_t(1))
+        os << "results.syncHost();\n";
+      else
+        os << "std::get<" << i << ">(results).syncHost();\n";
       int64_t span = KokkosCppEmitter::getMemrefSpan(memrefType);
       os << "Kokkos::deep_copy(Kokkos::DefaultExecutionSpace(), Kokkos::View<";
       if(failed(emitter.emitType(functionOp.getLoc(), memrefType.getElementType())))
@@ -2288,7 +2292,9 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
         os << "results";
       else
         os << "std::get<" << i << ">(results)";
-      os << ".data(), " << span << "));\n";
+      // note: memref results from the primary function will always be DualView,
+      // so we want the host data
+      os << ".host_view.data(), " << span << "));\n";
     }
     else
     {
