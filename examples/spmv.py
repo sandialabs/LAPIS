@@ -2,9 +2,10 @@ import torch
 from torch import Tensor
 #import torch_mlir
 #from torch_mlir import torchscript
-#from lapis import KokkosBackend
+#from torch_mlir import torchscript
+from lapis import KokkosBackend
 from torch import nn
-from mpact.mpactbackend import mpact_linalg
+from scipy.io import mmread
 
 class SpMV(torch.nn.Module):
     def __init__(self):
@@ -14,27 +15,39 @@ class SpMV(torch.nn.Module):
         return torch.mv(A, x)
 
 def main():
-    rowptrs = [0, 1, 5, 6, 8, 8]
-    colinds = [1, 0, 2, 3, 4, 2, 0, 1]
-    values = [1.1, 0.3, 2.2, 3.7, -4, -19, -2, 1]
+    n = 504855
+    Asp = mmread('af_shell7.mtx').tocsr()
 
     A = torch.sparse_csr_tensor( \
-            torch.tensor(rowptrs, dtype=torch.int32), \
-            torch.tensor(colinds, dtype=torch.int32), \
-            torch.tensor(values, dtype=torch.float))
+            torch.tensor(Asp.indptr, dtype=torch.int32), \
+            torch.tensor(Asp.indices, dtype=torch.int32), \
+            torch.tensor(Asp.data, dtype=torch.float))
 
-    x = torch.ones((5))
+    x = torch.ones((n), dtype = torch.float)
+    y = torch.ones((n), dtype = torch.float)
 
-    # What A*x should be
-    ygold = [1.1000, 2.2000, -19.0000, -1.0000, 0.0000]
+    #with torch.no_grad():
+    #    m = SpMV()
+    #    m.train(False)
+    #    m.forward(A, x, y)
 
-    m = SpMV()
-    m.train(False)
+    with torch.no_grad():
+        m = SpMV()
+        m.train(False)
+        backend = KokkosBackend.KokkosBackend(dump_mlir=True)
+        k_backend = backend.compile_mpact(m, (A, x))
 
-    module = mpact_linalg(m, A, x)
+    #m = SpMV().eval()
+    #module = torchscript.compile(m, (A, x, y), output_type="linalg-on-tensors")
+    ##backend = refbackend.RefBackendLinalgOnTensorsBackend()
+    ##compiled = backend.compile(module)
+    ##jit_module = backend.load(compiled)
+    #backend = KokkosBackend.KokkosBackend(dump_mlir=False)
+    #kBackend.compile(module)
 
-    print("MLIR at linalg level: ")
-    print(module.operation.get_asm())
+
+    #print("MLIR at linalg level: ")
+    #print(module.operation.get_asm())
 
     #mlir_module = torchscript.compile(m, (a, b), output_type='linalg-on-tensors')
 
