@@ -153,7 +153,7 @@ struct KokkosMdrangeIterationPass
   struct Expr {
 
     enum class Kind {
-      Add, Mul, Constant, Unknown
+      Add, Sub, Mul, Div, Constant, Unknown
     };
 
     Expr(Kind kind) : kind_(kind) {}
@@ -165,19 +165,13 @@ struct KokkosMdrangeIterationPass
     virtual ~Expr() {}
   };
 
-  struct Add : public Expr {
-    Add(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) : Expr(Kind::Add), lhs_(lhs), rhs_(rhs) {}
-    std::shared_ptr<Expr> lhs_;
-    std::shared_ptr<Expr> rhs_;
-
-    virtual int eval(const Ctx &ctx) override {
-      return lhs_->eval(ctx) + rhs_->eval(ctx);
-    }
+  struct Binary : public Expr {
+    Binary(Kind kind, const std::string sym, std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) : Expr(kind), sym_(sym), lhs_(lhs), rhs_(rhs) {}
 
     virtual void dump(llvm::raw_fd_ostream &os) override {
       os << "(";
       lhs_->dump(os);
-      os << "+";
+      os << sym_;
       rhs_->dump(os);
       os << ")";
     }
@@ -190,6 +184,19 @@ struct KokkosMdrangeIterationPass
         }
       }
       return ret;
+    }
+
+    protected:
+      std::string sym_;
+      std::shared_ptr<Expr> lhs_;
+      std::shared_ptr<Expr> rhs_;
+  };
+
+  struct Add : public Binary {
+    Add(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) : Binary(Kind::Add, "+", lhs, rhs) {}
+
+    virtual int eval(const Ctx &ctx) override {
+      return lhs_->eval(ctx) + rhs_->eval(ctx);
     }
 
     static std::shared_ptr<Expr> make(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) {
@@ -210,34 +217,40 @@ struct KokkosMdrangeIterationPass
     static bool classof(const Expr *e) {
       return e->kind_ == Expr::Kind::Add;
     }
-
   };
 
-  struct Mul : public Expr {
-    Mul(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) : Expr(Kind::Mul), lhs_(lhs), rhs_(rhs) {}
-    std::shared_ptr<Expr> lhs_;
-    std::shared_ptr<Expr> rhs_;
+  struct Sub : public Binary {
+    Sub(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) : Binary(Kind::Add, "-", lhs, rhs) {}
+
+    virtual int eval(const Ctx &ctx) override {
+      return lhs_->eval(ctx) + rhs_->eval(ctx);
+    }
+
+    static std::shared_ptr<Expr> make(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) {
+      auto lhs_const = llvm::dyn_cast<Constant>(lhs.get());
+      auto rhs_const = llvm::dyn_cast<Constant>(rhs.get());
+
+      if (lhs_const && lhs_const->value_ == 0) {
+          return Mul::make(rhs, Constant::make(-1));
+      } else if (rhs_const && rhs_const->value_ == 0) {
+          return lhs;
+      } else if (rhs_const && lhs_const) {
+        return Constant::make(lhs_const->value_ - rhs_const->value_);
+      }
+
+      return std::make_shared<Sub>(lhs, rhs);
+    }
+
+    static bool classof(const Expr *e) {
+      return e->kind_ == Expr::Kind::Sub;
+    }
+  };
+
+  struct Mul : public Binary {
+    Mul(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) : Binary(Kind::Mul, "*", lhs, rhs) {}
 
     virtual int eval(const Ctx &ctx) override {
       return lhs_->eval(ctx) * rhs_->eval(ctx);
-    }
-
-    virtual void dump(llvm::raw_fd_ostream &os) override {
-      os << "(";
-      lhs_->dump(os);
-      os << "*";
-      rhs_->dump(os);
-      os << ")";
-    }
-
-    virtual std::vector<std::string> unknowns() const override {
-      std::vector<std::string> ret;
-      for (auto &op : {lhs_, rhs_}) {
-        for (auto &name : op->unknowns()) {
-          ret.push_back(name);
-        }
-      }
-      return ret;
     }
 
     static std::shared_ptr<Expr> make(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) {
@@ -246,14 +259,18 @@ struct KokkosMdrangeIterationPass
 
       if (rhs_const && lhs_const) {
         return Constant::make(lhs_const->value_ * rhs_const->value_);
-      } else if (lhs_const && lhs_const->value_ == 1) {
+      } else if (lhs_const && lhs_const->value_ == 1) { // 1 * x
           return rhs;
-      } else if (lhs_const && lhs_const->value_ == 0) {
+      } else if (lhs_const && lhs_const->value_ == 0) { // 0 * x
           return Constant::make(0);
-      } else if (rhs_const && rhs_const->value_ == 1) {
+      } else if (rhs_const && rhs_const->value_ == 1) { // x * 1
           return lhs;
-      } else if (rhs_const && rhs_const->value_ == 0) {
+      } else if (rhs_const && rhs_const->value_ == 0) { // x * 0
           return Constant::make(0);
+      } else if (rhs_const && rhs_const->value_ == -1) { // x * -1
+          return Constant::make(-lhs_const->value_);
+      } else if (lhs_const && lhs_const->value_ == -1) { // -1 * x
+          return Constant::make(-rhs_const->value_);
       }
 
       return std::make_shared<Mul>(lhs, rhs);
@@ -262,10 +279,37 @@ struct KokkosMdrangeIterationPass
     static bool classof(const Expr *e) {
       return e->kind_ == Expr::Kind::Mul;
     }
-
-
-
   };
+
+  struct Div : public Binary {
+    Div(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) : Binary(Kind::Mul, "/", lhs, rhs) {}
+
+    virtual int eval(const Ctx &ctx) override {
+      return lhs_->eval(ctx) / rhs_->eval(ctx);
+    }
+
+    static std::shared_ptr<Expr> make(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) {
+      auto lhs_const = llvm::dyn_cast<Constant>(lhs.get());
+      auto rhs_const = llvm::dyn_cast<Constant>(rhs.get());
+
+      if (rhs_const && lhs_const) {
+        return Constant::make(lhs_const->value_ * rhs_const->value_);
+      } else if (lhs_const && lhs_const->value_ == 0) { // 0 / x
+          return Constant::make(0);
+      } else if (rhs_const && rhs_const->value_ == 1) { // x / 1
+          return lhs;
+      } else if (rhs_const && rhs_const->value_ == -1) { // x / -1
+          return Constant::make(-lhs_const->value_);
+      }
+
+      return std::make_shared<Div>(lhs, rhs);
+    }
+
+    static bool classof(const Expr *e) {
+      return e->kind_ == Expr::Kind::Div;
+    }
+  };
+
 
   struct Constant : public Expr {
     Constant(int value) : Expr(Kind::Constant), value_(value) {}
@@ -570,6 +614,87 @@ public:
     return data_.end();
   }
 };
+
+
+std::shared_ptr<Expr> iteration_space_size(scf::ParallelOp &op, int dim) {
+#if 0
+    auto lb = op.getLowerBound()[dim];
+    auto ub = op.getUpperBound()[dim];
+    auto st = op.getStep()[dim];
+
+    std::shared_ptr<Expr> lbExpr;
+    std::shared_ptr<Expr> ubExpr;
+    std::shared_ptr<Expr> stExpr;
+
+    // Assuming the bounds and steps are constant integers for simplicity
+    if (auto lbConst = lb.getDefiningOp<arith::ConstantIndexOp>()) {
+      if (auto ubConst = ub.getDefiningOp<arith::ConstantIndexOp>()) {
+        if (auto stepConst = step.getDefiningOp<arith::ConstantIndexOp>()) {
+          int64_t lbValue = lbConst.value();
+          int64_t ubValue = ubConst.value();
+          int64_t stepValue = stepConst.value();
+
+          int64_t iterationSpaceSize = (ubValue - lbValue + stepValue - 1) / stepValue;
+          llvm::outs() << "Iteration space size for dimension " << i << ": " << iterationSpaceSize << "\n";
+        }
+      }
+    }
+
+    // (ub - lb + step - 1) / step
+    auto num = Add::make(Sub::make(ubExpr, lbExpr), Sub::make(stExpr, Constant::make(1)));
+    return Div::make(num, lbExpr)
+#endif
+}
+
+std::shared_ptr<Expr> trip_count_expr(scf::ParallelOp &op) {
+#if 0
+    auto lowerBounds = parallelOp.getLowerBound();
+
+    std::shared_ptr<Expr> total = iteration_space_size(0);
+
+    for (unsigned i = 1; i < lowerBounds.size(); ++i) {
+
+      total = Mul::make(total, iteration_space_size(i));
+
+
+
+      }
+#endif
+}
+
+using ParallelTripCounts = VecMap<scf::ParallelOp, std::shared_ptr<Expr>>;
+
+static ParallelTripCounts build_parallel_trip_counts(ModuleOp &mod) {
+#if 0
+  ParallelTripCounts PTC;
+
+    mod.walk([&](Operation *op) {
+      // skip memrefs outside a parallel region
+      if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
+
+
+
+
+
+
+        MemrefInductionCosts costs = build_parallel_trip_counts(parallelOp);
+        for (const auto &kv : costs) {
+          PTC[kv.first] = kv.second;
+        }
+      }
+    }); // walk
+
+
+  return PTC;
+#endif
+}
+
+static ParallelTripCounts build_parallel_trip_counts(scf::ParallelOp &parentOp) {
+
+  ParallelTripCounts PTC;
+  return PTC;
+
+}
 
 // map of (Operation*, Value) -> Cost
 // map of the cost model for a given memref / induction variable pair
