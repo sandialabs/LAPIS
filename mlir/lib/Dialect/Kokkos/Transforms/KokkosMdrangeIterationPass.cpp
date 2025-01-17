@@ -166,6 +166,7 @@ struct KokkosMdrangeIterationPass
 
     virtual int eval(const Ctx &ctx) = 0;
     virtual void dump(llvm::raw_fd_ostream &os) = 0;
+    virtual std::vector<std::string> unknowns() const = 0;
     virtual ~Expr() {}
   };
 
@@ -184,6 +185,16 @@ struct KokkosMdrangeIterationPass
       os << "+";
       rhs_->dump(os);
       os << ")";
+    }
+
+    virtual std::vector<std::string> unknowns() const override {
+      std::vector<std::string> ret;
+      for (auto &op : {lhs_, rhs_}) {
+        for (auto &name : op->unknowns()) {
+          ret.push_back(name);
+        }
+      }
+      return ret;
     }
 
     static std::shared_ptr<Expr> make(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) {
@@ -224,6 +235,16 @@ struct KokkosMdrangeIterationPass
       os << ")";
     }
 
+    virtual std::vector<std::string> unknowns() const override {
+      std::vector<std::string> ret;
+      for (auto &op : {lhs_, rhs_}) {
+        for (auto &name : op->unknowns()) {
+          ret.push_back(name);
+        }
+      }
+      return ret;
+    }
+
     static std::shared_ptr<Expr> make(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) {
       auto lhs_const = llvm::dyn_cast<Constant>(lhs.get());
       auto rhs_const = llvm::dyn_cast<Constant>(rhs.get());
@@ -247,6 +268,8 @@ struct KokkosMdrangeIterationPass
       return e->kind_ == Expr::Kind::Mul;
     }
 
+
+
   };
 
   struct Constant : public Expr {
@@ -261,6 +284,10 @@ struct KokkosMdrangeIterationPass
       os << value_;
     }
 
+    virtual std::vector<std::string> unknowns() const override {
+      return {};
+    }
+
     static std::shared_ptr<Constant> make(int c) {
       return std::make_shared<Constant>(c);
     }
@@ -268,7 +295,6 @@ struct KokkosMdrangeIterationPass
     static bool classof(const Expr *e) {
       return e->kind_ == Expr::Kind::Constant;
     }
-
   };
 
   struct Unknown : public Expr {
@@ -281,6 +307,10 @@ struct KokkosMdrangeIterationPass
 
     virtual void dump(llvm::raw_fd_ostream &os) override {
       os << "(" << name_ << ")";
+    }
+
+    virtual std::vector<std::string> unknowns() const override {
+      return {name_};
     }
 
     static std::shared_ptr<Unknown> make(const std::string &name) {
@@ -304,6 +334,13 @@ struct KokkosMdrangeIterationPass
     std::shared_ptr<Expr> stride_; // stride of the memref w.r.t an induction variable
     std::shared_ptr<Expr> count_;  // number of times the memref is executed
     int sf_; // scaling factor, 1 for load, 3 for store
+
+    std::vector<std::string> unknowns() const {
+      std::vector<std::string> ret;
+      for (auto &u : stride_->unknowns()) ret.push_back(u);
+      for (auto &u : count_->unknowns()) ret.push_back(u);
+      return ret;
+    }
   };
 
   // partial derivative df/dx
@@ -382,7 +419,6 @@ static std::shared_ptr<Expr> df_dx(Value &f, Value &x) {
 
 
   // computes d(offset) / d(index variable)
-  // FIXME: is there something that is both a LoadOp and a StoreOp?
   template <typename Memref>
   static std::shared_ptr<Expr> do_di(Memref &memrefOp, Value indexVar) {
 
@@ -489,20 +525,18 @@ static std::vector<Value> all_induction_variables(std::vector<scf::ParallelOp> &
   return vars;
 }
 
-// map of (Operation*, Value) -> Cost
-// map of the cost model for a given memref / induction variable pair
-// using MemrefInductionCosts = std::map<std::pair<Operation*, Value>, Cost>;
-class MemrefInductionCosts {
+template <typename key_type, typename value_type>
+class VecMap {
 
 public:
-  using key_type = std::pair<Operation*, mlir::Value>;
-  using value_type = Cost;
   using iterator = typename std::vector<std::pair<key_type, value_type>>::iterator;
   using const_iterator = typename std::vector<std::pair<key_type, value_type>>::const_iterator;
 
 private:
   std::vector<std::pair<key_type, value_type>> data_;
 
+
+public:
   // Find an iterator to a key-value pair by key
   auto find(const key_type& key) const {
     return std::find_if(data_.begin(), data_.end(),
@@ -514,7 +548,6 @@ private:
                         [&key](const auto& pair) { return pair.first == key; });
   }
 
-public:
  // Access value by key without bounds checking
   value_type& operator[](const key_type& key) {
     auto it = find(key);
@@ -526,46 +559,28 @@ public:
     }
   }
 
-  // Get an iterator to the beginning
   iterator begin() {
     return data_.begin();
   }
 
-  // Get a const iterator to the beginning
   const_iterator begin() const {
     return data_.begin();
   }
 
-  // Get an iterator to the end
   iterator end() {
     return data_.end();
   }
 
-  // Get a const iterator to the end
   const_iterator end() const {
     return data_.end();
   }
-
-
-
 };
 
-// return induction variables for each parallel op in the module
-static std::vector<std::vector<Value>> all_induction_vars(ModuleOp &mod) {
-    std::vector<std::vector<Value>> ret;
-    mod.walk([&](Operation *op) {
-      if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
-        std::vector<Value> indVars;
-        for (Value &var : parallelOp.getInductionVars()) {
-          indVars.push_back(var);
-        }
-        ret.push_back(indVars);
-      }
-    }); // walk
-   return ret;
-  }
+// map of (Operation*, Value) -> Cost
+// map of the cost model for a given memref / induction variable pair
+using MemrefInductionCosts = VecMap<std::pair<Operation*, mlir::Value>, Cost>;
 
-static MemrefInductionCosts analyze_cost(ModuleOp &mod, std::vector<scf::ParallelOp> &stack) {
+static MemrefInductionCosts build_cost_table(ModuleOp &mod, std::vector<scf::ParallelOp> &stack) {
 
     MemrefInductionCosts MIC;
 
@@ -573,7 +588,7 @@ static MemrefInductionCosts analyze_cost(ModuleOp &mod, std::vector<scf::Paralle
       // skip memrefs outside a parallel region
       if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
         stack.push_back(parallelOp);
-        MemrefInductionCosts costs = analyze_cost(parallelOp, stack);
+        MemrefInductionCosts costs = build_cost_table(parallelOp, stack);
         stack.pop_back();
         for (const auto &kv : costs) {
           MIC[kv.first] = kv.second;
@@ -584,14 +599,14 @@ static MemrefInductionCosts analyze_cost(ModuleOp &mod, std::vector<scf::Paralle
     return MIC;
   }
 
-static MemrefInductionCosts analyze_cost(scf::ParallelOp &parentOp, std::vector<scf::ParallelOp> &stack) {
+static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, std::vector<scf::ParallelOp> &stack) {
 
     MemrefInductionCosts MIC;
 
     parentOp.getBody()->walk([&](Operation *op) {
       if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
         stack.push_back(parallelOp);
-        MemrefInductionCosts costs = analyze_cost(parallelOp, stack);
+        MemrefInductionCosts costs = build_cost_table(parallelOp, stack);
         stack.pop_back();
         for (const auto &kv : costs) {
           MIC[kv.first] = kv.second;
@@ -708,6 +723,56 @@ static MemrefInductionCosts analyze_cost(scf::ParallelOp &parentOp, std::vector<
     return MIC;
   }
 
+  struct ParallelConfig {
+    // permutation of induction variables for each parallel op
+    VecMap<scf::ParallelOp, std::vector<size_t>> perms_;
+  };
+
+
+  static size_t get_num_induction_vars(scf::ParallelOp &parallelOp) {
+    return parallelOp.getInductionVars().size();
+  }
+
+  template <typename Lambda>
+  void walk_configurations(scf::ParallelOp &parentOp, ParallelConfig cfg, Lambda &&f) {
+    bool found = false;
+    parentOp.getBody()->walk([&](Operation *op) {
+      if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
+        found = true;
+
+        // walk all configurations of this parallel op too
+        std::vector<size_t> perm(get_num_induction_vars(parallelOp));
+        std::iota(perm.begin(), perm.end(), 0);
+        do {
+          cfg.perms_[parallelOp] = perm;
+          walk_configurations(parallelOp, cfg, std::forward<Lambda>(f));
+        } while (std::next_permutation(perm.begin(), perm.end()));
+      } 
+    }); // walk
+
+    // no nested parallel regions, no more configurations to go through, call f
+    if (!found) {
+      f(cfg);
+    }
+  }
+
+  template <typename Lambda>
+  void walk_configurations(ModuleOp &mod, Lambda &&f) {
+    mod.walk([&](Operation *op) {
+      if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
+
+        std::vector<size_t> perm(get_num_induction_vars(parallelOp));
+        std::iota(perm.begin(), perm.end(), 0);
+
+        do  {
+          ParallelConfig cfg;
+          cfg.perms_[parallelOp] = perm;
+          walk_configurations(parallelOp, cfg, f);
+        } while (std::next_permutation(perm.begin(), perm.end()));
+      }
+    }); // walk
+  }
+
 /*
 call f() on a vector containing all permutations of valid indices of the entries of vec
 e.g vec = {
@@ -724,8 +789,8 @@ f( {1, 0, 0} )
 f( {1, 0, 1} ) 
 f( {1, 0, 2} ) 
 */
-template <typename Value, typename Lambda>
-void walk_selections(const std::vector<std::vector<Value>>& vec, Lambda &&f) {
+template <typename T, typename Lambda>
+void walk_selections(const std::vector<std::vector<T>>& vec, Lambda &&f) {
     if (vec.empty()) return;
 
     std::vector<size_t> indices(vec.size(), 0); // Initialize indices to track positions in each vector
@@ -736,7 +801,7 @@ void walk_selections(const std::vector<std::vector<Value>>& vec, Lambda &&f) {
             // std::cout << indices[i] << " ";
             f(indices);
         }
-        std::cout << std::endl;
+        // std::cout << std::endl;
 
         // Find the rightmost vector that has more elements to iterate
         size_t k = vec.size();
@@ -756,24 +821,122 @@ void walk_selections(const std::vector<std::vector<Value>>& vec, Lambda &&f) {
     }
 }
 
+
+
+
+
+  // model the cost of a module with a given parallel configuration
+  static size_t model_cost(ModuleOp &mod, const ParallelConfig &cfg, const MemrefInductionCosts &costTable) {
+    size_t cost = 0;
+    mod.walk([&](Operation *op) {
+      if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
+        cost += model_cost(parallelOp, cfg, costTable);
+      }
+    }); // walk
+    return cost;
+  }
+
+  // model the cost of a parallel operation with a given config
+  static size_t model_cost(scf::ParallelOp &parentOp, const ParallelConfig &cfg, const MemrefInductionCosts &costTable) {
+
+    size_t cost = 0;
+
+    parentOp.getBody()->walk([&](Operation *op) {
+      if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
+        cost += model_cost(parallelOp, cfg, costTable);
+      } else if (auto memrefOp = dyn_cast<memref::LoadOp>(op)) {
+        cost += model_cost(parentOp, memrefOp, cfg, costTable);
+      } else if (auto memrefOp = dyn_cast<memref::StoreOp>(op)) {
+        cost += model_cost(parentOp, memrefOp, cfg, costTable);
+      }
+    });
+
+    return cost;
+  }
+    
+  template <typename MemrefOp>
+  static size_t model_cost(scf::ParallelOp &parallelOp, MemrefOp &memrefOp, const ParallelConfig &cfg, const MemrefInductionCosts &costTable) {
+    static_assert(std::is_same_v<MemrefOp, memref::LoadOp> || std::is_same_v<MemrefOp, memref::StoreOp>);
+    
+    
+    llvm::outs() << "model cost of ";
+    memrefOp.print(llvm::outs());
+    llvm::outs() << "\n";
+
+    if (auto it = cfg.perms_.find(parallelOp); it != cfg.perms_.end()) {
+      llvm::outs() << "found perm for memref's parent parallelOp in config\n";
+
+      const std::vector<size_t> &perm = it->second;
+      Value rightMostVar = parallelOp.getInductionVars()[perm[perm.size() - 1]];
+
+      llvm::outs() << "right-most induction var is ";
+      rightMostVar.print(llvm::outs());
+      llvm::outs() << "\n";
+      
+
+      // FIXME: why does this work? the table should expect key to be pair<Operation*, Value> not pair<Operation, Value>
+      auto costKey = std::make_pair(memrefOp, rightMostVar);
+      if (auto jt = costTable.find(costKey); jt != costTable.end()) {
+        llvm::outs() << "found cost model in table\n";
+
+        Cost model = jt->second;
+        std::vector<std::string> unknowns = model.unknowns();
+
+        // TODO: this context just says every stride is 10
+        Ctx ctx;
+        for (auto &name : unknowns) {
+          ctx.values[name] = 10;
+        }
+
+        size_t cost = model.stride_->eval(ctx);
+        return cost;
+
+      }
+
+    }
+
+    size_t cost = 0;
+    return cost;
+  }
+
   void runOnOperation() override {
     ModuleOp module = getOperation();
     llvm::outs() << "====\ndump_ops\n====\n";
     dump_ops(module);
 
-    llvm::outs() << "====\nanalyze_cost\n====\n";
+    llvm::outs() << "====\nbuild_cost_table\n====\n";
     // FIXME: some helper function to tighten up `stack` scope
-    // model the cost
     std::vector<scf::ParallelOp> stack;
-    MemrefInductionCosts costs = analyze_cost(module, stack);
+    MemrefInductionCosts costTable = build_cost_table(module, stack);
 
-    llvm::outs() << "====\nall_induction_vars\n====\n";
-    std::vector<std::vector<Value>> parallelRegions = all_induction_vars(module);
-    for (const auto &r : parallelRegions) {
-      for (const auto &v : r) {
-        llvm::outs() << v << "\n";
+
+    llvm::outs() << "====\nmodel reordered induction vars\n====\n";
+    size_t minCost = std::numeric_limits<size_t>::max();
+    ParallelConfig minCfg;
+    walk_configurations(module, [&](const ParallelConfig &cfg){
+
+      llvm::outs() << "modeling ParallelConfig:\n";
+      for (const auto &kv : cfg.perms_) {
+        kv.first->print(llvm::outs());
+        llvm::outs() << " -> {";
+        for(const auto &e : kv.second) {
+          llvm::outs() << e << ", ";
+        }
+        llvm::outs() << "}\n";
       }
-    }
+
+      size_t cost = model_cost(module, cfg, costTable);
+      llvm::outs() << "cost was " << cost << "\n";
+      if (cost < minCost) {
+        llvm::outs() << "Info: new optimal! " << cost << "\n";
+        minCost = cost;
+        minCfg = cfg;
+      }
+
+    }); // walk_configurations
+    llvm::outs() << "min cost: " << minCost << "\n";
+
+    llvm::outs() << "====\nbuild new module\n====\n";
 
     llvm::outs() << "====\ndone\n====\n";
   }
