@@ -768,58 +768,6 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, std::vec
     }); // walk
   }
 
-/*
-call f() on a vector containing all permutations of valid indices of the entries of vec
-e.g vec = {
-        {1, 2},
-        {3},
-        {4, 5, 6}
-    };
-yields 
-
-f( {0, 0, 0} ) 
-f( {0, 0, 1} ) 
-f( {0, 0, 2} ) 
-f( {1, 0, 0} ) 
-f( {1, 0, 1} ) 
-f( {1, 0, 2} ) 
-*/
-template <typename T, typename Lambda>
-void walk_selections(const std::vector<std::vector<T>>& vec, Lambda &&f) {
-    if (vec.empty()) return;
-
-    std::vector<size_t> indices(vec.size(), 0); // Initialize indices to track positions in each vector
-
-    while (true) {
-        // Print the current combination
-        for (size_t i = 0; i < vec.size(); ++i) {
-            // std::cout << indices[i] << " ";
-            f(indices);
-        }
-        // std::cout << std::endl;
-
-        // Find the rightmost vector that has more elements to iterate
-        size_t k = vec.size();
-        while (k > 0) {
-            --k;
-            if (indices[k] < vec[k].size() - 1) {
-                ++indices[k];
-                break;
-            }
-            indices[k] = 0; // Reset this index and move to the previous vector
-        }
-
-        // If we've reset all indices, we're done
-        if (k == 0 && indices[0] == 0) {
-            break;
-        }
-    }
-}
-
-
-
-
-
   // model the cost of a module with a given parallel configuration
   static size_t model_cost(ModuleOp &mod, const ParallelConfig &cfg, const MemrefInductionCosts &costTable) {
     size_t cost = 0;
