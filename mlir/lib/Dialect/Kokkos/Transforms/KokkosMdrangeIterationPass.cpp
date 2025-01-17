@@ -282,7 +282,7 @@ struct KokkosMdrangeIterationPass
   };
 
   struct Div : public Binary {
-    Div(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) : Binary(Kind::Mul, "/", lhs, rhs) {}
+    Div(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) : Binary(Kind::Div, "/", lhs, rhs) {}
 
     virtual int eval(const Ctx &ctx) override {
       return lhs_->eval(ctx) / rhs_->eval(ctx);
