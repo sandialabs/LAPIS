@@ -130,24 +130,19 @@ struct KokkosMdrangeIterationPass
   KokkosMdrangeIterationPass(const KokkosMdrangeIterationPass& pass) = default;
 
   // generate a log-random integer within a specified range
-  static int getLogRandomInt(int min, int max) {
-      // Create a random device to seed the random number generator
-      std::random_device rd;
-      // Use the Mersenne Twister engine for random number generation
-      std::mt19937 gen(rd());
-
+  static size_t log_random_int(std::mt19937 &gen, size_t min, size_t max) {
       // Create a uniform real distribution between log(min) and log(max)
       std::uniform_real_distribution<> dis(std::log(min), std::log(max));
 
       // Generate a random number in the log space and exponentiate it
       double logRandom = dis(gen);
-      int logRandomInt = static_cast<int>(std::exp(logRandom));
+      size_t res = std::exp(logRandom);
 
       // Ensure the result is within the desired range
-      if (logRandomInt < min) logRandomInt = min;
-      if (logRandomInt > max) logRandomInt = max;
+      if (res < min) res = min;
+      if (res > max) res = max;
 
-      return logRandomInt;
+      return res;
   }
 
   // a context for expression evaluation
@@ -854,6 +849,40 @@ void walk_selections(const std::vector<std::vector<T>>& vec, Lambda &&f) {
     return cost;
   }
     
+
+  static size_t monte_carlo(const Cost &model, int n = 100, int seed = 31337) {
+    std::mt19937 gen(seed);
+
+    std::vector<size_t> costs;
+
+    std::vector<std::string> unknowns = model.unknowns();
+
+    for (int i = 0; i < n; i++) {
+
+      // generate random values for all unknowns in cost model
+      Ctx ctx;
+      for (auto &name : unknowns) {
+        auto val = log_random_int(gen, 1, 1000000);
+        llvm::outs() << name << ": " << val << "\n";
+        ctx.values[name] = val;
+      }
+      
+      costs.push_back(model.stride_->eval(ctx));
+    }
+
+    // FIXME: here we do median, is there a principled aggregation strategy?
+    // kth pctile cost?
+    // average of worst k?
+    // worst / average ("competitive ratio")?
+    // geometric mean?
+    // trimmed mean?
+    //
+    // robustness metrics?
+    // coefficient of variation
+    std::sort(costs.begin(), costs.end());
+    return costs[costs.size() / 2];
+  }
+
   template <typename MemrefOp>
   static size_t model_cost(scf::ParallelOp &parallelOp, MemrefOp &memrefOp, const ParallelConfig &cfg, const MemrefInductionCosts &costTable) {
     static_assert(std::is_same_v<MemrefOp, memref::LoadOp> || std::is_same_v<MemrefOp, memref::StoreOp>);
@@ -880,17 +909,7 @@ void walk_selections(const std::vector<std::vector<T>>& vec, Lambda &&f) {
         llvm::outs() << "found cost model in table\n";
 
         Cost model = jt->second;
-        std::vector<std::string> unknowns = model.unknowns();
-
-        // TODO: this context just says every stride is 10
-        Ctx ctx;
-        for (auto &name : unknowns) {
-          ctx.values[name] = 10;
-        }
-
-        size_t cost = model.stride_->eval(ctx);
-        return cost;
-
+        return monte_carlo(model);
       }
 
     }
