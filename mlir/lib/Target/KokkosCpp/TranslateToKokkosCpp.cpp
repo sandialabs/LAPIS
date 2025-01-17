@@ -198,6 +198,9 @@ struct KokkosCppEmitter {
   /// Returns the C++ output stream.
   raw_indented_ostream &ostream() { return os; };
 
+  void indent() {os.indent();}
+  void unindent() {os.unindent();}
+
   bool emittingPython() {return py_os.get() != nullptr;}
 
   /// Returns the Python output stream.
@@ -485,7 +488,6 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   }
   emitter << ");\n";
   if(space == kokkos::MemorySpace::DualView) {
-    std::cout << "  Note: result memspace = DualView\n";
     if(failed(emitter.emitStridedMemrefType(op.getLoc(), resultType, kokkos::MemorySpace::Host))) {
       return failure();
     }
@@ -515,7 +517,6 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     emitter << ");\n";
   }
   else {
-    std::cout << "  Note: result memspace is not DualView\n";
     if(failed(emitter.emitStridedMemrefType(op.getLoc(), resultType, space))) {
       return failure();
     }
@@ -643,14 +644,102 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
 
 static LogicalResult printOperation(KokkosCppEmitter &emitter,
                                     memref::CopyOp op) {
-  // TODO: deal with case where source and target have different spaces and different layouts.
-  emitter << "Kokkos::deep_copy(";
-  if(failed(emitter.emitValue(op.getTarget())))
-    return failure();
-  emitter << ", ";
-  if(failed(emitter.emitValue(op.getSource())))
-    return failure();
-  emitter << ")";
+  // TODO: deal with case where source and target have different layouts and different spaces.
+  auto srcSpace = kokkos::getMemSpace(op.getSource());
+  auto dstSpace = kokkos::getMemSpace(op.getTarget());
+  if(srcSpace != kokkos::MemorySpace::DualView && dstSpace != kokkos::MemorySpace::DualView) {
+    // Neither src nor dst are DualView, so just do a standard deep_copy
+    // TODO: could use async deep copies unless it's host->host?
+    emitter << "Kokkos::deep_copy(";
+    if(failed(emitter.emitValue(op.getTarget())))
+      return failure();
+    emitter << ", ";
+    if(failed(emitter.emitValue(op.getSource())))
+      return failure();
+    emitter << ")";
+  }
+  else if(srcSpace == kokkos::MemorySpace::DualView && dstSpace == kokkos::MemorySpace::DualView) {
+    // Both src and dst are DualView.
+    // At runtime figure out where src is up-to-date (preferring device if both spaces are up-to-date). Then:
+    // - sync dst to that space, since dst cannot be modified in both spaces at once
+    // - copy the data to that space of dst
+    // - mark dst modified in that space
+    emitter << "if(";
+    if(failed(emitter.emitValue(op.getSource())))
+      return failure();
+    emitter << ".modifiedHost())\n";
+    emitter << "{\n";
+    emitter.indent();
+    if(failed(emitter.emitValue(op.getTarget())))
+      return failure();
+    emitter << ".syncHost();\n";
+    emitter << "Kokkos::deep_copy(";
+    if(failed(emitter.emitValue(op.getTarget())))
+      return failure();
+    emitter << ".host_view, ";
+    if(failed(emitter.emitValue(op.getSource())))
+      return failure();
+    emitter << ".host_view);";
+    if(failed(emitter.emitValue(op.getTarget())))
+      return failure();
+    emitter << ".modifyHost();\n";
+    emitter.unindent();
+    emitter <<" } else {\n";
+    emitter.indent();
+    if(failed(emitter.emitValue(op.getTarget())))
+      return failure();
+    emitter << ".syncDevice();\n";
+    emitter << "Kokkos::deep_copy(";
+    if(failed(emitter.emitValue(op.getTarget())))
+      return failure();
+    emitter << ".device_view, ";
+    if(failed(emitter.emitValue(op.getSource())))
+      return failure();
+    emitter << ".device_view);";
+    if(failed(emitter.emitValue(op.getTarget())))
+      return failure();
+    emitter << ".modifyDevice();\n";
+    emitter.unindent();
+    emitter <<" }\n";
+  }
+  else if(srcSpace == kokkos::MemorySpace::DualView) {
+    // src is DualView but dst isn't.
+    if(failed(emitter.emitValue(op.getSource())))
+      return failure();
+    emitter << ".sync";
+    if(dstSpace == kokkos::MemorySpace::Device)
+      emitter << "Device();\n";
+    else
+      emitter << "Host();\n";
+    emitter << "Kokkos::deep_copy(";
+    if(failed(emitter.emitValue(op.getTarget())))
+      return failure();
+    emitter << ", ";
+    if(failed(emitter.emitValue(op.getSource())))
+      return failure();
+    emitter << ".";
+    if(dstSpace == kokkos::MemorySpace::Device)
+      emitter << "device_view);\n";
+    else
+      emitter << "host_view);\n";
+  }
+  else {
+    // dst is DualView but src isn't.
+    if(failed(emitter.emitValue(op.getTarget())))
+      return failure();
+    bool isDevice = srcSpace == kokkos::MemorySpace::Device;
+    emitter << ".sync" << (isDevice ? "Device" : "Host") << "();\n";
+    emitter << "Kokkos::deep_copy(";
+    if(failed(emitter.emitValue(op.getTarget())))
+      return failure();
+    emitter << "." << (isDevice ? "device" : "host") << "_view, ";
+    if(failed(emitter.emitValue(op.getSource())))
+      return failure();
+    emitter << ");";
+    if(failed(emitter.emitValue(op.getTarget())))
+      return failure();
+    emitter << ".modify" << (isDevice ? "Device" : "Host") << "();\n";
+  }
   return success();
 }
 
@@ -793,8 +882,10 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
 
 static LogicalResult printOperation(KokkosCppEmitter &emitter,
                                     memref::CastOp op) {
-  // CastOp can only convert between static and dynamic dimensions.
-  // For Kokkos views and LAPIS::DualView, this has no real effects.
+  // TODO: IR from pipeline usually seems to use this only for converting
+  // from static to dynamic dimensions.
+  // However, it can also go the other direction and this needs additional logic
+  // for that case.
   emitter.assignName(emitter.getOrCreateName(op.getOperand()), op.getResult());
   return success();
 }
@@ -1995,23 +2086,8 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
   }
   // Otherwise, it's a function definition with body.
   KokkosCppEmitter::Scope scope(emitter);
-  // For general functions only allow a single result (for now).
-  if(functionOp.getResultTypes().size() > size_t(1))
-    return functionOp.emitError("LAPIS only supports at most 1 return value from functions");
-  // Assume device space for results
-  if(functionOp.getResultTypes().size() == 0)
-    os << "void";
-  else {
-    auto retType = functionOp.getResultTypes()[0];
-    if (MemRefType mrt = dyn_cast<MemRefType>(retType)) {
-      if (failed(emitter.emitMemrefType(functionOp.getLoc(), mrt, kokkos::MemorySpace::Device)))
-        return failure();
-    }
-    else {
-      if (failed(emitter.emitType(functionOp.getLoc(), retType)))
-        return failure();
-    }
-  }
+  if (failed(emitter.emitFuncResultTypes(functionOp.getLoc(), functionOp.getFunctionType().getResults())))
+    return failure();
   os << ' ' << funcName;
   os << "(";
   //Make a list of the memref parameters that need to be converted to Kokkos::Views inside the body
@@ -2689,6 +2765,8 @@ KokkosCppEmitter::emitValue(Value val)
 LogicalResult KokkosCppEmitter::emitVariableDeclaration(Value result,
                                                   bool trailingSemicolon) {
   auto op = result.getDefiningOp();
+  auto type = result.getType();
+  Location loc = op ? op->getLoc() : Location(LocationAttr());
   if (hasValueInScope(result)) {
     if(op) {
       return op->emitError(
@@ -2698,9 +2776,20 @@ LogicalResult KokkosCppEmitter::emitVariableDeclaration(Value result,
       return failure();
     }
   }
-  Location loc = op ? op->getLoc() : Location(LocationAttr());
-  if (failed(emitType(loc, result.getType())))
-    return failure();
+  if (auto mrType = dyn_cast<MemRefType>(type)) {
+    auto space = kokkos::getMemSpace(result);
+    if(failed(emitMemrefType(loc, mrType, space)))
+      return failure();
+  }
+  else if (auto umrType = dyn_cast<UnrankedMemRefType>(type)) {
+    auto space = kokkos::getMemSpace(result);
+    if (failed(emitMemrefType(loc, umrType, space)))
+      return failure();
+  }
+  else {
+    if (failed(emitType(loc, result.getType())))
+      return failure();
+  }
   os << " " << getOrCreateName(result);
   if (trailingSemicolon)
     os << ";\n";
