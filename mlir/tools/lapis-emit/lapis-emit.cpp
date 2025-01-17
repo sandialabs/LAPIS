@@ -22,6 +22,7 @@
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Transforms/AllInterfaces.h"
 #include "mlir/Dialect/Linalg/Transforms/RuntimeOpVerification.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MLProgram/IR/MLProgram.h"
 #include "mlir/Dialect/MLProgram/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -62,6 +63,7 @@ cl::opt<std::string> cxxFilename("cxx", cl::desc("Specify filename for C++ sourc
 cl::opt<std::string> pyFilename("py", cl::desc("Specify filename for Python wrapper module output"));
 cl::opt<bool> finalModule("final", cl::desc("Whether this module should finalize Kokkos"));
 cl::opt<bool> dump("dump", cl::desc("Whether to dump the lowered MLIR to file"), cl::init(false));
+cl::opt<bool> skipLowering("skipLowering", cl::desc("Whether to skip lowering passes (because input is already lowered)"), cl::init(false));
 
 int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv);
@@ -74,7 +76,7 @@ int main(int argc, char **argv) {
       mlir::LLVM::LLVMDialect, mlir::vector::VectorDialect,
       mlir::bufferization::BufferizationDialect, mlir::linalg::LinalgDialect,
       mlir::sparse_tensor::SparseTensorDialect, mlir::tensor::TensorDialect,
-      mlir::arith::ArithDialect, mlir::scf::SCFDialect,
+      mlir::math::MathDialect, mlir::arith::ArithDialect, mlir::scf::SCFDialect,
       mlir::memref::MemRefDialect, mlir::func::FuncDialect,
       mlir::ml_program::MLProgramDialect, mlir::kokkos::KokkosDialect>();
 
@@ -118,36 +120,39 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  if(dump) {
-    std::string dumpPath = cxxFilename + ".hi.mlir";
-    std::cout << "Dumping high-level MLIR to \"" << dumpPath << "\"\n";
-    llvm::raw_fd_ostream mlirDump(StringRef(dumpPath), ec);
-    if(ec) {
-      std::cerr << "Failed to open MLIR dump file\n";
+  if(!skipLowering) {
+    if(dump) {
+      std::string dumpPath = cxxFilename + ".hi.mlir";
+      std::cout << "Dumping high-level MLIR to \"" << dumpPath << "\"\n";
+      llvm::raw_fd_ostream mlirDump(StringRef(dumpPath), ec);
+      if(ec) {
+        std::cerr << "Failed to open MLIR dump file\n";
+        return 1;
+      }
+      module->print(mlirDump);
+      mlirDump.close();
+    }
+
+    PassManager pm(&context);
+    kokkos::LapisCompilerOptions options;
+    kokkos::buildSparseKokkosCompiler(pm, options);
+    if (failed(pm.run(*module))) {
+      std::cerr << "Failed to lower module\n";
       return 1;
     }
-    module->print(mlirDump);
-    mlirDump.close();
+    if(dump) {
+      std::string dumpPath = cxxFilename + ".lo.mlir";
+      std::cout << "Dumping lowered MLIR to \"" << dumpPath << "\"\n";
+      llvm::raw_fd_ostream mlirDump(StringRef(dumpPath), ec);
+      if(ec) {
+        std::cerr << "Failed to open MLIR dump file\n";
+        return 1;
+      }
+      module->print(mlirDump);
+      mlirDump.close();
+    }
   }
 
-  PassManager pm(&context);
-  kokkos::LapisCompilerOptions options;
-  kokkos::buildSparseKokkosCompiler(pm, options);
-  if (failed(pm.run(*module))) {
-    std::cerr << "Failed to lower module\n";
-    return 1;
-  }
-  if(dump) {
-    std::string dumpPath = cxxFilename + ".lo.mlir";
-    std::cout << "Dumping lowered MLIR to \"" << dumpPath << "\"\n";
-    llvm::raw_fd_ostream mlirDump(StringRef(dumpPath), ec);
-    if(ec) {
-      std::cerr << "Failed to open MLIR dump file\n";
-      return 1;
-    }
-    module->print(mlirDump);
-    mlirDump.close();
-  }
   llvm::raw_fd_ostream cxxFileHandle(StringRef(cxxFilename), ec);
   if(ec) {
     std::cerr << "Failed to open C++ output file \"" << cxxFilename << "\"\n";
@@ -158,6 +163,8 @@ int main(int argc, char **argv) {
     std::cerr << "Failed to open Python output file \"" << pyFilename << "\"\n";
     return 1;
   }
+  //printf("Dump of MLIR before final emitting.");
+  //module->dump();
   if(failed(kokkos::translateToKokkosCpp(*module, cxxFileHandle, pyFileHandle, finalModule)))
   {
     std::cerr << "Failed to emit Kokkos\n";
