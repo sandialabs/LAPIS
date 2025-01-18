@@ -25,6 +25,7 @@
 #include "mlir/Dialect/Bufferization/Transforms/FuncBufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Func/Extensions/AllExtensions.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Transforms/AllInterfaces.h"
 #include "mlir/Dialect/Linalg/Transforms/RuntimeOpVerification.h"
@@ -64,7 +65,7 @@ int main(int argc, char **argv) {
       mlir::LLVM::LLVMDialect, mlir::vector::VectorDialect,
       mlir::bufferization::BufferizationDialect, mlir::linalg::LinalgDialect,
       mlir::sparse_tensor::SparseTensorDialect, mlir::tensor::TensorDialect,
-      mlir::arith::ArithDialect, mlir::scf::SCFDialect,
+      mlir::arith::ArithDialect, mlir::scf::SCFDialect, mlir::math::MathDialect,
       mlir::memref::MemRefDialect, mlir::func::FuncDialect,
       mlir::ml_program::MLProgramDialect,
       mlir::kokkos::KokkosDialect>();
