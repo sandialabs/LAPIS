@@ -4,9 +4,6 @@
 #include <unistd.h>
 #include <iostream>
 
-// If building a CPP driver, we can use the original StridedMemRefType class from MLIR,
-// so do not redefine it here.
-#ifndef PYTACO_CPP_DRIVER
 template <typename T, int N>
 struct StridedMemRefType {
   T *basePtr;
@@ -15,25 +12,6 @@ struct StridedMemRefType {
   int64_t sizes[N];
   int64_t strides[N];
 };
-#endif
-
-// If building a CPP driver, need to provide a version of
-// _mlir_ciface_newSparseTensor() that takes underlying integer types, not enum types like DimLevelType.
-// The MLIR-Kokkos generated code doesn't know about the enum types at all.
-#ifdef PYTACO_CPP_DRIVER
-int8_t* _mlir_ciface_newSparseTensor(
-  StridedMemRefType<index_type, 1> *dimSizesRef,
-  StridedMemRefType<index_type, 1> *lvlSizesRef,
-  StridedMemRefType<int8_t, 1> *lvlTypesRef,
-  StridedMemRefType<index_type, 1> *lvl2dimRef,
-  StridedMemRefType<index_type, 1> *dim2lvlRef, int ptrTp,
-  int indTp, int valTp, int action, int8_t* ptr) {
-    return (int8_t*) _mlir_ciface_newSparseTensor(dimSizesRef, lvlSizesRef,
-      reinterpret_cast<StridedMemRefType<DimLevelType, 1>*>(lvlTypesRef),
-      lvl2dimRef, dim2lvlRef, (OverheadType) ptrTp, (OverheadType) indTp,
-      (PrimaryType) valTp, (Action) action, ptr);
-  }
-#endif
 
 namespace LAPIS
 {
@@ -117,6 +95,7 @@ namespace LAPIS
     virtual void syncDevice() = 0;
     bool modified_host = false;
     bool modified_device = false;
+    DualViewBase* parent;
   };
 
   template<typename DataType, typename Layout>
@@ -129,7 +108,9 @@ namespace LAPIS
     static constexpr bool hostAccessesDevice = Kokkos::SpaceAccessibility<Kokkos::DefaultHostExecutionSpace, typename DeviceView::memory_space>::accessible;
 
     // Default constructor makes empty views and self as parent.
-    DualView() : device_view(), host_view(), parent(this) {}
+    DualView() : device_view(), host_view() {
+      parent = this;
+    }
 
     // Constructor for allocating a new view.
     // Does not actually allocate anything yet; instead 
@@ -156,14 +137,37 @@ namespace LAPIS
 
     // Constructor which is given explicit device and host views, and a parent.
     // This can be used for subviewing/casting operations.
-    // Note: d,h should view the same memory as parent, but they can
+    // Note: d,h should alias parent's memory, but they can
     // have a different data type and layout.
     DualView(DeviceView d, HostView h, DualViewBase* parent_)
-      : device_view(d), host_view(h), parent(parent_)
-    {}
+      : device_view(d), host_view(h)
+    {
+      parent = parent_;
+      // Walk up to the top-level DualView (which has itself as parent).
+      // This is important because its modify flags must be used for itself and all children.
+      // Children have their own flag members, but they are not used or kept in sync with parent.
+      while(parent->parent != parent)
+        parent = parent->parent;
+    }
 
-    // Constructor for a host view from an external source (e.g. python)
-    DualView(HostView h)
+    // Constructor for a device view from an external source (e.g. Kokkos-based application)
+    DualView(DeviceView d)
+    {
+      modified_device = true;
+      if constexpr(deviceAccessesHost) {
+        host_view = HostView(d.data(), d.layout());
+      }
+      else {
+        host_view = HostView(Kokkos::view_alloc(Kokkos::WithoutInitializing, d.label() + "_host"), d.layout());
+      }
+      device_view = d;
+      parent = this;
+    }
+
+    // Constructor for a host view from an external source (e.g. python).
+    // Use SFINAE to enable this only when DeviceView and HostView have different types/spaces,
+    // since otherwise it would be a duplicate definition of the DeviceView constructor above.
+    DualView(HostView h, typename std::enable_if_t<!std::is_same_v<DeviceView, HostView>>* = nullptr)
     {
       modified_host = true;
       if constexpr(deviceAccessesHost) {
@@ -196,6 +200,16 @@ namespace LAPIS
       return *this;
     }
 
+    // General shallow-copy from one DualView to another
+    // (used by static -> dynamic conversion)
+    template<typename OtherData, typename OtherLayout>
+    DualView(const DualView<OtherData, OtherLayout>& other)
+    {
+      device_view = other.device_view;
+      host_view = other.host_view;
+      parent = other.parent;
+    }
+
     void modifyHost()
     {
       parent->modified_host = true;
@@ -206,9 +220,23 @@ namespace LAPIS
       parent->modified_device = true;
     }
 
+    bool modifiedHost()
+    {
+      // note: parent may just point to this
+      return parent->modified_host;
+    }
+
+    bool modifiedDevice()
+    {
+      // note: parent may just point to this
+      return parent->modified_device;
+    }
+
     void syncHost() override
     {
       if (device_view.data() == host_view.data()) {
+        // Imitating Kokkos::DualView behavior: if device and host are the same space
+        // then this sync (if required) is equivalent to a fence.
         if(parent->modified_device) {
           parent->modified_device = false;
           Kokkos::fence();
@@ -250,7 +278,16 @@ namespace LAPIS
 
     DeviceView device_view;
     HostView host_view;
-    DualViewBase* parent;
   };
+
+  inline int threadParallelVectorLength(int par) {
+    if (par < 1)
+      return 1;
+    int max_vector_length = TeamPolicy::vector_length_max();
+    int vector_length = 1;
+    while(vector_length < max_vector_length && vector_length * 6 < par) vector_length *= 2;
+    return vector_length;
+  }
+
 } // namespace LAPIS
 

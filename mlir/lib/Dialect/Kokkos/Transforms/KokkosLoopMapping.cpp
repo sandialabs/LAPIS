@@ -105,6 +105,16 @@ static bool opNeedsSingle(Operation *op) {
          isa<kokkos::UpdateReductionOp>(op);
 }
 
+// If v is the result of a scalar cast op, return the input to cast
+// This may trace through multiple different ops
+static Value followCast(Value v) {
+  auto op = v.getDefiningOp();
+  if(op && isa<arith::IndexCastOp, arith::IndexCastUIOp, arith::ExtUIOp>(op)) {
+    return followCast(op->getOperand(0));
+  }
+  return v;
+}
+
 // If possible, compute an estimate for the maximum level of parallelism
 // for RangeParallelOp ops nested within topParallel at the given level.
 // This may insert ops before topParallel to
@@ -141,6 +151,7 @@ static LogicalResult estimateParallelism(Value &parallelism,
   for (kokkos::RangeParallelOp nested : nestedLoops) {
     bool matchesPattern = true;
     for (Value bound : nested.getUpperBound()) {
+      bound = followCast(bound);
       // If bound is scoped outside topParallel's body, then we already know
       // it's loop-invariant. (enclosingRegion contains topParallel, and
       // bound.getParentRegion() contains bound)
@@ -191,8 +202,8 @@ static LogicalResult estimateParallelism(Value &parallelism,
             followsCsrPattern = false;
             break;
           }
-          Value B = sub.getLhs();
-          Value A = sub.getRhs();
+          Value B = followCast(sub.getLhs());
+          Value A = followCast(sub.getRhs());
           auto Aload = dyn_cast<memref::LoadOp>(A.getDefiningOp());
           auto Bload = dyn_cast<memref::LoadOp>(B.getDefiningOp());
           if (!Aload || !Bload) {
@@ -215,8 +226,8 @@ static LogicalResult estimateParallelism(Value &parallelism,
             followsCsrPattern = false;
             break;
           }
-          Value Aindex = Aload.getIndices().front();
-          Value Bindex = Bload.getIndices().front();
+          Value Aindex = followCast(Aload.getIndices().front());
+          Value Bindex = followCast(Bload.getIndices().front());
           if (Aindex != induction1D) {
             followsCsrPattern = false;
             break;
@@ -226,9 +237,9 @@ static LogicalResult estimateParallelism(Value &parallelism,
             followsCsrPattern = false;
             break;
           }
-          if (!(Badd.getLhs() == induction1D &&
+          if (!(followCast(Badd.getLhs()) == induction1D &&
                 kokkos::valueIsIntegerConstantOne(Badd.getRhs())) &&
-              !(Badd.getRhs() == induction1D &&
+              !(followCast(Badd.getRhs()) == induction1D &&
                 kokkos::valueIsIntegerConstantOne(Badd.getLhs()))) {
             followsCsrPattern = false;
             break;
@@ -248,10 +259,11 @@ static LogicalResult estimateParallelism(Value &parallelism,
         if (!enclosingRegion->isProperAncestor(bound.getParentRegion()))
           boundsToMultiply.push_back(bound);
         else {
+          auto indexType = rewriter.getIndexType();
           // We know that we previously matched the CSR iteration pattern,
           // so all these casts will succeed
-          arith::SubIOp sub = cast<arith::SubIOp>(bound.getDefiningOp());
-          auto Aload = cast<memref::LoadOp>(sub.getRhs().getDefiningOp());
+          arith::SubIOp sub = cast<arith::SubIOp>(followCast(bound).getDefiningOp());
+          auto Aload = cast<memref::LoadOp>(followCast(sub.getRhs()).getDefiningOp());
           auto offsets = Aload.getMemref();
           Value zero =
               rewriter.create<arith::ConstantIndexOp>(topParallel->getLoc(), 0);
@@ -268,9 +280,17 @@ static LogicalResult estimateParallelism(Value &parallelism,
               rewriter
                   .create<memref::LoadOp>(topParallel->getLoc(), offsets, upper)
                   .getResult();
+          offsetUpper = 
+              rewriter
+                  .create<arith::IndexCastOp>(topParallel->getLoc(), indexType, offsetUpper)
+                  .getResult();
           Value offsetLower =
               rewriter
                   .create<memref::LoadOp>(topParallel->getLoc(), offsets, zero)
+                  .getResult();
+          offsetLower = 
+              rewriter
+                  .create<arith::IndexCastOp>(topParallel->getLoc(), indexType, offsetLower)
                   .getResult();
           Value diff = rewriter
                            .create<arith::SubIOp>(topParallel->getLoc(),

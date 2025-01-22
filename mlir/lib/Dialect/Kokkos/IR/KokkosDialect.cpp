@@ -499,16 +499,27 @@ func::FuncOp getCalledFunction(func::CallOp callOp) {
       SymbolTable::lookupNearestSymbolFrom(callOp, sym));
 }
 
-MemorySpace getMemSpace(Value v) {
-  // First, any value that is passed to or returned from an extern function
-  // is assumed to be represented on host (so either host or dualview)
+bool funcHasBody(func::FuncOp op) {
+  return op.getCallableRegion() != nullptr;
+}
+
+// Tally the memory spaces where v is accessed, without analyzing v's parent memref(s) if any.
+// We already assume that v has no parent (it's not the result of a cast/reshape like op)
+static MemorySpace getMemSpaceImpl(Value v) {
+  // If v is a function parameter, it's DualView automatically
+  if(getFuncWithParameter(v))
+    return MemorySpace::DualView;
+  // If v is the result of a call to a non-extern function, it's also a DualView automatically
+  func::CallOp producingCall = v.getDefiningOp<func::CallOp>();
+  if(producingCall && funcHasBody(getCalledFunction(producingCall)))
+    return MemorySpace::DualView;
   bool hostRepresented = false;
   bool deviceRepresented = false;
-  // device represented if and only if v is used in an op enclosed in a
-  // kokkos.team_parallel, kokkos.thread_parallel or a kokkos.range_parallel
-  // with execution space == Device.
   for (auto &use : v.getUses()) {
     Operation *usingOp = use.getOwner();
+    // device represented if v is used in an op enclosed in a
+    // kokkos.team_parallel, kokkos.thread_parallel or a kokkos.range_parallel
+    // with execution space == Device.
     if (usingOp->getParentOfType<kokkos::ThreadParallelOp>() ||
         usingOp->getParentOfType<kokkos::TeamParallelOp>()) {
       deviceRepresented = true;
@@ -544,8 +555,18 @@ MemorySpace getMemSpace(Value v) {
       // Direct element access outside of any parallel loop must be on host.
       hostRepresented = true;
     }
-    // All other cases are ops that use the memref but don't access its memory
-    // (dim, subview, cast, etc)
+    else if(isa<memref::ReinterpretCastOp, memref::CastOp, memref::SubViewOp>(usingOp)) {
+      // TODO: these op types are not a complete list
+      // usingOp does not directly access v's memory, but its result can be accessed.
+      // Recursively find the usages of this result too.
+      MemorySpace childSpace = getMemSpaceImpl(usingOp->getResult(0));
+      if(childSpace == MemorySpace::Host || childSpace == MemorySpace::DualView) {
+        hostRepresented = true;
+      }
+      if(childSpace == MemorySpace::Device || childSpace == MemorySpace::DualView) {
+        deviceRepresented = true;
+      }
+    }
   }
   // Finally, if v is a result of a call, make sure it's represented correctly.
   // If it's the result of a call to an extern function, assume it's present on
@@ -562,8 +583,13 @@ MemorySpace getMemSpace(Value v) {
   // and join the spaces of all possible returned values.
   // Note: if v appears to be used on neither host nor device, put it on host.
   if (!deviceRepresented) {
-    // either host only, or neither
-    return MemorySpace::Host;
+    if (hostRepresented)
+      return MemorySpace::Host;
+    else {
+      // If v nor any children are accessed directly, it must be a function parameter.
+      // Put it on device.
+      return MemorySpace::Device;
+    }
   } else {
     // Device represented
     if (hostRepresented)
@@ -571,6 +597,69 @@ MemorySpace getMemSpace(Value v) {
     else
       return MemorySpace::Device;
   }
+}
+
+MemorySpace getMemSpace(Value v) {
+  auto op = v.getDefiningOp();
+  if(op && isa<memref::ReinterpretCastOp, memref::CastOp, memref::SubViewOp>(op)) {
+    // op's first operand is the "parent" memref of v.
+    // Recursively get the memory space of the parent. If it's a DualView then v needs to be one also.
+    Value parent = op->getOperand(0);
+    return getMemSpace(parent);
+  }
+  // v has no parent, so we can analyze its space top-down now.
+  return getMemSpaceImpl(v);
+}
+
+func::FuncOp getFuncWithParameter(Value v) {
+  // Early-out: if an operation produced v, it's definitely not a function parameter
+  if(v.getDefiningOp())
+    return nullptr;
+  Region* r = v.getParentRegion();
+  func::FuncOp f = r->getParentOfType<func::FuncOp>();
+  Region& body = f.getBody();
+  // v is a func parameter iff it's one of body's arguments.
+  for(auto arg : body.getArguments()) {
+    if(arg == v) return f;
+  }
+  return nullptr;
+}
+
+// Overload of getMemSpace for global memref declarations
+// It just iterates over all the memref.get_global ops that reference 
+MemorySpace getMemSpace(memref::GlobalOp global) {
+  // Get the module that encloses global
+  ModuleOp module = global->getParentOfType<ModuleOp>();
+  // Then walk all the GetGlobal ops within module
+  bool usedOnHost = false;
+  bool usedOnDevice = false;
+  module->walk([&](memref::GetGlobalOp gg) {
+    // Check usage of gg, if it references global by name.
+    // note: StringRef::compare is like strcmp; 0 means equal.
+    if(!global.getSymName().compare(gg.getName())) {
+      MemorySpace usageSpace = getMemSpace(gg.getResult());
+      if(usageSpace == MemorySpace::DualView || usageSpace == MemorySpace::Host) {
+        usedOnHost = true;
+      }
+      if(usageSpace == MemorySpace::DualView || usageSpace == MemorySpace::Device) {
+        usedOnDevice = true;
+      }
+    }
+  });
+  if(usedOnDevice)
+    return usedOnHost ? MemorySpace::DualView : MemorySpace::Device;
+  // If not used at all, default to host
+  return MemorySpace::Host;
+}
+
+bool isGlobalUsed(memref::GlobalOp global) {
+  ModuleOp module = global->getParentOfType<ModuleOp>();
+  bool used = false;
+  module->walk([&](memref::GetGlobalOp gg) {
+    if(!global.getSymName().compare(gg.getName()))
+      used = true;
+  });
+  return used;
 }
 
 // Get the parallel nesting depth of the given Op

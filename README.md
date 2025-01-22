@@ -29,7 +29,7 @@ are set to the paths of these repositories.
 
 The following commands will clone the correct versions of all the repositories and set these environment variables.
 ```
-git clone git@github.com:MPACT-ORG/mpact-compiler
+git clone https://github.com/MPACT-ORG/mpact-compiler
 cd mpact-compiler
 git checkout 556009cd
 git submodule update --init --recursive
@@ -37,11 +37,11 @@ export MPACT_SRC=`pwd`
 export TORCH_MLIR_SRC="$MPACT_SRC/externals/torch-mlir"
 export LLVM_SRC="$TORCH_MLIR_SRC/externals/llvm-project"
 cd ..
-git clone git@github.com:sandialabs/LAPIS
+git clone https://github.com/sandialabs/LAPIS
 cd LAPIS
 export LAPIS_SRC=`pwd`
 cd ..
-git clone -b master git@github.com:kokkos/kokkos
+git clone -b master https://github.com/kokkos/kokkos
 ```
 
 Building with ninja is not required but useful as it automatically uses all cores for parallel compilation. Pass ``-Gninja`` to
@@ -92,15 +92,35 @@ cd ..
 This recipe builds LAPIS as an external project with LLVM.
 torch-mlir and mpact require this recipe, but torch-mlir and mpact are still optional.
 mpact requires torch-mlir, however.
-**This requires ninja due to an issue in torch-mlir. make will not work.**
+**ninja is required due to an issue in torch-mlir. make will not work.**
 ```
 # If enabling torch-mlir, need to install Python dependencies first.
 # This can be done inside a python virtual env.
 
 cd $TORCH_MLIR_SRC
-pip install -r requirements.txt
-pip install -r torchvision-requirements.txt
+pip install -r build-requirements.txt
+pip install -r test-requirements.txt
+```
 
+Then install the torch and torchvision Python packages from source.
+It needs to be from source because torch-mlir only works with specific nightly versions
+of these packages, but the package repository only stores nightly binaries for a limited amount of time.
+
+A CPU-only build is sufficient for LAPIS.
+* [torch repository](https://github.com/pytorch/pytorch), version 995ec16c)
+* [torchvision repository](https://github.com/pytorch/vision), version c7ea645b)
+[Instructions for building from source can be found here](https://github.com/pytorch/pytorch#from-source)
+
+These Git SHAs correspond to the nightly versions 2.5.0.dev20240909 and 0.20.0.dev20240909 respectively.
+*Note for developers:* from installed nightly versions, the exact Git versions can be found with:
+```
+import torch
+import torchvision
+print(torch.version.git_version)
+print(torchvision.version.git_version)
+```
+
+```
 cd $WORKSPACE
 mkdir build
 cd build

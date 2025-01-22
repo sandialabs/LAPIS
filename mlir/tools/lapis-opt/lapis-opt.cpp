@@ -17,12 +17,14 @@
 #include "lapis/Dialect/PartTensor/Pipelines/Passes.h"
 #include "lapis/Dialect/PartTensor/Transforms/Passes.h"
 #endif
+#include "mlir/InitAllDialects.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/IR/ValueBoundsOpInterfaceImpl.h"
 #include "mlir/Dialect/Arith/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Bufferization/Transforms/FuncBufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Func/Extensions/AllExtensions.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Transforms/AllInterfaces.h"
 #include "mlir/Dialect/Linalg/Transforms/RuntimeOpVerification.h"
@@ -59,7 +61,7 @@ int main(int argc, char **argv) {
   DialectRegistry registry;
   registry.insert<
 #ifdef ENABLE_PART_TENSOR
-      mlir::part_tensor::PartTensorDialect, 
+      mlir::part_tensor::PartTensorDialect,
 #endif
       mlir::LLVM::LLVMDialect, mlir::vector::VectorDialect,
       mlir::bufferization::BufferizationDialect, mlir::linalg::LinalgDialect,
@@ -89,6 +91,9 @@ int main(int argc, char **argv) {
   vector::registerBufferizableOpInterfaceExternalModels(registry);
 
   kernel::registerKernelFusionDriver();
+
+  LLVM::registerInlinerInterface(registry);
+  func::registerAllExtensions(registry);
 
   // Register LAPIS pipelines and passes
 #ifdef ENABLE_PART_TENSOR

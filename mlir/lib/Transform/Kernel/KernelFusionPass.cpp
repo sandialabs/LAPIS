@@ -1,8 +1,3 @@
-/* TODO: check for 'fuse_with' attribute
- * TODO: verify parallel iteration spaces match
- *  - KernelDomainFusion expects this to be done; legality is checked in KDF
- */
-
 #include <map>
 #include <set>
 #include <deque>
@@ -13,11 +8,15 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/Types.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/Casting.h"
+
+#include <iostream>
 
 namespace mlir {
 namespace kernel {
@@ -75,19 +74,49 @@ CallMap getCallMap(FuncOp mainFuncOp) {
   return callMap;
 }
 
-FailureOr<OperandRange> inferShape(Value tensor) {
-  if (Operation *op = tensor.getDefiningOp()) {
-    if (EmptyOp emptyOp = dyn_cast<EmptyOp>(op))
-      return emptyOp.getOperands();
-    if (AllocTensorOp allocTensorOp = dyn_cast<AllocTensorOp>(op))
-      return allocTensorOp.getOperands();
+int computeCallOpAsymptoticCost(ModuleOp module, CallOp call) {
+  /* There are two cases worth considering here.
+   *
+   * 1. Shapes are known by both the caller and the callee. Given this, we do
+   * not need to do any work to determine the asymptotic cost of the call.
+   *
+   * 2. Shapes are only known by the caller and must be inferred within the
+   * scope of the callee to determine the cost. This allows kernels (callees)
+   * to be generalized (e.g. a single matrix multiplication routine for matrices
+   * of any size)
+   *
+   * Case 2 requires propagating information from the caller into the callee.
+   * Arguments need to be mapped to linalgop operands. From there, we can
+   * utilize shape information to compute loop sizes, compute the product of all
+   * loops, and sum the cost of all linalgops within a particular call.
+   */
+  int cost = 0;
+
+  // get associated FuncOp
+  FuncOp func = dyn_cast<FuncOp>(SymbolTable::lookupNearestSymbolFrom(
+    module, call.getCallableForCallee().get<SymbolRefAttr>()
+  ));
+
+  // use existing functionality to compute cost
+  for (LinalgOp laOp : func.getOps<LinalgOp>()) {
+    int laOp_cost = 1;
+    for (auto loop_size : laOp.computeStaticLoopSizes())
+      laOp_cost *= loop_size;
+    cost += laOp_cost;
   }
-  return failure();
+
+  return cost;
+}
+
+void reduceIntermediateSizes(FuncOp main, DenseMap<CallOp, int> callsToCosts) {
+  /* use asymptotic cost analysis to reorder arguments such that the size of the
+   * intermediate variables is minimized and the program remains legal. */
+
 }
 
 // NOTE: we are fusing kernel calls using kernel definitions, use operand/result
 // definitions in the call to map them to the operations in the kernel
-bool parallelIterationSpacesMatch(mlir::ModuleOp module, CallOp firstCall,
+bool parallelIterationSpacesMatch(ModuleOp module, CallOp firstCall,
                                   CallOp secondCall) {
   // get the FuncOps
   FuncOp firstCallee = dyn_cast<FuncOp>(SymbolTable::lookupNearestSymbolFrom(
@@ -122,7 +151,7 @@ bool parallelIterationSpacesMatch(mlir::ModuleOp module, CallOp firstCall,
         for (OpOperand *sOp : sOperands) {
           Value sArg = secondCalleeToCall.lookupOrNull(sOp->get());
 
-          // check that axes match 
+          // check that axes match
           if (fArg == sArg && isa<TensorType>(fArg.getType())) {
           }
         }
@@ -134,7 +163,7 @@ bool parallelIterationSpacesMatch(mlir::ModuleOp module, CallOp firstCall,
 }
 
 bool markedForFusion(CallOp keyKernel, CallOp valKernel) {
-  // FIXME: segfault if one of the kernels does not have this attribute 
+  // FIXME: segfault if one of the kernels does not have this attribute
   if (!keyKernel->hasAttr("fuse_with") ||
       !valKernel->hasAttr("fuse_with")) {
     return false;
@@ -205,7 +234,7 @@ FusionSetVector createFusionSets(mlir::ModuleOp module, FuncOp mainFuncOp,
     bool fusionLegal = true; // FIXME: this is not properly checked right now
     for (auto val : callMap[kernelToFuse]) {
       // fusion legal -> update everything
-      fusionLegal = parallelIterationSpacesMatch(module, kernelToFuse, val); 
+      fusionLegal = parallelIterationSpacesMatch(module, kernelToFuse, val);
       if (fusionLegal && markedForFusion(kernelToFuse, val)) {
         kernelSet.extract(val);
         fusionSets[fusionSetIndex].push_back(val);
@@ -242,15 +271,19 @@ struct KernelFusionPass : impl::KernelFusionPassBase<KernelFusionPass> {
       }
     }
 
-    // 1. identify candidate kernels 
+    // 0. compute asymptotic cost of calls
+    DenseMap<CallOp, int> callsToCosts;
+    for (auto call : mainFuncOp.getOps<CallOp>()) {
+      callsToCosts[call] = computeCallOpAsymptoticCost(module, call);
+    }
+
+    // 1. identify candidate kernels
     CallMap callMap = getCallMap(mainFuncOp);
 
     // 2. create (profitable) fusion sets
     FusionSetVector fusionSets = createFusionSets(module, mainFuncOp, callMap);
 
     // 3. for each fusion set, create a new kernel that calls each subkernel
-    // NOTE: we preserve MLIR ordering to respect dependences (probably not
-    // permanent; probably not a good idea but :shrug: early implementation) 
     int fusedKernelCounter = 0;
     for (auto fusionSet : fusionSets) {
       if (fusionSet.empty())
@@ -307,7 +340,7 @@ struct KernelFusionPass : impl::KernelFusionPassBase<KernelFusionPass> {
           if (userInFusionSet)
             continue;
 
-          // add result to the type of the fused kernel 
+          // add result to the type of the fused kernel
           newResults.push_back(res);
           resultsToIndexMap[res] = fusedKernelResultIndex;
           fusedKernelResultIndex++;
@@ -374,7 +407,7 @@ struct KernelFusionPass : impl::KernelFusionPassBase<KernelFusionPass> {
                 if (arg == result) {
                   auto newArg = newCallHandle.getResult(argIndex);
                   callsToIntermediateValues[userCall].push_back(
-                    std::make_pair(newArg, argIndex) 
+                    std::make_pair(newArg, argIndex)
                   );
                 }
                 argIndex++;

@@ -35,9 +35,10 @@ module = fx.export_and_import(
     torch.ones(1, 3, 224, 224),
     output_type="linalg-on-tensors",
     func_name=resnet18.__class__.__name__,
+    experimental_support_mutation=True
 )
-backend = KokkosBackend.KokkosBackend()
-compiled = backend.compile_sparse(module)
+backend = KokkosBackend.KokkosBackend(dump_mlir=True)
+compiled = backend.compile(module)
 #fx_module = backend.load(compiled)
 
 params = {
