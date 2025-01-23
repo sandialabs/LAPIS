@@ -162,6 +162,7 @@ struct KokkosMdrangeIterationPass
     virtual int eval(const Ctx &ctx) = 0;
     virtual void dump(llvm::raw_fd_ostream &os) = 0;
     virtual std::vector<std::string> unknowns() const = 0;
+    virtual std::shared_ptr<Expr> clone() const = 0;
     virtual ~Expr() {}
   };
 
@@ -199,6 +200,10 @@ struct KokkosMdrangeIterationPass
       return lhs_->eval(ctx) + rhs_->eval(ctx);
     }
 
+    virtual std::shared_ptr<Expr> clone() const override {
+      return make(lhs_->clone(), rhs_->clone());
+    }
+
     static std::shared_ptr<Expr> make(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) {
       auto lhs_const = llvm::dyn_cast<Constant>(lhs.get());
       auto rhs_const = llvm::dyn_cast<Constant>(rhs.get());
@@ -226,6 +231,10 @@ struct KokkosMdrangeIterationPass
       return lhs_->eval(ctx) + rhs_->eval(ctx);
     }
 
+    virtual std::shared_ptr<Expr> clone() const override {
+      return make(lhs_->clone(), rhs_->clone());
+    }
+
     static std::shared_ptr<Expr> make(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) {
       auto lhs_const = llvm::dyn_cast<Constant>(lhs.get());
       auto rhs_const = llvm::dyn_cast<Constant>(rhs.get());
@@ -251,6 +260,10 @@ struct KokkosMdrangeIterationPass
 
     virtual int eval(const Ctx &ctx) override {
       return lhs_->eval(ctx) * rhs_->eval(ctx);
+    }
+
+    virtual std::shared_ptr<Expr> clone() const override {
+      return make(lhs_->clone(), rhs_->clone());
     }
 
     static std::shared_ptr<Expr> make(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) {
@@ -288,6 +301,10 @@ struct KokkosMdrangeIterationPass
       return lhs_->eval(ctx) / rhs_->eval(ctx);
     }
 
+    virtual std::shared_ptr<Expr> clone() const override {
+      return make(lhs_->clone(), rhs_->clone());
+    }
+
     static std::shared_ptr<Expr> make(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) {
       auto lhs_const = llvm::dyn_cast<Constant>(lhs.get());
       auto rhs_const = llvm::dyn_cast<Constant>(rhs.get());
@@ -319,6 +336,10 @@ struct KokkosMdrangeIterationPass
       return value_;
     }
 
+    virtual std::shared_ptr<Expr> clone() const override {
+      return make(value_);
+    }
+
     virtual void dump(llvm::raw_fd_ostream &os) override {
       os << value_;
     }
@@ -342,6 +363,10 @@ struct KokkosMdrangeIterationPass
 
     virtual int eval(const Ctx &ctx) override {
       return ctx.values.at(name_);
+    }
+
+    virtual std::shared_ptr<Expr> clone() const override {
+      return make(name_);
     }
 
     virtual void dump(llvm::raw_fd_ostream &os) override {
@@ -616,8 +641,21 @@ public:
 };
 
 
-std::shared_ptr<Expr> iteration_space_size(scf::ParallelOp &op, int dim) {
-#if 0
+// FIXME: this returns things like this:
+// <block argument> of type 'index' at index: 2
+static std::string get_value_name(mlir::Value &value) {
+
+  if (mlir::isa<BlockArgument>(value)) {
+    auto ba = mlir::cast<BlockArgument>(value);
+    return std::string("block") +std::to_string(uintptr_t(ba.getOwner())) + "_arg" + std::to_string(ba.getArgNumber());
+  } else {
+    return value.getDefiningOp()->getName().getStringRef().str();
+  }
+}
+
+
+static std::shared_ptr<Expr> iteration_space_size(scf::ParallelOp &op, int dim) {
+
     auto lb = op.getLowerBound()[dim];
     auto ub = op.getUpperBound()[dim];
     auto st = op.getStep()[dim];
@@ -626,74 +664,79 @@ std::shared_ptr<Expr> iteration_space_size(scf::ParallelOp &op, int dim) {
     std::shared_ptr<Expr> ubExpr;
     std::shared_ptr<Expr> stExpr;
 
-    // Assuming the bounds and steps are constant integers for simplicity
     if (auto lbConst = lb.getDefiningOp<arith::ConstantIndexOp>()) {
-      if (auto ubConst = ub.getDefiningOp<arith::ConstantIndexOp>()) {
-        if (auto stepConst = step.getDefiningOp<arith::ConstantIndexOp>()) {
-          int64_t lbValue = lbConst.value();
-          int64_t ubValue = ubConst.value();
-          int64_t stepValue = stepConst.value();
+      lbExpr = Constant::make(lbConst.value());
+    } else {
+      lbExpr = Unknown::make(get_value_name(lb));
+    }
 
-          int64_t iterationSpaceSize = (ubValue - lbValue + stepValue - 1) / stepValue;
-          llvm::outs() << "Iteration space size for dimension " << i << ": " << iterationSpaceSize << "\n";
-        }
-      }
+   if (auto ubConst = ub.getDefiningOp<arith::ConstantIndexOp>()) {
+      ubExpr = Constant::make(ubConst.value());
+    } else {
+      ubExpr = Unknown::make(get_value_name(ub));
+    }
+  
+  if (auto stepConst = st.getDefiningOp<arith::ConstantIndexOp>()) {
+      stExpr = Constant::make(stepConst.value());
+    } else {
+      stExpr = Unknown::make(get_value_name(st));
     }
 
     // (ub - lb + step - 1) / step
+    // TODO: this could be a special DivCeil operation or something
     auto num = Add::make(Sub::make(ubExpr, lbExpr), Sub::make(stExpr, Constant::make(1)));
-    return Div::make(num, lbExpr)
-#endif
+    return Div::make(num, stExpr);
 }
 
-std::shared_ptr<Expr> trip_count_expr(scf::ParallelOp &op) {
-#if 0
-    auto lowerBounds = parallelOp.getLowerBound();
-
-    std::shared_ptr<Expr> total = iteration_space_size(0);
-
+// return an Expr representing the product of the iteration space of all dimensions
+static std::shared_ptr<Expr> trip_count_expr(scf::ParallelOp &op) {
+    auto lowerBounds = op.getLowerBound();
+    std::shared_ptr<Expr> total = iteration_space_size(op, 0);
     for (unsigned i = 1; i < lowerBounds.size(); ++i) {
-
-      total = Mul::make(total, iteration_space_size(i));
-
-
-
-      }
-#endif
+      total = Mul::make(total, iteration_space_size(op, i));
+    }
+    return total;
 }
 
 using ParallelTripCounts = VecMap<scf::ParallelOp, std::shared_ptr<Expr>>;
 
 static ParallelTripCounts build_parallel_trip_counts(ModuleOp &mod) {
-#if 0
+
   ParallelTripCounts PTC;
 
     mod.walk([&](Operation *op) {
-      // skip memrefs outside a parallel region
       if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
 
+        // create an expression representing the trip count for this loop
+        std::shared_ptr<Expr> count = trip_count_expr(parallelOp);
+        PTC[parallelOp] = count;
 
-
-
-
-
-        MemrefInductionCosts costs = build_parallel_trip_counts(parallelOp);
-        for (const auto &kv : costs) {
-          PTC[kv.first] = kv.second;
-        }
+        // descend into the body of the loop
+        ParallelTripCounts counts = build_parallel_trip_counts(parallelOp, count);
       }
     }); // walk
 
 
   return PTC;
-#endif
 }
 
-static ParallelTripCounts build_parallel_trip_counts(scf::ParallelOp &parentOp) {
-
+static ParallelTripCounts build_parallel_trip_counts(scf::ParallelOp &parentOp, std::shared_ptr<Expr> cost) {
   ParallelTripCounts PTC;
-  return PTC;
 
+  parentOp.getBody()->walk([&](Operation *op) {
+      if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
+
+        // create an expression representing the trip count for this loop
+        std::shared_ptr<Expr> count = trip_count_expr(parallelOp);
+        count = Mul::make(count, cost->clone());
+        PTC[parallelOp] = count;
+
+        // descend into the body of the loop
+        ParallelTripCounts counts = build_parallel_trip_counts(parallelOp, count);
+      }
+  });
+
+  return PTC;
 }
 
 // map of (Operation*, Value) -> Cost
@@ -996,11 +1039,22 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, std::vec
     llvm::outs() << "====\ndump_ops\n====\n";
     dump_ops(module);
 
+    llvm::outs() << "====\nbuild_parallel_trip_counts\n====\n";
+    ParallelTripCounts tripCounts = build_parallel_trip_counts(module);
+
+    for (auto &kv : tripCounts) {
+      const std::shared_ptr<Expr> &trip = kv.second;
+      llvm::outs() << "parallel op: ";
+      kv.first.print(llvm::outs());
+      llvm::outs() << " trip: ";
+      trip->dump(llvm::outs());
+      llvm::outs() << "\n";
+    }
+
     llvm::outs() << "====\nbuild_cost_table\n====\n";
     // FIXME: some helper function to tighten up `stack` scope
     std::vector<scf::ParallelOp> stack;
     MemrefInductionCosts costTable = build_cost_table(module, stack);
-
 
     llvm::outs() << "====\nmodel reordered induction vars\n====\n";
     size_t minCost = std::numeric_limits<size_t>::max();
