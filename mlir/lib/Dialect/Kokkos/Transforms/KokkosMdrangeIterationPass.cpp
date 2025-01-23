@@ -743,7 +743,7 @@ static ParallelTripCounts build_parallel_trip_counts(scf::ParallelOp &parentOp, 
 // map of the cost model for a given memref / induction variable pair
 using MemrefInductionCosts = VecMap<std::pair<Operation*, mlir::Value>, Cost>;
 
-static MemrefInductionCosts build_cost_table(ModuleOp &mod, std::vector<scf::ParallelOp> &stack) {
+static MemrefInductionCosts build_cost_table(ModuleOp &mod, ParallelTripCounts &tripCounts, std::vector<scf::ParallelOp> &stack) {
 
     MemrefInductionCosts MIC;
 
@@ -751,7 +751,7 @@ static MemrefInductionCosts build_cost_table(ModuleOp &mod, std::vector<scf::Par
       // skip memrefs outside a parallel region
       if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
         stack.push_back(parallelOp);
-        MemrefInductionCosts costs = build_cost_table(parallelOp, stack);
+        MemrefInductionCosts costs = build_cost_table(parallelOp, tripCounts, stack);
         stack.pop_back();
         for (const auto &kv : costs) {
           MIC[kv.first] = kv.second;
@@ -762,14 +762,14 @@ static MemrefInductionCosts build_cost_table(ModuleOp &mod, std::vector<scf::Par
     return MIC;
   }
 
-static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, std::vector<scf::ParallelOp> &stack) {
+static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, ParallelTripCounts &tripCounts, std::vector<scf::ParallelOp> &stack) {
 
     MemrefInductionCosts MIC;
 
     parentOp.getBody()->walk([&](Operation *op) {
       if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
         stack.push_back(parallelOp);
-        MemrefInductionCosts costs = build_cost_table(parallelOp, stack);
+        MemrefInductionCosts costs = build_cost_table(parallelOp, tripCounts, stack);
         stack.pop_back();
         for (const auto &kv : costs) {
           MIC[kv.first] = kv.second;
@@ -823,8 +823,8 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, std::vec
           }
           llvm::outs() << "\n";
 
-          // FIXME: compute trip count
-          MIC[std::make_pair(memrefOp, indVar)] = Cost(dodi, Constant::make(1), 1 /*load cost*/);
+          std::shared_ptr<Expr> tripCount = tripCounts[parentOp];
+          MIC[std::make_pair(memrefOp, indVar)] = Cost(dodi, tripCount, 1 /*load cost*/);
         }
 
 
@@ -877,8 +877,8 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, std::vec
           }
           llvm::outs() << "\n";
 
-          // FIXME: compute trip count
-          MIC[std::make_pair(memrefOp, indVar)] = Cost(dodi, Constant::make(1), 3 /*store cost*/);
+          std::shared_ptr<Expr> tripCount = tripCounts[parentOp];
+          MIC[std::make_pair(memrefOp, indVar)] = Cost(dodi, tripCount, 3 /*store cost*/);
         }
       }
     });
@@ -979,11 +979,11 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, std::vec
       Ctx ctx;
       for (auto &name : unknowns) {
         auto val = log_random_int(gen, 1, 1000000);
-        llvm::outs() << name << ": " << val << "\n";
+        // llvm::outs() << name << ": " << val << "\n";
         ctx.values[name] = val;
       }
       
-      costs.push_back(model.stride_->eval(ctx));
+      costs.push_back(model.stride_->eval(ctx) * model.count_->eval(ctx));
     }
 
     // FIXME: here we do median, is there a principled aggregation strategy?
@@ -1054,7 +1054,7 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, std::vec
     llvm::outs() << "====\nbuild_cost_table\n====\n";
     // FIXME: some helper function to tighten up `stack` scope
     std::vector<scf::ParallelOp> stack;
-    MemrefInductionCosts costTable = build_cost_table(module, stack);
+    MemrefInductionCosts costTable = build_cost_table(module, tripCounts, stack);
 
     llvm::outs() << "====\nmodel reordered induction vars\n====\n";
     size_t minCost = std::numeric_limits<size_t>::max();
