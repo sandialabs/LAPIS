@@ -931,36 +931,18 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
     }
   }
 
-  // FIXME: this should be re-written recursively
   // cost of a module with a given parallel configuration
   static size_t model_cost(ModuleOp &mod, const ParallelConfig &cfg, const MemrefInductionCosts &costTable) {
     size_t cost = 0;
     mod.walk([&](Operation *op) {
-      if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
-        cost += model_cost(parallelOp, cfg, costTable);
+      if (auto memrefOp = dyn_cast<memref::LoadOp>(op)) {
+        cost += model_cost(memrefOp, cfg, costTable);
+      } else if (auto memrefOp = dyn_cast<memref::StoreOp>(op)) {
+        cost += model_cost(memrefOp, cfg, costTable);
       }
     }); // walk
     return cost;
   }
-
-  // model the cost of a parallel operation with a given config
-  static size_t model_cost(scf::ParallelOp &parentOp, const ParallelConfig &cfg, const MemrefInductionCosts &costTable) {
-
-    size_t cost = 0;
-
-    parentOp.getBody()->walk([&](Operation *op) {
-      if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
-        cost += model_cost(parallelOp, cfg, costTable);
-      } else if (auto memrefOp = dyn_cast<memref::LoadOp>(op)) {
-        cost += model_cost(parentOp, memrefOp, cfg, costTable);
-      } else if (auto memrefOp = dyn_cast<memref::StoreOp>(op)) {
-        cost += model_cost(parentOp, memrefOp, cfg, costTable);
-      }
-    });
-
-    return cost;
-  }
-    
 
   static size_t monte_carlo(const Cost &model, int n = 100, int seed = 31337) {
     std::mt19937 gen(seed);
@@ -996,38 +978,41 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
   }
 
   template <typename MemrefOp>
-  static size_t model_cost(scf::ParallelOp &parallelOp, MemrefOp &memrefOp, const ParallelConfig &cfg, const MemrefInductionCosts &costTable) {
+  static size_t model_cost(MemrefOp &memrefOp, const ParallelConfig &cfg, const MemrefInductionCosts &costTable) {
     static_assert(std::is_same_v<MemrefOp, memref::LoadOp> || std::is_same_v<MemrefOp, memref::StoreOp>);
     
-    
-    llvm::outs() << "model cost of ";
-    memrefOp.print(llvm::outs());
-    llvm::outs() << "\n";
+    llvm::outs() << "model cost of " << memrefOp << "...\n";
 
-    if (auto it = cfg.perms_.find(parallelOp); it != cfg.perms_.end()) {
-      llvm::outs() << "found perm for memref's parent parallelOp in config\n";
+    auto parentOp = memrefOp.getOperation()->getParentOp();
+    if (auto parallelOp = dyn_cast<scf::ParallelOp>(parentOp)) {
+      if (auto it = cfg.perms_.find(parallelOp); it != cfg.perms_.end()) {
 
-      const Permutation &perm = it->second;
-      Value rightMostVar = parallelOp.getInductionVars()[perm[perm.size() - 1]];
+        const Permutation &perm = it->second;
+        Value rightMostVar = parallelOp.getInductionVars()[perm[perm.size() - 1]];
 
-      llvm::outs() << "right-most induction var is ";
-      rightMostVar.print(llvm::outs());
-      llvm::outs() << "\n";
-      
+        llvm::outs() << "under permutation, right-most enclosing induction var is " << rightMostVar << "\n";
+        
 
-      // FIXME: why does this work? the table should expect key to be pair<Operation*, Value> not pair<Operation, Value>
-      auto costKey = std::make_pair(memrefOp, rightMostVar);
-      if (auto jt = costTable.find(costKey); jt != costTable.end()) {
-        llvm::outs() << "found cost model in table\n";
-
-        Cost model = jt->second;
-        return monte_carlo(model);
+        // FIXME: why does this work? the table should expect key to be pair<Operation*, Value> not pair<Operation, Value>
+        auto costKey = std::make_pair(memrefOp, rightMostVar);
+        if (auto jt = costTable.find(costKey); jt != costTable.end()) {
+          Cost model = jt->second;
+          size_t cost = monte_carlo(model);
+          llvm::outs() << "..." << memrefOp << " contributes " << cost << "\n";
+          return cost;
+        } else {
+          llvm::outs() << "couldn't find model for memref / induction variable combo\n";
+          return 0;
+        }
+        
+      } else {
+        llvm::outs() << "couldn't find permutation for parent parallel op\n";
+        return 0;
       }
-
+    } else {
+      llvm::outs() << "memrefOp " << memrefOp << " has no parallel parent\n";
+      return 0;
     }
-
-    size_t cost = 0;
-    return cost;
   }
 
 
