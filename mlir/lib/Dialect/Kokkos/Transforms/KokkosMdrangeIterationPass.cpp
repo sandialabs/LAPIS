@@ -708,9 +708,7 @@ static MemrefInductionCosts build_cost_table(ModuleOp &mod, ParallelTripCounts &
         stack.push_back(parallelOp);
         MemrefInductionCosts costs = build_cost_table(parallelOp, tripCounts, stack);
         stack.pop_back();
-        for (const auto &kv : costs) { // FIXME: insert?
-          MIC[kv.first] = kv.second;
-        }
+        MIC.insert(costs.begin(), costs.end());
       }
     }); // walk
 
@@ -800,19 +798,13 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Parallel
         stack.push_back(parallelOp);
         MemrefInductionCosts costs = build_cost_table(parallelOp, tripCounts, stack);
         stack.pop_back();
-        for (const auto &kv : costs) { // FIXME: insert?
-          MIC[kv.first] = kv.second;
-        }
+        MIC.insert(costs.begin(), costs.end());
       } else if (auto memrefOp = dyn_cast<memref::LoadOp>(op)) {
         MemrefInductionCosts costs = get_costs(memrefOp, tripCounts, stack);
-        for (const auto &kv : costs) { // FIXME: insert?
-          MIC[kv.first] = kv.second;
-        }
+        MIC.insert(costs.begin(), costs.end());
       } else if (auto memrefOp = dyn_cast<memref::StoreOp>(op)) {
         MemrefInductionCosts costs = get_costs(memrefOp, tripCounts, stack);
-        for (const auto &kv : costs) { // FIXME: insert?
-          MIC[kv.first] = kv.second;
-        }
+        MIC.insert(costs.begin(), costs.end());
       }
     });
 
