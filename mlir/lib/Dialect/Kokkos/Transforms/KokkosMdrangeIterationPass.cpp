@@ -512,7 +512,7 @@ static std::shared_ptr<Expr> df_dx(Value &f, Value &x) {
         auto memrefShape = memrefType.getShape();
         for (int dim = 0; dim < indexVarDim; ++dim) {
           if (memrefShape[dim] == ShapedType::kDynamic) {
-            std::string name = memrefOp.getOperation()->getName().getStringRef().str() + "_extent" + std::to_string(dim); // FIXME: unique name for each memref dimension
+            std::string name = std::string("memref") + std::to_string(uintptr_t(memrefOp.getOperation())) + "_extent" + std::to_string(dim);
             res = std::make_shared<Mul>(res, Unknown::make(name)); 
           } else {
             res = std::make_shared<Mul>(res, std::make_shared<Constant>(memrefShape[dim]));
@@ -594,7 +594,15 @@ static std::string get_value_name(mlir::Value &value) {
     auto ba = mlir::cast<BlockArgument>(value);
     return std::string("block") +std::to_string(uintptr_t(ba.getOwner())) + "_arg" + std::to_string(ba.getArgNumber());
   } else {
-    return value.getDefiningOp()->getName().getStringRef().str();
+    // mlir::Operation *op = value.getDefiningOp();
+
+    std::string name;
+    llvm::raw_string_ostream os(name);
+    value.print(os);
+    name = name.substr(0, name.find(' ')); // "%blah = ..." -> "%blah"
+
+    // std::string name = op->getName().getStringRef().str() + std::to_string(uintptr_t(op));
+    return name;
   }
 }
 
@@ -816,9 +824,11 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
     return MIC;
   }
 
+  using Permutation = llvm::SmallVector<size_t, 16>;
+
   struct ParallelConfig {
     // permutation of induction variables for each parallel op
-    llvm::DenseMap<scf::ParallelOp, std::vector<size_t>> perms_;
+    llvm::DenseMap<scf::ParallelOp, Permutation> perms_;
   };
 
 
@@ -834,7 +844,7 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
         found = true;
 
         // walk all configurations of this parallel op too
-        std::vector<size_t> perm(get_num_induction_vars(parallelOp));
+        Permutation perm(get_num_induction_vars(parallelOp));
         std::iota(perm.begin(), perm.end(), 0);
         do {
           cfg.perms_[parallelOp] = perm;
@@ -854,7 +864,7 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
     mod.walk([&](Operation *op) {
       if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
 
-        std::vector<size_t> perm(get_num_induction_vars(parallelOp));
+        Permutation perm(get_num_induction_vars(parallelOp));
         std::iota(perm.begin(), perm.end(), 0);
 
         do  {
@@ -941,7 +951,7 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
     if (auto it = cfg.perms_.find(parallelOp); it != cfg.perms_.end()) {
       llvm::outs() << "found perm for memref's parent parallelOp in config\n";
 
-      const std::vector<size_t> &perm = it->second;
+      const Permutation &perm = it->second;
       Value rightMostVar = parallelOp.getInductionVars()[perm[perm.size() - 1]];
 
       llvm::outs() << "right-most induction var is ";
@@ -964,7 +974,7 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
     return cost;
   }
 
-  using Permutation = llvm::SmallVector<int, 16>;
+
 
   // modify `parallelOp` so that its induction variables are permuted according to `permutation`
   static void permute_parallel_op(scf::ParallelOp parallelOp, const Permutation &permutation) {
