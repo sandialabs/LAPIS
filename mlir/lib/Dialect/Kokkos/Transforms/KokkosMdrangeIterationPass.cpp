@@ -589,58 +589,6 @@ static std::vector<Value> all_induction_variables(std::vector<scf::ParallelOp> &
   return vars;
 }
 
-template <typename key_type, typename value_type>
-class VecMap {
-
-public:
-  using iterator = typename std::vector<std::pair<key_type, value_type>>::iterator;
-  using const_iterator = typename std::vector<std::pair<key_type, value_type>>::const_iterator;
-
-private:
-  std::vector<std::pair<key_type, value_type>> data_;
-
-
-public:
-  // Find an iterator to a key-value pair by key
-  auto find(const key_type& key) const {
-    return std::find_if(data_.begin(), data_.end(),
-                        [&key](const auto& pair) { return pair.first == key; });
-  }
-
-  auto find(const key_type& key) {
-    return std::find_if(data_.begin(), data_.end(),
-                        [&key](const auto& pair) { return pair.first == key; });
-  }
-
- // Access value by key without bounds checking
-  value_type& operator[](const key_type& key) {
-    auto it = find(key);
-    if (it != data_.end()) {
-      return it->second;
-    } else {
-      data_.emplace_back(key, value_type{});
-      return data_.back().second;
-    }
-  }
-
-  iterator begin() {
-    return data_.begin();
-  }
-
-  const_iterator begin() const {
-    return data_.begin();
-  }
-
-  iterator end() {
-    return data_.end();
-  }
-
-  const_iterator end() const {
-    return data_.end();
-  }
-};
-
-
 // FIXME: this returns things like this:
 // <block argument> of type 'index' at index: 2
 static std::string get_value_name(mlir::Value &value) {
