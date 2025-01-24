@@ -701,7 +701,7 @@ static MemrefInductionCosts build_cost_table(ModuleOp &mod, ParallelTripCounts &
         stack.push_back(parallelOp);
         MemrefInductionCosts costs = build_cost_table(parallelOp, tripCounts, stack);
         stack.pop_back();
-        for (const auto &kv : costs) {
+        for (const auto &kv : costs) { // FIXME: insert?
           MIC[kv.first] = kv.second;
         }
       }
@@ -709,6 +709,11 @@ static MemrefInductionCosts build_cost_table(ModuleOp &mod, ParallelTripCounts &
 
     return MIC;
   }
+
+static MemrefInductionCosts build_cost_table(ModuleOp &mod, ParallelTripCounts &tripCounts) {
+  std::vector<scf::ParallelOp> stack;
+  return build_cost_table(mod, tripCounts, stack);
+}
 
 static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, ParallelTripCounts &tripCounts, std::vector<scf::ParallelOp> &stack) {
 
@@ -1000,9 +1005,7 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Parallel
     }
 
     llvm::outs() << "====\nbuild_cost_table\n====\n";
-    // FIXME: some helper function to tighten up `stack` scope
-    std::vector<scf::ParallelOp> stack;
-    MemrefInductionCosts costTable = build_cost_table(module, tripCounts, stack);
+    MemrefInductionCosts costTable = build_cost_table(module, tripCounts);
 
     llvm::outs() << "====\nmodel reordered induction vars\n====\n";
     size_t minCost = std::numeric_limits<size_t>::max();
