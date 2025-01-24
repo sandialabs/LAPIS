@@ -698,7 +698,7 @@ static std::shared_ptr<Expr> trip_count_expr(scf::ParallelOp &op) {
     return total;
 }
 
-using ParallelTripCounts = VecMap<scf::ParallelOp, std::shared_ptr<Expr>>;
+using ParallelTripCounts = llvm::DenseMap<scf::ParallelOp, std::shared_ptr<Expr>>;
 
 static ParallelTripCounts build_parallel_trip_counts(ModuleOp &mod) {
 
