@@ -879,6 +879,22 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
     walk_configurations(op, std::forward<Lambda>(f), cfg);
   }
 
+  // call f on every operation immediately nested under op
+  template <typename Lambda>
+  void for_each_nested(mlir::Operation *op, Lambda &&f) {
+
+    // assert f can be called on mlir::Operation*
+    static_assert(std::is_invocable_v<Lambda, mlir::Operation *>);
+
+    for (mlir::Region &region : op->getRegions()) {
+      for (mlir::Block &block : region.getBlocks()) {
+        for (mlir::Operation &nestedOp : block.getOperations()) {
+          f(&nestedOp);
+        }
+      }
+    }
+  }
+
   // return true if op, or any of its nested children, were scf parallel
   template <typename Lambda>
   bool walk_configurations(mlir::Operation *op, Lambda &&f, const ParallelConfig &cfg) {
@@ -893,35 +909,30 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
           newCfg.perms_[parallelOp] = perm;
 
           bool anyParallel = false;
-          for (mlir::Region &region : op->getRegions()) {
-            for (mlir::Block &block : region.getBlocks()) {
-              for (mlir::Operation &nestedOp : block.getOperations()) {
-                anyParallel |= walk_configurations(&nestedOp, std::forward<Lambda>(f), newCfg);
-              }
-            }
-          }
+          for_each_nested(op, [&](mlir::Operation *child){
+            anyParallel |= walk_configurations(child, std::forward<Lambda>(f), newCfg);
+          });
 
+          // if no parallels are nested underneath here, this is a complete
+          // configuration
           if (!anyParallel) {
             llvm::outs() << "no parallel regions nested below this...\n" << *op 
-                         << "\n...invoking callable on ParallelConfig of " << newCfg.perms_.size() << "regions\n";
+                         << "\n...invoking callable on ParallelConfig of " << newCfg.perms_.size() << " regions\n";
             f(newCfg);
           }
         } while (std::next_permutation(perm.begin(), perm.end()));
       return true;
     } else {
       bool anyParallel = false;
-      for (mlir::Region &region : op->getRegions()) {
-        for (mlir::Block &block : region.getBlocks()) {
-          for (mlir::Operation &nestedOp : block.getOperations()) {
-            anyParallel |= walk_configurations(&nestedOp, std::forward<Lambda>(f), cfg);
-          }
-        }
-      }
+      for_each_nested(op, [&](mlir::Operation *child){
+        anyParallel |= walk_configurations(child, std::forward<Lambda>(f), cfg);
+      });
       return anyParallel;
     }
   }
 
-  // model the cost of a module with a given parallel configuration
+  // FIXME: this should be re-written recursively
+  // cost of a module with a given parallel configuration
   static size_t model_cost(ModuleOp &mod, const ParallelConfig &cfg, const MemrefInductionCosts &costTable) {
     size_t cost = 0;
     mod.walk([&](Operation *op) {
