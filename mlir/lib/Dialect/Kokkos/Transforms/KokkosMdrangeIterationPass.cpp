@@ -964,8 +964,40 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
     return cost;
   }
 
+  using Permutation = llvm::SmallVector<int, 16>;
+
+  // modify `parallelOp` so that its induction variables are permuted according to `permutation`
+  static void permute_parallel_op(scf::ParallelOp parallelOp, const Permutation &permutation) {
+    OpBuilder builder(parallelOp);
+    SmallVector<Value, 4> newLowerBounds, newUpperBounds, newSteps;
+
+    for (int index : permutation) {
+      newLowerBounds.push_back(parallelOp.getLowerBound()[index]);
+      newUpperBounds.push_back(parallelOp.getUpperBound()[index]);
+      newSteps.push_back(parallelOp.getStep()[index]);
+    }
+
+    auto newParallelOp = builder.create<scf::ParallelOp>(
+        parallelOp.getLoc(), newLowerBounds, newUpperBounds, newSteps);
+
+    // Move the body of the original parallelOp to the new parallelOp.
+    newParallelOp.getBody()->getTerminator()->erase(); // splicing in the new body has a terminator already
+    newParallelOp.getBody()->getOperations().splice(
+        newParallelOp.getBody()->begin(), parallelOp.getBody()->getOperations());
+
+    // replace uses of original induction variable perm[i] with new induction variable [i]
+    for (size_t i = 0; i < permutation.size(); ++i) {
+      parallelOp.getInductionVars()[permutation[i]].replaceAllUsesWith(newParallelOp.getInductionVars()[i]);
+    }
+
+    parallelOp.erase();
+  }
+
   void runOnOperation() override {
     ModuleOp module = getOperation();
+
+    llvm::outs() << module << "\n";
+
     llvm::outs() << "====\ndump_ops\n====\n";
     dump_ops(module);
 
@@ -1012,16 +1044,61 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
 
     llvm::outs() << "====\nbuild new module\n====\n";
 
+#if 0
     // clone the existing module
     ModuleOp newModule = module.clone();
 
     // TODO: modify the parallel ops in the new module
+    newModule.walk([&](scf::ParallelOp parallelOp) {
 
+      llvm::outs() << "modifying " << parallelOp << "\n";
+
+
+      // TODO: replace this placeholder permutation with the computed one
+      // fake permutation that just reverses stuff
+      Permutation permutation(parallelOp.getInductionVars().size());
+      std::iota(permutation.begin(), permutation.end(), 0);
+      std::reverse(permutation.begin(), permutation.end());
+
+      llvm::outs() << "applying permutation ";
+      for (auto i : permutation) {
+        llvm::outs() << i << " ";
+      }
+      llvm::outs() << "\n";
+
+      permute_parallel_op(parallelOp, permutation);
+    });
+
+
+    // FIXME: this seems like it might introduce an extra scf.reduce at the end
+    // of the parallel region, probably because it clones one and then one gets inserted
+    // --mlir-print-ir-after-failure
     // overwrite the module with the new module
     // Replace the original module with the new module.
     module.getBody()->getOperations().clear();
     module.getBody()->getOperations().splice(module.getBody()->begin(),
                                              newModule.getBody()->getOperations());
+#else
+    // modify the parallel ops in the module
+    module.walk([&](scf::ParallelOp parallelOp) {
+
+      llvm::outs() << "modifying " << parallelOp << "\n";
+
+      // TODO: replace this placeholder permutation with the computed one
+      // fake permutation that just reverses stuff
+      Permutation permutation(parallelOp.getInductionVars().size());
+      std::iota(permutation.begin(), permutation.end(), 0);
+      std::reverse(permutation.begin(), permutation.end());
+
+      llvm::outs() << "applying permutation ";
+      for (auto i : permutation) {
+        llvm::outs() << i << " ";
+      }
+      llvm::outs() << "\n";
+
+      permute_parallel_op(parallelOp, permutation);
+    });
+#endif
     llvm::outs() << "====\ndone\n====\n";
   }
 };
