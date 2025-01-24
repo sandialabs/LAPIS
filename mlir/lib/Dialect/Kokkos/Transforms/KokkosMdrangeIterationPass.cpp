@@ -147,6 +147,8 @@ struct KokkosMdrangeIterationPass
 
   // a context for expression evaluation
   struct Ctx {
+
+    // FIXME: llvm data structures
     std::unordered_map<std::string, int> values;
   };
 
@@ -414,8 +416,7 @@ struct KokkosMdrangeIterationPass
     }
   };
 
-  // partial derivative df/dx
-
+// partial derivative df/dx
 static std::shared_ptr<Expr> df_dx(Value &f, Value &x) {
   if (f == x) {
     llvm::outs() << "Info: df_dx of equal values\n";
@@ -585,21 +586,10 @@ static std::shared_ptr<Expr> df_dx(Value &f, Value &x) {
   }
 
 
-// return groups of induction variables for
-static std::vector<Value> all_induction_variables(std::vector<scf::ParallelOp> &ops) {
-  std::vector<Value> vars;
-  for (auto &op : ops) {
-    for (auto &var : op.getInductionVars()) {
-      vars.push_back(var);
-    }
-  }
-  return vars;
-}
 
-// FIXME: this returns things like this:
-// <block argument> of type 'index' at index: 2
+
+// Get a unique name for the provided value
 static std::string get_value_name(mlir::Value &value) {
-
   if (mlir::isa<BlockArgument>(value)) {
     auto ba = mlir::cast<BlockArgument>(value);
     return std::string("block") +std::to_string(uintptr_t(ba.getOwner())) + "_arg" + std::to_string(ba.getArgNumber());
@@ -608,8 +598,9 @@ static std::string get_value_name(mlir::Value &value) {
   }
 }
 
-
-static std::shared_ptr<Expr> iteration_space_size(scf::ParallelOp &op, int dim) {
+// Get an expression representing the size of the iteration space of `op` in the
+// `dim` dimension.
+static std::shared_ptr<Expr> iteration_space_expr(scf::ParallelOp &op, int dim) {
 
     auto lb = op.getLowerBound()[dim];
     auto ub = op.getUpperBound()[dim];
@@ -643,62 +634,74 @@ static std::shared_ptr<Expr> iteration_space_size(scf::ParallelOp &op, int dim) 
     return Div::make(num, stExpr);
 }
 
-// return an Expr representing the product of the iteration space of all dimensions
-static std::shared_ptr<Expr> trip_count_expr(scf::ParallelOp &op) {
+// Get an expression representing the size of the iteration space of `op`
+static std::shared_ptr<Expr> iteration_space_expr(scf::ParallelOp &op) {
     auto lowerBounds = op.getLowerBound();
-    std::shared_ptr<Expr> total = iteration_space_size(op, 0);
+    std::shared_ptr<Expr> total = iteration_space_expr(op, 0);
     for (unsigned i = 1; i < lowerBounds.size(); ++i) {
-      total = Mul::make(total, iteration_space_size(op, i));
+      total = Mul::make(total, iteration_space_expr(op, i));
     }
     return total;
 }
 
-using ParallelTripCounts = llvm::DenseMap<scf::ParallelOp, std::shared_ptr<Expr>>;
+using IterationSpaceExprs = llvm::DenseMap<scf::ParallelOp, std::shared_ptr<Expr>>;
 
-static ParallelTripCounts build_parallel_trip_counts(ModuleOp &mod) {
+// Get expressions represeting the iteration space for all parallel loops in the module
+static IterationSpaceExprs build_parallel_trip_counts(ModuleOp &mod) {
 
-  ParallelTripCounts PTC;
+  IterationSpaceExprs ISE;
 
     mod.walk([&](Operation *op) {
       if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
-
         // create an expression representing the trip count for this loop
-        std::shared_ptr<Expr> count = trip_count_expr(parallelOp);
-        PTC[parallelOp] = count;
+        std::shared_ptr<Expr> expr = iteration_space_expr(parallelOp);
+        ISE[parallelOp] = expr;
 
         // descend into the body of the loop
-        ParallelTripCounts counts = build_parallel_trip_counts(parallelOp, count);
+        IterationSpaceExprs exprs = build_parallel_trip_counts(parallelOp, expr);
+        ISE.insert(exprs.begin(), exprs.end());
       }
     }); // walk
 
 
-  return PTC;
+  return ISE;
 }
 
-static ParallelTripCounts build_parallel_trip_counts(scf::ParallelOp &parentOp, std::shared_ptr<Expr> cost) {
-  ParallelTripCounts PTC;
+static IterationSpaceExprs build_parallel_trip_counts(scf::ParallelOp &parentOp, std::shared_ptr<Expr> cost) {
+  IterationSpaceExprs ISE;
 
   parentOp.getBody()->walk([&](Operation *op) {
       if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
-
         // create an expression representing the trip count for this loop
-        std::shared_ptr<Expr> count = trip_count_expr(parallelOp);
-        count = Mul::make(count, cost->clone());
-        PTC[parallelOp] = count;
+        std::shared_ptr<Expr> expr = iteration_space_expr(parallelOp);
+        ISE[parallelOp] = expr;
 
         // descend into the body of the loop
-        ParallelTripCounts counts = build_parallel_trip_counts(parallelOp, count);
+        IterationSpaceExprs exprs = build_parallel_trip_counts(parallelOp, expr);
+        ISE.insert(exprs.begin(), exprs.end());
       }
   });
 
-  return PTC;
+  return ISE;
 }
 
 // map of (Operation*, Value) -> Cost
 // map of the cost model for a given memref / induction variable pair
 using MemrefInductionCosts = llvm::DenseMap<std::pair<Operation*, mlir::Value>, Cost>;
+using ParallelOpStack = llvm::SmallVector<scf::ParallelOp, 4>;
 
-static MemrefInductionCosts build_cost_table(ModuleOp &mod, ParallelTripCounts &tripCounts, std::vector<scf::ParallelOp> &stack) {
+// return all induction variables for all parallel ops
+static std::vector<Value> all_induction_variables(ParallelOpStack &ops) {
+  std::vector<Value> vars;
+  for (auto &op : ops) {
+    for (auto &var : op.getInductionVars()) {
+      vars.push_back(var);
+    }
+  }
+  return vars;
+}
+
+static MemrefInductionCosts build_cost_table(ModuleOp &mod, IterationSpaceExprs &tripCounts, ParallelOpStack &stack) {
 
     MemrefInductionCosts MIC;
 
@@ -715,13 +718,15 @@ static MemrefInductionCosts build_cost_table(ModuleOp &mod, ParallelTripCounts &
     return MIC;
   }
 
-static MemrefInductionCosts build_cost_table(ModuleOp &mod, ParallelTripCounts &tripCounts) {
-  std::vector<scf::ParallelOp> stack;
+
+
+static MemrefInductionCosts build_cost_table(ModuleOp &mod, IterationSpaceExprs &tripCounts) {
+  ParallelOpStack stack;
   return build_cost_table(mod, tripCounts, stack);
 }
 
 template <typename Memref>
-static MemrefInductionCosts get_costs(Memref &memrefOp, ParallelTripCounts &tripCounts, std::vector<scf::ParallelOp> &stack) {
+static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tripCounts, ParallelOpStack &stack) {
   static_assert(std::is_same_v<Memref, memref::LoadOp> || std::is_same_v<Memref, memref::StoreOp>);
 
   if constexpr (std::is_same_v<Memref, memref::LoadOp>) {
@@ -790,7 +795,7 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, ParallelTripCounts &trip
 }
 
 // FIXME: parentOp is also the back of the stack?
-static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, ParallelTripCounts &tripCounts, std::vector<scf::ParallelOp> &stack) {
+static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, IterationSpaceExprs &tripCounts, ParallelOpStack &stack) {
     MemrefInductionCosts MIC;
 
     parentOp.getBody()->walk([&](Operation *op) {
@@ -965,7 +970,7 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Parallel
     dump_ops(module);
 
     llvm::outs() << "====\nbuild_parallel_trip_counts\n====\n";
-    ParallelTripCounts tripCounts = build_parallel_trip_counts(module);
+    IterationSpaceExprs tripCounts = build_parallel_trip_counts(module);
 
     for (auto &kv : tripCounts) {
       const std::shared_ptr<Expr> &trip = kv.second;
