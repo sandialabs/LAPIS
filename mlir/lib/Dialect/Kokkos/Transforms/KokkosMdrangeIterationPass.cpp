@@ -1012,6 +1012,16 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
 
     llvm::outs() << "====\nbuild new module\n====\n";
 
+    // clone the existing module
+    ModuleOp newModule = module.clone();
+
+    // TODO: modify the parallel ops in the new module
+
+    // overwrite the module with the new module
+    // Replace the original module with the new module.
+    module.getBody()->getOperations().clear();
+    module.getBody()->getOperations().splice(module.getBody()->begin(),
+                                             newModule.getBody()->getOperations());
     llvm::outs() << "====\ndone\n====\n";
   }
 };
