@@ -888,7 +888,7 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Parallel
 
   struct ParallelConfig {
     // permutation of induction variables for each parallel op
-    VecMap<scf::ParallelOp, std::vector<size_t>> perms_;
+    llvm::DenseMap<scf::ParallelOp, std::vector<size_t>> perms_;
   };
 
 
