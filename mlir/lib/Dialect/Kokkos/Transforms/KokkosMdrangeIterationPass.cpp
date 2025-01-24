@@ -741,7 +741,7 @@ static ParallelTripCounts build_parallel_trip_counts(scf::ParallelOp &parentOp, 
 
 // map of (Operation*, Value) -> Cost
 // map of the cost model for a given memref / induction variable pair
-using MemrefInductionCosts = VecMap<std::pair<Operation*, mlir::Value>, Cost>;
+using MemrefInductionCosts = llvm::DenseMap<std::pair<Operation*, mlir::Value>, Cost>;
 
 static MemrefInductionCosts build_cost_table(ModuleOp &mod, ParallelTripCounts &tripCounts, std::vector<scf::ParallelOp> &stack) {
 
