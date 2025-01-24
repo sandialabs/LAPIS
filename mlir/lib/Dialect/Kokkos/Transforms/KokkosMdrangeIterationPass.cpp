@@ -839,6 +839,19 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
   template <typename Lambda>
   void walk_configurations(scf::ParallelOp &parentOp, ParallelConfig cfg, Lambda &&f) {
     bool found = false;
+#if 1
+    for (scf::ParallelOp parallelOp : parentOp.getBody()->getOps<scf::ParallelOp>()) {
+      found = true;
+
+      // walk all configurations of this parallel op too
+      Permutation perm(get_num_induction_vars(parallelOp));
+      std::iota(perm.begin(), perm.end(), 0);
+      do {
+        cfg.perms_[parallelOp] = perm;
+        walk_configurations(parallelOp, cfg, std::forward<Lambda>(f));
+      } while (std::next_permutation(perm.begin(), perm.end()));
+    }
+#else
     parentOp.getBody()->walk([&](Operation *op) {
       if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
         found = true;
@@ -852,28 +865,60 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
         } while (std::next_permutation(perm.begin(), perm.end()));
       } 
     }); // walk
-
+#endif
     // no nested parallel regions, no more configurations to go through, call f
     if (!found) {
+      llvm::outs() << "reached fully-nested configuration\n"; 
       f(cfg);
     }
   }
 
   template <typename Lambda>
-  void walk_configurations(ModuleOp &mod, Lambda &&f) {
-    mod.walk([&](Operation *op) {
-      if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
+  void walk_configurations(mlir::Operation *op, Lambda &&f) {
+    ParallelConfig cfg;
+    walk_configurations(op, std::forward<Lambda>(f), cfg);
+  }
 
+  // return true if op, or any of its nested children, were scf parallel
+  template <typename Lambda>
+  bool walk_configurations(mlir::Operation *op, Lambda &&f, const ParallelConfig &cfg) {
+    if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
+        // create a permutation of induction variables
         Permutation perm(get_num_induction_vars(parallelOp));
         std::iota(perm.begin(), perm.end(), 0);
 
+        // walk the children of this op with all different induction variable configurations
         do  {
-          ParallelConfig cfg;
-          cfg.perms_[parallelOp] = perm;
-          walk_configurations(parallelOp, cfg, f);
+          ParallelConfig newCfg = cfg;
+          newCfg.perms_[parallelOp] = perm;
+
+          bool anyParallel = false;
+          for (mlir::Region &region : op->getRegions()) {
+            for (mlir::Block &block : region.getBlocks()) {
+              for (mlir::Operation &nestedOp : block.getOperations()) {
+                anyParallel |= walk_configurations(&nestedOp, std::forward<Lambda>(f), newCfg);
+              }
+            }
+          }
+
+          if (!anyParallel) {
+            llvm::outs() << "no parallel regions nested below this...\n" << *op 
+                         << "\n...invoking callable on ParallelConfig of " << newCfg.perms_.size() << "regions\n";
+            f(newCfg);
+          }
         } while (std::next_permutation(perm.begin(), perm.end()));
+      return true;
+    } else {
+      bool anyParallel = false;
+      for (mlir::Region &region : op->getRegions()) {
+        for (mlir::Block &block : region.getBlocks()) {
+          for (mlir::Operation &nestedOp : block.getOperations()) {
+            anyParallel |= walk_configurations(&nestedOp, std::forward<Lambda>(f), cfg);
+          }
+        }
       }
-    }); // walk
+      return anyParallel;
+    }
   }
 
   // model the cost of a module with a given parallel configuration
@@ -1044,7 +1089,17 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
       size_t cost = model_cost(module, cfg, costTable);
       llvm::outs() << "cost was " << cost << "\n";
       if (cost < minCost) {
-        llvm::outs() << "Info: new optimal! " << cost << "\n";
+        llvm::outs() << "Info: new optimal! cost=" << cost << "\n";
+
+        for (const auto &kv : cfg.perms_) {
+          llvm::outs() << kv.first << " with permutation: ";
+          for (const size_t e : kv.second) {
+            llvm::outs() << e << " ";
+            
+          } 
+          llvm::outs() << "\n";
+        }
+
         minCost = cost;
         minCfg = cfg;
       }
@@ -1094,12 +1149,15 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
 
       llvm::outs() << "modifying " << parallelOp << "\n";
 
+#if 1
+      const Permutation &permutation = minCfg.perms_[parallelOp];
+#else
       // TODO: replace this placeholder permutation with the computed one
       // fake permutation that just reverses stuff
       Permutation permutation(parallelOp.getInductionVars().size());
       std::iota(permutation.begin(), permutation.end(), 0);
       std::reverse(permutation.begin(), permutation.end());
-
+#endif
       llvm::outs() << "applying permutation ";
       for (auto i : permutation) {
         llvm::outs() << i << " ";
