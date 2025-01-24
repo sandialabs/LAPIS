@@ -405,6 +405,13 @@ struct KokkosMdrangeIterationPass
       for (auto &u : count_->unknowns()) ret.push_back(u);
       return ret;
     }
+
+    template <typename Memref>
+    static constexpr int scale_factor() {
+      static_assert(std::is_same_v<Memref, memref::LoadOp> || std::is_same_v<Memref, memref::StoreOp>);
+      if constexpr (std::is_same_v<Memref, memref::LoadOp>) return 1;
+      else if constexpr (std::is_same_v<Memref, memref::StoreOp>) return 3;
+    }
   };
 
   // partial derivative df/dx
@@ -715,8 +722,77 @@ static MemrefInductionCosts build_cost_table(ModuleOp &mod, ParallelTripCounts &
   return build_cost_table(mod, tripCounts, stack);
 }
 
-static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, ParallelTripCounts &tripCounts, std::vector<scf::ParallelOp> &stack) {
+template <typename Memref>
+static MemrefInductionCosts get_costs(Memref &memrefOp, ParallelTripCounts &tripCounts, std::vector<scf::ParallelOp> &stack) {
+  static_assert(std::is_same_v<Memref, memref::LoadOp> || std::is_same_v<Memref, memref::StoreOp>);
 
+  if constexpr (std::is_same_v<Memref, memref::LoadOp>) {
+    llvm::outs() << "get_cost: memref::LoadOp\n";
+  } else if constexpr (std::is_same_v<Memref, memref::StoreOp>) {
+    llvm::outs() << "get_cost: memref::StoreOp\n";
+  }
+
+  MemrefInductionCosts MIC;
+
+  std::vector<Value> indVars = all_induction_variables(stack);
+  if (stack.empty()) {
+    llvm::report_fatal_error("get_costs: memref is not enclosed in an scf::ParallelOp");
+  }
+  scf::ParallelOp &parentOp = stack.back();
+
+  // compute the partial derivative of each memref with respect to all induction variables via the chain rule:
+  // d(offset)/d(indvar) = sum( 
+  //    d(offset)/d(index) * d(index)/d(indvar), 
+  //    for each index in indices)
+
+  for (Value indVar : indVars) {
+    std::shared_ptr<Expr> dodi = Constant::make(0);
+    for (Value indexVar : memrefOp.getIndices()) {
+      auto e1 = do_di(memrefOp, indexVar);
+
+      llvm::outs() << "pd of " << memrefOp << " w.r.t " << indexVar << "\n";
+      if (e1) {
+        e1->dump(llvm::outs());
+      } else {
+        llvm::outs() << " undefined ";
+      }
+      llvm::outs() << "\n";
+
+      auto e2 = df_dx(indexVar, indVar);
+
+      llvm::outs() << "pd of " << indexVar << " w.r.t " << indVar << "\n";
+      if (e2) {
+        e2->dump(llvm::outs());
+      } else {
+        llvm::outs() << " undefined ";
+      }
+      llvm::outs() << "\n";
+
+      if (e1 && e2) {
+        dodi = Add::make(dodi, Mul::make(e1, e2));
+      } else {
+        dodi = nullptr;
+        break;
+      }
+    }
+
+    llvm::outs() << "pd of " << memrefOp << " w.r.t " << indVar << "\n";
+    if (dodi) {
+      dodi->dump(llvm::outs());
+    } else {
+      llvm::outs() << " undefined ";
+    }
+    llvm::outs() << "\n";
+
+    std::shared_ptr<Expr> tripCount = tripCounts[parentOp];
+
+    MIC[std::make_pair(memrefOp, indVar)] = Cost(dodi, tripCount, Cost::scale_factor<Memref>());
+  }
+  return MIC;
+}
+
+// FIXME: parentOp is also the back of the stack?
+static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, ParallelTripCounts &tripCounts, std::vector<scf::ParallelOp> &stack) {
     MemrefInductionCosts MIC;
 
     parentOp.getBody()->walk([&](Operation *op) {
@@ -724,114 +800,18 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Parallel
         stack.push_back(parallelOp);
         MemrefInductionCosts costs = build_cost_table(parallelOp, tripCounts, stack);
         stack.pop_back();
-        for (const auto &kv : costs) {
+        for (const auto &kv : costs) { // FIXME: insert?
           MIC[kv.first] = kv.second;
         }
       } else if (auto memrefOp = dyn_cast<memref::LoadOp>(op)) {
-        llvm::outs() << "nested memref load!\n";
-
-        std::vector<Value> indVars = all_induction_variables(stack);
-
-        // compute the partial derivative of each memref with respect to all induction variables via the chain rule:
-        // d(offset)/d(indvar) = sum( 
-        //    d(offset)/d(index) * d(index)/d(indvar), 
-        //    for each index in indices)
-
-        for (Value indVar : indVars) {
-          std::shared_ptr<Expr> dodi = Constant::make(0);
-          for (Value indexVar : memrefOp.getIndices()) {
-            auto e1 = do_di(memrefOp, indexVar);
-
-            llvm::outs() << "pd of " << memrefOp << " w.r.t " << indexVar << "\n";
-            if (e1) {
-              e1->dump(llvm::outs());
-            } else {
-              llvm::outs() << " undefined ";
-            }
-            llvm::outs() << "\n";
-
-            auto e2 = df_dx(indexVar, indVar);
-
-            llvm::outs() << "pd of " << indexVar << " w.r.t " << indVar << "\n";
-            if (e2) {
-              e2->dump(llvm::outs());
-            } else {
-              llvm::outs() << " undefined ";
-            }
-            llvm::outs() << "\n";
-
-            if (e1 && e2) {
-              dodi = Add::make(dodi, Mul::make(e1, e2));
-            } else {
-              dodi = nullptr;
-              break;
-            }
-          }
-
-          llvm::outs() << "pd of " << memrefOp << " w.r.t " << indVar << "\n";
-          if (dodi) {
-            dodi->dump(llvm::outs());
-          } else {
-            llvm::outs() << " undefined ";
-          }
-          llvm::outs() << "\n";
-
-          std::shared_ptr<Expr> tripCount = tripCounts[parentOp];
-          MIC[std::make_pair(memrefOp, indVar)] = Cost(dodi, tripCount, 1 /*load cost*/);
+        MemrefInductionCosts costs = get_costs(memrefOp, tripCounts, stack);
+        for (const auto &kv : costs) { // FIXME: insert?
+          MIC[kv.first] = kv.second;
         }
-
-
       } else if (auto memrefOp = dyn_cast<memref::StoreOp>(op)) {
-        llvm::outs() << "nested memref store!\n";
-
-        std::vector<Value> indVars = all_induction_variables(stack);
-
-        // compute the partial derivative of each memref with respect to all induction variables via the chain rule:
-        // d(offset)/d(indvar) = sum( 
-        //    d(offset)/d(index) * d(index)/d(indvar), 
-        //    for each index in indices)
-
-        for (Value indVar : indVars) {
-          std::shared_ptr<Expr> dodi = Constant::make(0);
-          for (Value indexVar : memrefOp.getIndices()) {
-            auto e1 = do_di(memrefOp, indexVar);
-
-            llvm::outs() << "pd of " << memrefOp << " w.r.t " << indexVar << "\n";
-            if (e1) {
-              e1->dump(llvm::outs());
-            } else {
-              llvm::outs() << " undefined ";
-            }
-            llvm::outs() << "\n";
-
-            auto e2 = df_dx(indexVar, indVar);
-
-            llvm::outs() << "pd of " << indexVar << " w.r.t " << indVar << "\n";
-            if (e2) {
-              e2->dump(llvm::outs());
-            } else {
-              llvm::outs() << " undefined ";
-            }
-            llvm::outs() << "\n";
-
-            if (e1 && e2) {
-              dodi = Add::make(dodi, Mul::make(e1, e2));
-            } else {
-              dodi = nullptr;
-              break;
-            }
-          }
-
-          llvm::outs() << "pd of " << memrefOp << " w.r.t " << indVar << "\n";
-          if (dodi) {
-            dodi->dump(llvm::outs());
-          } else {
-            llvm::outs() << " undefined ";
-          }
-          llvm::outs() << "\n";
-
-          std::shared_ptr<Expr> tripCount = tripCounts[parentOp];
-          MIC[std::make_pair(memrefOp, indVar)] = Cost(dodi, tripCount, 3 /*store cost*/);
+        MemrefInductionCosts costs = get_costs(memrefOp, tripCounts, stack);
+        for (const auto &kv : costs) { // FIXME: insert?
+          MIC[kv.first] = kv.second;
         }
       }
     });
