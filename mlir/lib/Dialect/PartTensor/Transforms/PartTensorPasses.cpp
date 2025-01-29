@@ -84,7 +84,8 @@ private:
 } // namespace
 
 std::unique_ptr<Pass> mlir::createPartTensorConversionPass() {
-  return std::make_unique<PartTensorConversionPass>();
+  // the other backends are not in active development
+  return std::make_unique<PartTensorConversionPass>(PartTensorDistBackend::kMPI);
 }
 std::unique_ptr<Pass>
 mlir::createPartTensorConversionPass(PartTensorDistBackend backend) {
