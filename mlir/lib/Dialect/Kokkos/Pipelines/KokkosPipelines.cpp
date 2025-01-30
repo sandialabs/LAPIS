@@ -40,10 +40,14 @@ void mlir::kokkos::buildSparseKokkosCompiler(
 #endif
   // Rewrite named linalg ops into generic ops and apply fusion.
   pm.addNestedPass<func::FuncOp>(createLinalgGeneralizeNamedOpsPass());
-  pm.addPass(createPreSparsificationRewritePass());
   pm.addNestedPass<func::FuncOp>(createLinalgElementwiseOpFusionPass());
-  pm.addPass(createConvertShapeToStandardPass());
-  pm.addPass(createSparseAssembler());
+
+  // Passes used by MPACT but omitted here.
+  // This is because SparseAssembler does not support any dynamic-shape sparse tensors.
+  // We need that to work for PartTensor MHA.
+  //pm.addPass(createPreSparsificationRewritePass());
+  //pm.addPass(createConvertShapeToStandardPass());
+  //pm.addPass(createSparseAssembler());
 
   // Set up options for sparsification.
   // The only option exposed by LapisCompilerOptions is the parallelization strategy.
@@ -54,65 +58,22 @@ void mlir::kokkos::buildSparseKokkosCompiler(
 
   // Sparsification and bufferization mini-pipeline.
   pm.addPass(createSparsificationAndBufferizationPass(
-      getBufferizationOptionsForSparsification(false),
-      sparseOptions,
-      /* createSparseDeallocs */ true,
-      /* enableRuntimeLibrary */ true,
-      /* enableBufferInitialization */ false,
-      /* vectorLength */ 0,
-      /* enableVLAVectorization */ false,
-      /* enableSIMDIndex32 */ false,
-      /* enableGPULibgen */ false,
-      sparseOptions.sparseEmitStrategy));
-
-  /*
-"func.func(sparse-encoding-propagation)",
-# MLIR Sparsifier mini-pipeline:
-#   use the PyTorch assembler conventions
-#   enable vectorization with VL=16 (more or less assumes AVX512 for float)
-#   allow 32-bit index optimizations (unsafe for very large dimensions)
-"sparse-assembler{{direct-out}}",
-"sparsification-and-bufferization{{{sp_options}}}",
-"sparse-storage-specifier-to-llvm",
-# Buffer deallocation pass does not know how to handle realloc.
-"func.func(expand-realloc)",
-# Generalize pad and concat after sparse compiler, as they are handled
-# differently when the operations involve sparse operands.
-"func.func(refback-generalize-tensor-pad)",
-"func.func(refback-generalize-tensor-concat)",
-# Bufferize.
-"func.func(tm-tensor-bufferize)",
-"one-shot-bufferize{{copy-before-write bufferize-function-boundaries function-boundary-type-conver    sion=identity-layout-map}}",
-"refback-mlprogram-bufferize",
-"func.func(finalizing-bufferize)",
-"func.func(buffer-deallocation)",
-# Inline sparse helper methods where useful (but after dealloc).
-"inline",
-"refback-munge-calling-conventions",
-"func.func(tm-tensor-to-loops)",
-"func.func(refback-munge-memref-copy)",
-"func.func(convert-linalg-to-loops)",
-"func.func(lower-affine)",
-
-   */
+        getBufferizationOptionsForSparsification(false),
+        sparseOptions,
+        /* createSparseDeallocs */ true,
+        /* enableRuntimeLibrary */ true,
+        /* enableBufferInitialization */ false,
+        /* vectorLength */ 0,
+        /* enableVLAVectorization */ false,
+        /* enableSIMDIndex32 */ false,
+        /* enableGPULibgen */ false,
+        sparseOptions.sparseEmitStrategy));
 
   // Storage specifier lowering and bufferization wrap-up.
   pm.addPass(createStorageSpecifierToLLVMPass());
-  pm.addNestedPass<func::FuncOp>(memref::createExpandReallocPass());
-
-  // Note: these options are taken from the MPACTBackend pipeline
-  bufferization::OneShotBufferizationOptions buffOptions;
-  buffOptions.copyBeforeWrite = true;
-  buffOptions.bufferizeFunctionBoundaries = true;
-  buffOptions.setFunctionBoundaryTypeConversion(bufferization::LayoutMapOption::IdentityLayoutMap);
-  pm.addPass(createOneShotBufferizePass(buffOptions));
-
-  pm.addNestedPass<func::FuncOp>(bufferization::createFinalizingBufferizePass());
-  //pm.addPass(bufferization::createBufferDeallocationPass());
-
-  pm.addPass(createInlinerPass());
-
-  //pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());
+  pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());
+  pm.addNestedPass<func::FuncOp>(
+      mlir::bufferization::createFinalizingBufferizePass());
 
   // Progressively lower to LLVM. Note that the convert-vector-to-llvm
   // pass is repeated on purpose.
@@ -120,6 +81,7 @@ void mlir::kokkos::buildSparseKokkosCompiler(
   // it to this pipeline.
   pm.addNestedPass<func::FuncOp>(createConvertLinalgToParallelLoopsPass());
   pm.addNestedPass<func::FuncOp>(createConvertVectorToSCFPass());
+  pm.addNestedPass<func::FuncOp>(memref::createExpandReallocPass());
   pm.addPass(memref::createExpandStridedMetadataPass());
 
   pm.addPass(createLowerAffinePass());
