@@ -150,33 +150,34 @@ namespace LAPIS
         parent = parent->parent;
     }
 
-    // Constructor for a device view from an external source (e.g. Kokkos-based application)
-    DualView(DeviceView d)
+    // Constructor taking a host or device view
+    template<typename DT, typename... Args>
+    DualView(Kokkos::View<DT, Args...> v)
     {
-      modified_device = true;
-      if constexpr(deviceAccessesHost) {
-        host_view = HostView(d.data(), d.layout());
+      using ViewType = decltype(v);
+      using Space = typename ViewType::memory_space;
+      if constexpr(std::is_same_v<typename DeviceView::memory_space, Space>) {
+        // Treat v like a device view, even though it's possible that DeviceView and HostView have the same type.
+        // In this case, the host view will alias it.
+        modified_device = true;
+        if constexpr(deviceAccessesHost) {
+          host_view = HostView(v.data(), v.layout());
+        }
+        else {
+          host_view = HostView(Kokkos::view_alloc(Kokkos::WithoutInitializing, v.label() + "_host"), v.layout());
+        }
+        device_view = v;
       }
       else {
-        host_view = HostView(Kokkos::view_alloc(Kokkos::WithoutInitializing, d.label() + "_host"), d.layout());
+        modified_host = true;
+        if constexpr(deviceAccessesHost) {
+          device_view = DeviceView(v.data(), v.layout());
+        }
+        else {
+          device_view = DeviceView(Kokkos::view_alloc(Kokkos::WithoutInitializing, v.label() + "_dev"), v.layout());
+        }
+        host_view = v;
       }
-      device_view = d;
-      parent = this;
-    }
-
-    // Constructor for a host view from an external source (e.g. python).
-    // Use SFINAE to enable this only when DeviceView and HostView have different types/spaces,
-    // since otherwise it would be a duplicate definition of the DeviceView constructor above.
-    DualView(HostView h, typename std::enable_if_t<!std::is_same_v<DeviceView, HostView>>* = nullptr)
-    {
-      modified_host = true;
-      if constexpr(deviceAccessesHost) {
-        device_view = DeviceView(h.data(), h.layout());
-      }
-      else {
-        device_view = DeviceView(Kokkos::view_alloc(Kokkos::WithoutInitializing, h.label() + "_dev"), h.layout());
-      }
-      host_view = h;
       parent = this;
     }
 
