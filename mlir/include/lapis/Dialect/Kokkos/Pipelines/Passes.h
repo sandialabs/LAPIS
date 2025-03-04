@@ -16,11 +16,12 @@
 #ifndef MLIR_KOKKOS_PIPELINES_PASSES_H_
 #define MLIR_KOKKOS_PIPELINES_PASSES_H_
 
+#include "lapis/LAPIS_config.h"
 #include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVM.h"
 #include "lapis/Dialect/Kokkos/Transforms/Passes.h"
 #include "mlir/Dialect/SparseTensor/Transforms/Passes.h"
 #include "mlir/Pass/PassOptions.h"
-#if defined(ENABLE_PART_TENSOR)
+#ifdef LAPIS_ENABLE_PART_TENSOR
 #include "lapis/Dialect/PartTensor/Transforms/Passes.h"
 #endif
 
@@ -54,7 +55,7 @@ struct LapisCompilerOptions
               "any-storage-any-loop",
               "Enable sparse parallelization for any storage and loop."))};
 
-#if defined(ENABLE_PART_TENSOR)
+#ifdef LAPIS_ENABLE_PART_TENSOR
   PassOptions::Option<mlir::PartTensorDistBackend> partTensorBackend{
       *this, "pt-backend",
       ::llvm::cl::desc("Backend to use for part tensor communication"),

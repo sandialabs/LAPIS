@@ -9,10 +9,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "lapis/LAPIS_config.h"
 #include "lapis/Dialect/Kokkos/IR/KokkosDialect.h"
 #include "lapis/Dialect/Kokkos/Pipelines/Passes.h"
 #include "lapis/Dialect/Kokkos/Transforms/Passes.h"
-#ifdef ENABLE_PART_TENSOR
+#ifdef LAPIS_ENABLE_PART_TENSOR
 #include "lapis/Dialect/PartTensor/IR/PartTensor.h"
 #include "lapis/Dialect/PartTensor/Pipelines/Passes.h"
 #include "lapis/Dialect/PartTensor/Transforms/Passes.h"
@@ -61,7 +62,7 @@ int main(int argc, char **argv) {
   // Use mlir-opt for those passes.
   DialectRegistry registry;
   registry.insert<
-#ifdef ENABLE_PART_TENSOR
+#ifdef LAPIS_ENABLE_PART_TENSOR
       mlir::part_tensor::PartTensorDialect, 
 #endif
       mlir::LLVM::LLVMDialect, mlir::vector::VectorDialect,
@@ -97,7 +98,7 @@ int main(int argc, char **argv) {
   func::registerAllExtensions(registry);
 
   // Register LAPIS pipelines and passes
-#ifdef ENABLE_PART_TENSOR
+#ifdef LAPIS_ENABLE_PART_TENSOR
   mlir::registerPartTensorPasses();
 #endif
 

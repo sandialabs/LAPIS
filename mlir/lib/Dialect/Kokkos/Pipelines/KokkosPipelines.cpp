@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "lapis/LAPIS_config.h"
 #include "lapis/Dialect/Kokkos/Pipelines/Passes.h"
-
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/Bufferization/Transforms/Bufferize.h"
@@ -20,7 +20,7 @@
 #include "mlir/Dialect/SparseTensor/Transforms/Passes.h"
 #include "lapis/Dialect/Kokkos/IR/KokkosDialect.h"
 #include "lapis/Dialect/Kokkos/Transforms/Passes.h"
-#ifdef ENABLE_PART_TENSOR
+#ifdef LAPIS_ENABLE_PART_TENSOR
 #include "lapis/Dialect/PartTensor/Transforms/Passes.h"
 #endif
 #include "mlir/Pass/PassManager.h"
@@ -35,7 +35,7 @@ using namespace mlir::kokkos;
 
 void mlir::kokkos::buildSparseKokkosCompiler(
     OpPassManager &pm, const LapisCompilerOptions& options) {
-#ifdef ENABLE_PART_TENSOR
+#ifdef LAPIS_ENABLE_PART_TENSOR
   pm.addPass(::mlir::createPartTensorConversionPass(options.partTensorBackend));
 #endif
   // Rewrite named linalg ops into generic ops and apply fusion.
