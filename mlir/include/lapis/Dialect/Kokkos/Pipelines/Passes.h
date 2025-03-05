@@ -55,6 +55,10 @@ struct LapisCompilerOptions
               "any-storage-any-loop",
               "Enable sparse parallelization for any storage and loop."))};
 
+  PassOptions::Option<bool> decompose{
+    *this, "decompose-sparse-tensors",
+    desc("Decompose sparse tensors into memrefs (default off)"), init(false)};
+
 #ifdef LAPIS_ENABLE_PART_TENSOR
   PassOptions::Option<mlir::PartTensorDistBackend> partTensorBackend{
       *this, "pt-backend",
