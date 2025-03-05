@@ -67,7 +67,7 @@ void mlir::kokkos::buildSparseKokkosCompiler(
   pm.addPass(createSparsificationAndBufferizationPass(
         getBufferizationOptionsForSparsification(false),
         sparseOptions,
-        /* createSparseDeallocs */ true,
+        /* createSparseDeallocs */ false,
         /* enableRuntimeLibrary */ true,
         /* enableBufferInitialization */ false,
         /* vectorLength */ 0,
@@ -99,7 +99,7 @@ void mlir::kokkos::buildSparseKokkosCompiler(
 #endif
 
   pm.addNestedPass<func::FuncOp>(bufferization::createFinalizingBufferizePass());
-  pm.addNestedPass<func::FuncOp>(bufferization::createBufferDeallocationPass());
+  //pm.addNestedPass<func::FuncOp>(bufferization::createBufferDeallocationPass());
 
   pm.addPass(createInlinerPass());
 
