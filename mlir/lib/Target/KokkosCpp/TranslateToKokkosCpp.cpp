@@ -3349,7 +3349,7 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
               [&](auto op) { return printOperation(*this, op); })
           // Other operations are unknown/unsupported.
           .Default([&](Operation *) {
-            return op.emitOpError("unable to find printer for op");
+            return op.emitOpError("Kokkos emitter doesn't know how to output op of this type");
           });
 
   if (failed(status))

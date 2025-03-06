@@ -41,18 +41,21 @@ using namespace mlir::kokkos;
 
 void mlir::kokkos::buildSparseKokkosCompiler(
     OpPassManager &pm, const LapisCompilerOptions& options) {
+  bool enableRuntimeLib = !options.decompose;
 #ifdef LAPIS_ENABLE_PART_TENSOR
   pm.addPass(::mlir::createPartTensorConversionPass(options.partTensorBackend));
 #endif
   // Rewrite named linalg ops into generic ops and apply fusion.
   pm.addNestedPass<func::FuncOp>(createLinalgGeneralizeNamedOpsPass());
+
+  if(options.decompose)
+    pm.addPass(createPreSparsificationRewritePass());
+
   pm.addNestedPass<func::FuncOp>(createLinalgElementwiseOpFusionPass());
   pm.addPass(createConvertShapeToStandardPass());
 
   if(options.decompose) {
-    puts("Hello from LAPIS sparse compiler: adding sparse presparsification + sparse assembler");
-    pm.addPass(createPreSparsificationRewritePass());
-    pm.addPass(createSparseAssembler());
+    pm.addPass(createSparseAssemblerDirectOutPass());
   }
 
   // Set up options for sparsification.
@@ -61,14 +64,14 @@ void mlir::kokkos::buildSparseKokkosCompiler(
   SparsificationOptions sparseOptions(
       options.parallelization,
       mlir::SparseEmitStrategy::kFunctional,
-      /* enableRuntimeLibrary*/ true);
+      /* enableRuntimeLibrary*/ enableRuntimeLib);
 
   // Sparsification and bufferization mini-pipeline.
   pm.addPass(createSparsificationAndBufferizationPass(
         getBufferizationOptionsForSparsification(false),
         sparseOptions,
         /* createSparseDeallocs */ false,
-        /* enableRuntimeLibrary */ true,
+        /* enableRuntimeLibrary */ enableRuntimeLib,
         /* enableBufferInitialization */ false,
         /* vectorLength */ 0,
         /* enableVLAVectorization */ false,
