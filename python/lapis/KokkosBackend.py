@@ -6,17 +6,17 @@ import subprocess
 import tempfile
 #import torch
 from shutil import which
-from mpact import mpactbackend
 
 class KokkosBackend:
-    """Main entry-point for the Kokkos LinAlg backend."""
+    """Main entry-point for the Kokkos backend for linalg-on-tensors dense/sparse code."""
 
-    def __init__(self, dump_mlir = False, index_instance=0, num_instances=0, ws = os.getcwd()):
+    def __init__(self, decompose_tensors = False, dump_mlir = False, index_instance=0, num_instances=0, ws = os.getcwd()):
         super().__init__()
         self.dump_mlir = dump_mlir
         self.ws = ws
         self.index_instance = index_instance
         self.num_instances = num_instances
+        self.decompose_tensors = decompose_tensors
         if self.index_instance == 0:
             self.package_name = "lapis_package"
         else:
@@ -73,176 +73,40 @@ class KokkosBackend:
         p = subprocess.Popen([appAbsolute] + flags, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         (out, errs) = p.communicate(input=stdin)
         if p.returncode != 0:
-            raise Exception("CLI utility failed:\n" + errs)
+            print(errs)
+            raise Exception("CLI utility failed\n")
         return out
 
-    def compile_mpact(self, module, tensorArgs):
-        LOWERING_PIPELINE = (
-        "builtin.module("
-        + ",".join(
-            [
-                "func.func(linalg-generalize-named-ops)",
-                # Run pre-sparsification pass to fuse convert/cast op into
-                # producer as they might hinder kernel fusions.
-                "pre-sparsification-rewrite",
-                "func.func(linalg-fuse-elementwise-ops)",
-                "convert-shape-to-std",
-                # Propagate sparse encodings before sparsifier mini-pipeline.
-                # TODO: the following pass currently contains no pattern. Will be
-                # added as needed.
-                "func.func(sparse-encoding-propagation)",
-                # MLIR Sparsifier mini-pipeline:
-                #   use the PyTorch assembler conventions
-                #   enable vectorization with VL=16 (more or less assumes AVX512 for float)
-                #   allow 32-bit index optimizations (unsafe for very large dimensions)
-                "sparse-assembler{direct-out}",
-                "sparsification-and-bufferization",
-                "sparse-storage-specifier-to-llvm",
-                # Buffer deallocation pass does not know how to handle realloc.
-                "func.func(expand-realloc)",
-                # Generalize pad and concat after sparse compiler, as they are handled
-                # differently when the operations involve sparse operands.
-                "func.func(refback-generalize-tensor-pad)",
-                "func.func(refback-generalize-tensor-concat)",
-                # Bufferize.
-                "func.func(tm-tensor-bufferize)",
-                "one-shot-bufferize{copy-before-write bufferize-function-boundaries function-boundary-type-conversion=identity-layout-map}",
-                "refback-mlprogram-bufferize",
-                "func.func(finalizing-bufferize)",
-                "func.func(buffer-deallocation)",
-                "inline",
-                "func.func(tm-tensor-to-loops)",
-                "func.func(refback-munge-memref-copy)",
-                "func.func(convert-linalg-to-parallel-loops)",
-                "func.func(lower-affine)",
-            ]) + ")"
-        )
-
-        module = mpactbackend.mpact_linalg(module, *tensorArgs)
-        backend = mpactbackend.MpactBackendCompiler(opt_level=1, use_sp_it=False)
-        mpactbackend.run_pipeline_with_repro_report(
-            module,
-            LOWERING_PIPELINE,
-            "Lowering Linalg-on-Tensors IR to LLVM with MpactBackendCompiler",
-            enable_ir_printing=True,
-        )
-
+    def compile(self, module):
         moduleText = str(module)
-        print(moduleText)
-        # Drive the final lowering (to Kokkos dialect) via command line, since Kokoks dialect isn't registered with mpact's python module.
-        moduleText = self.run_cli('lapis-opt', ['--parallel-unit-step', '--kokkos-loop-mapping', '--kokkos-dualview-management'], moduleText)
-
-        print("Lowering complete. Emitting sparse module as Kokkos C++...")
-        print(moduleText)
         moduleRoot = self.ws + "/" + self.package_name
         os.makedirs(moduleRoot, exist_ok=True)
-        lapisEmit = which('lapis-emit')
         cppOut = moduleRoot + "/" + self.package_name + "_module.cpp"
         pyOut = moduleRoot + "/" + self.package_name + ".py"
-        # Skip lowering because it was already done with mlir-opt, lapis-opt
-        args = ["--cxx=" + cppOut, "--py=" + pyOut, "--skipLowering"]
+
+        # First lower to Kokkos dialect
+        pipeline = "--sparse-compiler-kokkos"
+        if self.decompose_tensors:
+            # Turn on sparse tensor decomposition (off by default)
+            pipeline += "=decompose-sparse-tensors"
+        args = [pipeline]
+        moduleLowered = ""
         if self.dump_mlir:
-            args.append("--dump")
+            args.append("--mlir-print-ir-before-all")
+        try:
+            moduleLowered = self.run_cli("lapis-opt", args, moduleText)
+        except:
+            raise Exception("Lowering to Kokkos dialect failed.")
+
+        # Then emit C++
+        args = ["-o", cppOut, "--py=" + pyOut]
         if self.num_instances == 0 or (self.index_instance == self.num_instances - 1):
-            args.append("--final")
-        p = subprocess.Popen([lapisEmit] + args, stdin=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        errs = p.communicate(input=moduleText)[1]
-        if p.returncode != 0:
-            raise Exception("lapis-emit failed to process module:\n" + errs)
-        return self.compile_kokkos_to_native(moduleRoot, True)
+            args.append("--finalize")
+        try:
+            self.run_cli("lapis-translate", args, moduleLowered)
+        except:
+            raise Exception("Emitting Kokkos C++ failed.")
 
-    def compile_mpact_source(self, module, tensorArgs):
-        LOWERING_PIPELINE = (
-        "builtin.module("
-        + ",".join(
-            [
-                "func.func(linalg-generalize-named-ops)",
-                # Run pre-sparsification pass to fuse convert/cast op into
-                # producer as they might hinder kernel fusions.
-                "pre-sparsification-rewrite",
-                "func.func(linalg-fuse-elementwise-ops)",
-                "convert-shape-to-std",
-                # Propagate sparse encodings before sparsifier mini-pipeline.
-                # TODO: the following pass currently contains no pattern. Will be
-                # added as needed.
-                "func.func(sparse-encoding-propagation)",
-                # MLIR Sparsifier mini-pipeline:
-                #   use the PyTorch assembler conventions
-                #   enable vectorization with VL=16 (more or less assumes AVX512 for float)
-                #   allow 32-bit index optimizations (unsafe for very large dimensions)
-                "sparse-assembler{direct-out}",
-                "sparsification-and-bufferization",
-                "sparse-storage-specifier-to-llvm",
-                # Buffer deallocation pass does not know how to handle realloc.
-                "func.func(expand-realloc)",
-                # Generalize pad and concat after sparse compiler, as they are handled
-                # differently when the operations involve sparse operands.
-                "func.func(refback-generalize-tensor-pad)",
-                "func.func(refback-generalize-tensor-concat)",
-                # Bufferize.
-                "func.func(tm-tensor-bufferize)",
-                "one-shot-bufferize{copy-before-write bufferize-function-boundaries function-boundary-type-conversion=identity-layout-map}",
-                "refback-mlprogram-bufferize",
-                "func.func(finalizing-bufferize)",
-                "func.func(buffer-deallocation)",
-                "inline",
-                "func.func(tm-tensor-to-loops)",
-                "func.func(refback-munge-memref-copy)",
-                "func.func(convert-linalg-to-parallel-loops)",
-                "func.func(lower-affine)",
-            ]) + ")"
-        )
-
-        module = mpactbackend.mpact_linalg(module, *tensorArgs)
-        backend = mpactbackend.MpactBackendCompiler(opt_level=1, use_sp_it=False)
-        mpactbackend.run_pipeline_with_repro_report(
-            module,
-            LOWERING_PIPELINE,
-            "Lowering Linalg-on-Tensors IR to LLVM with MpactBackendCompiler",
-            enable_ir_printing=True,
-        )
-
-        moduleText = str(module)
-        print(moduleText)
-        # Drive the final lowering (to Kokkos dialect) via command line, since Kokoks dialect isn't registered with mpact's python module.
-        moduleText = self.run_cli('lapis-opt', ['--parallel-unit-step', '--kokkos-loop-mapping', '--kokkos-dualview-management'], moduleText)
-
-        print("Lowering complete. Emitting sparse module as Kokkos C++...")
-        print(moduleText)
-        moduleRoot = self.ws + "/" + self.package_name
-        os.makedirs(moduleRoot, exist_ok=True)
-        lapisEmit = which('lapis-emit')
-        cppOut = moduleRoot + "/" + self.package_name + "_module.cpp"
-        pyOut = moduleRoot + "/" + self.package_name + ".py"
-        # Skip lowering because it was already done with mlir-opt, lapis-opt
-        args = ["--cxx=" + cppOut, "--py=" + pyOut, "--skipLowering"]
-        if self.dump_mlir:
-            args.append("--dump")
-        if self.num_instances == 0 or (self.index_instance == self.num_instances - 1):
-            args.append("--final")
-        p = subprocess.Popen([lapisEmit] + args, stdin=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        errs = p.communicate(input=moduleText)[1]
-        if p.returncode != 0:
-            raise Exception("lapis-emit failed to process module:\n" + errs)
-        return self.compile_kokkos_to_native(moduleRoot, True)
-
-    def compile(self, module, options: str = ""):
-        moduleText = str(module)
- 
-        moduleRoot = self.ws + "/" + self.package_name
-        os.makedirs(moduleRoot, exist_ok=True)
-        print("Emitting sparse module as Kokkos C++...")
-        lapisEmit = which('lapis-emit')
-        cppOut = moduleRoot + "/" + self.package_name + "_module.cpp"
-        pyOut = moduleRoot + "/" + self.package_name + ".py"
-        args = ["--cxx=" + cppOut, "--py=" + pyOut]
-        if self.dump_mlir:
-            args.append("--dump")
-        if self.num_instances == 0 or (self.index_instance == self.num_instances - 1):
-            args.append("--final")
-        p = subprocess.Popen([lapisEmit] + args, stdin=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        errs = p.communicate(input=moduleText)[1]
-        if p.returncode != 0:
-            raise Exception("lapis-emit failed to process module:\n" + errs)
+        # And compile + load the module
         return self.compile_kokkos_to_native(moduleRoot, True)
 

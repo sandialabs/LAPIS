@@ -58,7 +58,7 @@ int main(int argc, char **argv) {
 
   static llvm::cl::opt<bool> isLastKernel(
       "finalize", llvm::cl::desc("Whether this module's Python destructor should finalize Kokkos"), llvm::cl::value_desc("finalize"),
-      llvm::cl::init(true));
+      llvm::cl::init(false));
 
   // For backward compatiblity, allow the --mlir-to-kokkos flag to be passed (but the value is ignored;
   // lapis-translate always does this translation)
