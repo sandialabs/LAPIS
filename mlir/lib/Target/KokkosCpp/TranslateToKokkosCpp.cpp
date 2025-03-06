@@ -2545,7 +2545,8 @@ void KokkosCppEmitter::registerRuntimeSupportFunctions()
   }
   // SparseTensor functions not prefixed with "_mlir_ciface_"
   for (std::string funcName :
-       {"endInsert", "endLexInsert", "sparseDimSize", "sparseLvlSize"}) {
+       {"delSparseTensor",     "endInsert",     "endLexInsert",
+        "overwrite_csrv_csrv", "sparseDimSize", "sparseLvlSize"}) {
     registerNonPrefixed(false, funcName);
   }
   // PartTensor functions
