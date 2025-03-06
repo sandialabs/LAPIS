@@ -31,6 +31,8 @@ std::unique_ptr<Pass> createKokkosMemorySpaceAssignmentPass();
 
 std::unique_ptr<Pass> createKokkosDualViewManagementPass();
 
+std::unique_ptr<Pass> createKokkosMdrangeIterationPass();
+
 //===----------------------------------------------------------------------===//
 // Registration.
 //===----------------------------------------------------------------------===//
