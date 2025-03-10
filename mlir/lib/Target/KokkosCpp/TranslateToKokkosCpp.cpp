@@ -2293,7 +2293,6 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
       else
         os << "std::get<" << i << ">(results)";
       os << ".host_view);\n";
-      os << "std::cout << \"After keepAlive call, LAPIS::alives has \" << LAPIS::alives.size() << \" elems\\n\";\n";
     }
     else
     {
@@ -3473,7 +3472,6 @@ LogicalResult KokkosCppEmitter::emitInitAndFinalize(bool finalizeKokkos = true)
   }
   // Free views returned to Python
   os << "LAPIS::alives.clear();\n";
-  os << "std::cout << \"After finalize, LAPIS::alives has \" << LAPIS::alives.size() << \" elems\\n\";\n";
   if(finalizeKokkos)
     os << "Kokkos::finalize();\n";
   os.unindent();

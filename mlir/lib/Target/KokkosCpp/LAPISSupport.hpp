@@ -37,10 +37,6 @@ namespace LAPIS
     V stridedMemrefToView(const StridedMemRefType<typename V::value_type, V::rank>& smr)
     {
       using Layout = typename V::array_layout;
-      std::cout << "Hello from stridedMemrefToView: converting smr with ptr " << smr.data << ", rank " << V::rank << ", and sizes ";
-      for(int i = 0; i < V::rank; i++)
-        std::cout << smr.sizes[i] << " ";
-      std::cout << "\n";
       static_assert(std::is_same_v<typename V::memory_space, Kokkos::HostSpace> ||
           std::is_same_v<typename V::memory_space, Kokkos::AnonymousSpace>,
           "Can only convert a StridedMemRefType to a Kokkos::View in HostSpace.");
