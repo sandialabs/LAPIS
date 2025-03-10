@@ -79,6 +79,8 @@ class KokkosBackend:
 
     def compile(self, module):
         moduleText = str(module)
+        print("Top-level MLIR:")
+        print(moduleText)
         moduleRoot = self.ws + "/" + self.package_name
         os.makedirs(moduleRoot, exist_ok=True)
         cppOut = moduleRoot + "/" + self.package_name + "_module.cpp"
