@@ -41,8 +41,8 @@ class KokkosBackend:
             raise Exception("Did not find file $KOKKOS_ROOT/lib/cmake/Kokkos/KokkosConfig.cmake or $KOKKOS_ROOT/lib64/cmake/Kokkos/KokkosConfig.cmake. Check Kokkos installation and make sure $KOKKOS_ROOT points to it.")
         #print("Generating CMakeLists.txt...")
         cmake = open(moduleRoot + "/CMakeLists.txt", "w")
-        cmake.write("project(" + self.package_name + ")\n")
         cmake.write("cmake_minimum_required(VERSION 3.16 FATAL_ERROR)\n")
+        cmake.write("project(" + self.package_name + ")\n")
         cmake.write("find_package(Kokkos REQUIRED\n")
         cmake.write(" PATHS ")
         cmake.write(kokkosLibDir)
@@ -56,11 +56,8 @@ class KokkosBackend:
             cmake.write("target_link_libraries(" + self.package_name + "_module " + supportlib + ")\n")
         cmake.close()
         # Now configure the project and build the shared library from the build dir
-        #print("Configuring build...")
-        subprocess.run(['cmake', "-DCMAKE_BUILD_TYPE=Debug", moduleRoot], cwd=buildDir)
-        #print("Building module...")
+        subprocess.run(['cmake', "-DCMAKE_CXX_EXTENSIONS=OFF", "-DCMAKE_BUILD_TYPE=Debug", moduleRoot], cwd=buildDir)
         buildOut = subprocess.run(['make'], cwd=buildDir, shell=True)
-        #print("Importing module...")
         sys.path.insert(0, moduleRoot)
         lapis = __import__(self.package_name)
         if os.path.isfile(buildDir + "/lib" + self.package_name + "_module.so"):
