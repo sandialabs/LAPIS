@@ -345,6 +345,8 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     //For constants (initialized views), keep the actual data in a 1D array (with a related name).
     if(failed(emitter.emitType(op.getLoc(), memrefType.getElementType())))
       return failure();
+    if(!memrefType.hasStaticShape())
+      return op.emitError("GlobalOp must have static shape");
     int64_t span = KokkosCppEmitter::getMemrefSpan(memrefType);
     emitter << ' ' << op.getSymName() << "_initial" << "[" << span << "] = ";
     //Emit the 1D array literal
@@ -377,11 +379,23 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     emitter << "(\"" << emitter.getOrCreateName(result) << "\"";
   else
     emitter << "(Kokkos::view_alloc(Kokkos::WithoutInitializing, \"" << name << "\")";
-  for(auto dynSize : op.getDynamicSizes())
-  {
-    emitter << ", ";
-    if(failed(emitter.emitValue(dynSize)))
-      return failure();
+  // If ANY dim is dynamic, we use ALL dynamic dimensions for the Kokkos::View.
+  // This is because Kokkos/C++ limit the orders that static and dynamic dimensions can go in the type,
+  // but MLIR allows all orderings.
+  if(!type.hasStaticShape()) {
+    int dynSizeIndex = 0;
+    for(int64_t staticSize : type.getShape()) {
+      emitter << ", ";
+      if(staticSize < 0) {
+        // Output the next dynamic size
+        if(failed(emitter.emitValue(op.getDynamicSizes()[dynSizeIndex++])))
+          return failure();
+      }
+      else {
+        // Output the static size
+        emitter << staticSize;
+      }
+    }
   }
   emitter << ")";
   return success();
@@ -2239,10 +2253,10 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
   os << "{\n";
   os.indent();
   //FOR DEBUGGING THE EMITTED CODE:
-  //The next 3 lines makes the generated function pause to let you attach a debugger
-  os << "std::cout << \"Starting MLIR function on process \" << getpid() << '\\n';\n";
-  os << "std::cout << \"Optionally attach debugger now, then press <Enter> to continue: \";\n";
-  os << "std::cin.get();\n";
+  //If uncommented, the following 3 lines make the generated function pause to let user attach a debugger
+  //os << "std::cout << \"Starting MLIR function on process \" << getpid() << '\\n';\n";
+  //os << "std::cout << \"Optionally attach debugger now, then press <Enter> to continue: \";\n";
+  //os << "std::cin.get();\n";
   //Construct an unmanaged, LayoutRight Kokkos::View for each memref input parameter.
   //Note: stridedMemrefToView with LayoutRight will check the strides at runtime,
   //and the python wrapper will use numpy.require to deep-copy the data to the correct

@@ -44,7 +44,7 @@ def predictions(torch_func, kokkos_func, images, labels):
     kokkos_pred = torch.from_numpy(kokkos_func(images.numpy()))
     success = True
     for i in range(3):
-        print("Image ", i, " top 3 predictions:")
+        print("Image", i, "top 3 predictions:")
         pred1 = top3_possibilities(torch_pred[i:i+1, :], labels)
         print("PyTorch prediction")
         print(pred1)
@@ -54,6 +54,7 @@ def predictions(torch_func, kokkos_func, images, labels):
         matched = pred1[0][0] == pred2[0][0] and math.fabs(pred1[0][1] - pred2[0][1]) < 0.001
         if not matched:
             success = False
+    return success
 
 images = load_multiple_images(['images/' + name + '.jpg' for name in ['goldfish', 'dog', 'cat']])
 print("Loaded 3 images: overall tensor shape is", images.shape)
