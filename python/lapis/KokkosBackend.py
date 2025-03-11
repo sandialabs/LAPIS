@@ -76,8 +76,10 @@ class KokkosBackend:
 
     def compile(self, module):
         moduleText = str(module)
-        print("Top-level MLIR:")
-        print(moduleText)
+        if self.dump_mlir:
+            print("== High-Level ==")
+            print(moduleText)
+
         moduleRoot = self.ws + "/" + self.package_name
         os.makedirs(moduleRoot, exist_ok=True)
         cppOut = moduleRoot + "/" + self.package_name + "_module.cpp"
@@ -90,12 +92,14 @@ class KokkosBackend:
             pipeline += "=decompose-sparse-tensors"
         args = [pipeline]
         moduleLowered = ""
-        if self.dump_mlir:
-            args.append("--mlir-print-ir-before-all")
         try:
             moduleLowered = self.run_cli("lapis-opt", args, moduleText)
         except:
             raise Exception("Lowering to Kokkos dialect failed.")
+
+        if self.dump_mlir:
+            print("== Lowered ==")
+            print(moduleLowered)
 
         # Then emit C++
         args = ["-o", cppOut, "--py=" + pyOut]
