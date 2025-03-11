@@ -48,15 +48,12 @@ void mlir::kokkos::buildSparseKokkosCompiler(
   // Rewrite named linalg ops into generic ops and apply fusion.
   pm.addNestedPass<func::FuncOp>(createLinalgGeneralizeNamedOpsPass());
 
-  if(options.decompose)
+  if(options.decompose) {
     pm.addPass(createPreSparsificationRewritePass());
+  }
 
   pm.addNestedPass<func::FuncOp>(createLinalgElementwiseOpFusionPass());
   pm.addPass(createConvertShapeToStandardPass());
-
-  if(options.decompose) {
-    pm.addPass(createSparseAssemblerDirectOutPass());
-  }
 
   // Set up options for sparsification.
   // The only option exposed by LapisCompilerOptions is the parallelization strategy.
