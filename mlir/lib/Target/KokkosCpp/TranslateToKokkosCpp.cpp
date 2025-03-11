@@ -2003,6 +2003,19 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, ModuleOp moduleOp
 }
 
 static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp functionOp) {
+  {
+    FunctionType ftype = functionOp.getFunctionType();
+    size_t numParams = ftype.getNumInputs();
+    printf("Hello from emit FuncOp!\n");
+    printf("Has %d parameters. Their types:\n", (int) numParams);
+    for(size_t i = 0; i < numParams; i++)
+    {
+      auto paramType = ftype.getInput(i);
+      paramType.dump();
+      puts("");
+    }
+  }
+
   // Clear dualViewsFromTensors of any values from previously emitted functions.
   emitter.dualViewsFromTensors.clear();
   // Need to replace function names in 2 cases:
@@ -2227,9 +2240,9 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
   os.indent();
   //FOR DEBUGGING THE EMITTED CODE:
   //The next 3 lines makes the generated function pause to let you attach a debugger
-  //os << "std::cout << \"Starting MLIR function on process \" << getpid() << '\\n';\n";
-  //os << "std::cout << \"Optionally attach debugger now, then press <Enter> to continue: \";\n";
-  //os << "std::cin.get();\n";
+  os << "std::cout << \"Starting MLIR function on process \" << getpid() << '\\n';\n";
+  os << "std::cout << \"Optionally attach debugger now, then press <Enter> to continue: \";\n";
+  os << "std::cin.get();\n";
   //Construct an unmanaged, LayoutRight Kokkos::View for each memref input parameter.
   //Note: stridedMemrefToView with LayoutRight will check the strides at runtime,
   //and the python wrapper will use numpy.require to deep-copy the data to the correct
