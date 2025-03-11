@@ -59,7 +59,9 @@ namespace LAPIS
             extents[7], strides[7]);
         return V(&smr.data[smr.offset], layout);
       }
-      size_t extents[8] = {0};
+      size_t extents[8] = {
+        KOKKOS_INVALID_INDEX, KOKKOS_INVALID_INDEX, KOKKOS_INVALID_INDEX, KOKKOS_INVALID_INDEX,
+        KOKKOS_INVALID_INDEX, KOKKOS_INVALID_INDEX, KOKKOS_INVALID_INDEX, KOKKOS_INVALID_INDEX};
       for(int i = 0; i < V::rank; i++)
         extents[i] = smr.sizes[i];
       Layout layout(
@@ -71,7 +73,7 @@ namespace LAPIS
         for(int i = 0; i < int(V::rank); i++)
         {
           if(expectedStride != smr.strides[i])
-            Kokkos::abort("Cannot convert non-contiguous StridedMemRefType to LayoutLeft Kokkos::View");
+            Kokkos::abort("Cannot shallow-copy StridedMemRefType that is not contiguous and LayoutLeft to LayoutLeft Kokkos::View");
           expectedStride *= smr.sizes[i];
         }
       }
@@ -81,7 +83,7 @@ namespace LAPIS
         for(int i = int(V::rank) - 1; i >= 0; i--)
         {
           if(expectedStride != smr.strides[i])
-            Kokkos::abort("Cannot convert non-contiguous StridedMemRefType to LayoutRight Kokkos::View");
+            Kokkos::abort("Cannot shallow-copy StridedMemRefType that is not contiguous and LayoutRight to LayoutRight Kokkos::View");
           expectedStride *= smr.sizes[i];
         }
       }
@@ -277,6 +279,14 @@ namespace LAPIS
       host_view = HostView();
     }
 
+    size_t extent(int dim) {
+      return device_view.extent(dim);
+    }
+
+    size_t stride(int dim) {
+      return device_view.stride(dim);
+    }
+
     DeviceView device_view;
     HostView host_view;
   };
@@ -290,5 +300,33 @@ namespace LAPIS
     return vector_length;
   }
 
+  // KeepAlive structure keeps a reference to Kokkos::Views which
+  // are returned to Python. Since it's difficult to transfer ownership of a
+  // Kokkos::View's memory to numpy, we just have the Kokkos::View maintain ownership
+  // and return an unmanaged numpy array to Python.
+  //
+  // All these views will be deallocated during lapis_finalize to avoid leaking.
+  // The downside is that if a function is called many times,
+  // all its results are kept in memory at the same time.
+  struct KeepAlive
+  {
+    virtual ~KeepAlive() {}
+  };
+
+  template<typename T>
+  struct KeepAliveT : public KeepAlive
+  {
+    // Make a shallow-copy of val
+    KeepAliveT(const T& val) : p(new T(val)) {}
+    std::unique_ptr<T> p;
+  };
+
+  static std::vector<std::unique_ptr<KeepAlive>> alives;
+
+  template<typename T>
+  void keepAlive(const T& val)
+  {
+    alives.emplace_back(new KeepAliveT(val));
+  }
 } // namespace LAPIS
 
