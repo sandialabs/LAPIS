@@ -17,6 +17,8 @@ while True:
         myprint("\\n\"\n\"")
     elif c == '\t':
         myprint("    ")
+    elif c == '\\':
+        myprint("\\\\")
     else:
         myprint(c)
 myprint('"')
