@@ -38,6 +38,7 @@
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 
 using namespace mlir;
 
@@ -111,7 +112,8 @@ int main(int argc, char **argv) {
                   LLVM::LLVMDialect,
                   math::MathDialect,
                   memref::MemRefDialect,
-                  scf::SCFDialect>();
+                  scf::SCFDialect,
+                  vector::VectorDialect>();
   context.appendDialectRegistry(registry);
 
   FallbackAsmResourceMap fallbackResourceMap;

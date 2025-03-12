@@ -17,6 +17,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "lapis/Dialect/Kokkos/IR/KokkosDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -2254,9 +2255,9 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
   os.indent();
   //FOR DEBUGGING THE EMITTED CODE:
   //If uncommented, the following 3 lines make the generated function pause to let user attach a debugger
-  //os << "std::cout << \"Starting MLIR function on process \" << getpid() << '\\n';\n";
-  //os << "std::cout << \"Optionally attach debugger now, then press <Enter> to continue: \";\n";
-  //os << "std::cin.get();\n";
+  os << "std::cout << \"Starting MLIR function on process \" << getpid() << '\\n';\n";
+  os << "std::cout << \"Optionally attach debugger now, then press <Enter> to continue: \";\n";
+  os << "std::cin.get();\n";
   //Construct an unmanaged, LayoutRight Kokkos::View for each memref input parameter.
   //Note: stridedMemrefToView with LayoutRight will check the strides at runtime,
   //and the python wrapper will use numpy.require to deep-copy the data to the correct
@@ -2274,7 +2275,9 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
     }
   }
   // Emit the call
-  os << "auto results = " << funcName << "(";
+  if(numResults)
+    os << "auto results = ";
+  os << funcName << "(";
   for(size_t i = 0; i < numParams; i++)
   {
     if(i != 0)
@@ -3332,6 +3335,54 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   return success();
 }
 
+static LogicalResult printOperation(KokkosCppEmitter &emitter,
+                                    vector::PrintOp op) {
+  // It's possible that op doesn't print anything
+  if(!op.getSource()
+      && op.getPunctuation() == vector::PrintPunctuation::NoPunctuation
+      && !op.getStringLiteral()) {
+    return success();
+  }
+  emitter << "std::cout ";
+  // Print the operand (if there is one)
+  if(Value val = op.getSource()) {
+    emitter << "<< ";
+    if(failed(emitter.emitValue(val)))
+      return failure();
+  }
+  // Then the string literal (if there is one)
+  if(auto stringLiteral = op.getStringLiteral()) {
+    emitter << "<< \"";
+    auto& os = emitter.ostream();
+    os.write_escaped(stringLiteral.value().getValue(), true);
+    emitter << "\"";
+  }
+  // and finally punctuation
+  emitter << "<< \"";
+  switch(op.getPunctuation()) {
+    case vector::PrintPunctuation::NoPunctuation:
+      break;
+    case vector::PrintPunctuation::NewLine:
+      // It appears that the upstream vector->LLVM lowering
+      // skips newlines for PrintOps with a string literal,
+      // so match that behavior here for consistent output
+      if(!op.getStringLiteral())
+        emitter << "\\n";
+      break;
+    case vector::PrintPunctuation::Comma:
+      emitter << ",";
+      break;
+    case vector::PrintPunctuation::Open:
+      emitter << "[";
+      break;
+    case vector::PrintPunctuation::Close:
+      emitter << "]";
+      break;
+  }
+  emitter << '"';
+  return success();
+}
+
 LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemicolon) {
   // Some ops need to be processed by the emitter, but don't print anything to the C++ code.
   // Avoid printing the semicolon in this case.
@@ -3398,6 +3449,9 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
               [&](auto op) { return printOperation(*this, op); })
           // LLVM ops.
           .Case<LLVM::ZeroOp>(
+              [&](auto op) { return printOperation(*this, op); })
+          // Vector ops.
+          .Case<vector::PrintOp>(
               [&](auto op) { return printOperation(*this, op); })
           // Other operations are unknown/unsupported.
           .Default([&](Operation *) {
@@ -3477,7 +3531,6 @@ LogicalResult KokkosCppEmitter::emitInitAndFinalize(bool finalizeKokkos = true)
     os.unindent();
     os << "}\n";
   }
-  os << "Kokkos::DefaultExecutionSpace().fence();\n";
   os.unindent();
   os << "}\n\n";
   os << "extern \"C\" void lapis_finalize()\n";
