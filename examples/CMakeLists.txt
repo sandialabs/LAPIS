@@ -1,5 +1,8 @@
 macro(AddPythonTest name)
   add_test(NAME ${name} WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} COMMAND ${Python3_EXECUTABLE} ${name}.py)
+  # All the python-based tests use the same (default) workspace directory, lapis_package/
+  # So they must be run sequentially
+  set_tests_properties(${name} PROPERTIES RUN_SERIAL TRUE)
 endmacro()
 
 IF(MLIR_ENABLE_BINDINGS_PYTHON)
