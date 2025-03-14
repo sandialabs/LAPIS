@@ -13,11 +13,12 @@
 #include "mlir/Dialect/Func/Transforms/FuncConversions.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "lapis/Dialect/Kokkos/IR/KokkosDialect.h"
-#include "lapis/Dialect/Kokkos/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/Transforms/Patterns.h"
 #include "mlir/Dialect/SparseTensor/IR/SparseTensor.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/SparseTensor/Transforms/Passes.h" //for SparseParallelizationStrategy
+#include "lapis/Dialect/Kokkos/IR/KokkosDialect.h"
+#include "lapis/Dialect/Kokkos/Transforms/Passes.h"
 
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
@@ -25,8 +26,7 @@ namespace mlir {
 #define GEN_PASS_DEF_PARALLELUNITSTEP
 #define GEN_PASS_DEF_KOKKOSLOOPMAPPING
 #define GEN_PASS_DEF_KOKKOSMEMORYSPACEASSIGNMENT
-
-#define GEN_PASS_DEF_SPARSEKOKKOSCODEGEN
+#define GEN_PASS_DEF_SPARSEASSEMBLERDIRECTOUT
 
 #include "lapis/Dialect/Kokkos/Transforms/Passes.h.inc"
 } // namespace mlir
@@ -77,6 +77,20 @@ struct KokkosMemorySpaceAssignmentPass
     (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
   }
 };
+
+struct SparseAssemblerDirectOutPass
+    : public impl::SparseAssemblerDirectOutBase<SparseAssemblerDirectOutPass> {
+
+  SparseAssemblerDirectOutPass() = default;
+  SparseAssemblerDirectOutPass(const SparseAssemblerDirectOutPass& pass) = default;
+
+  void runOnOperation() override {
+    auto *ctx = &getContext();
+    RewritePatternSet patterns(ctx);
+    populateSparseAssembler(patterns, /* directOut */ true);
+    (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+  }
+};
 }
 
 std::unique_ptr<Pass> mlir::createParallelUnitStepPass()
@@ -92,5 +106,10 @@ std::unique_ptr<Pass> mlir::createKokkosLoopMappingPass()
 std::unique_ptr<Pass> mlir::createKokkosMemorySpaceAssignmentPass()
 {
   return std::make_unique<KokkosMemorySpaceAssignmentPass>();
+}
+
+std::unique_ptr<Pass> mlir::createSparseAssemblerDirectOutPass()
+{
+  return std::make_unique<SparseAssemblerDirectOutPass>();
 }
 

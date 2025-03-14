@@ -105,7 +105,7 @@ tests/*.mlir
 tests/*.tns
 
 # Other test artifacts
-mlir/test/Dialect/*/Output
+tests/Dialect/*/Output
 mlir/test/Dialect/*/.*.txt
 mlir/test/.*.txt
 

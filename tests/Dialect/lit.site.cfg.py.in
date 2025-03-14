@@ -9,5 +9,5 @@ config.lapis_tool_bin = "@LAPIS_TOOL_BIN@"
 config.lapis_lib_dir = "@LAPIS_BINARY_DIR@/lib"
 
 # Let the main config do the real work.
-lit_config.load_config(config, "@LAPIS_SOURCE_DIR@/mlir/test/lit.cfg.py")
+lit_config.load_config(config, "@LAPIS_SOURCE_DIR@/tests/Dialect/lit.cfg.py")
 

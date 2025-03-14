@@ -1,3 +1,4 @@
+#include "lapis/LAPIS_config.h"
 #include "lapis-c/EmitKokkos.h"
 #include "lapis/Target/KokkosCpp/KokkosCppEmitter.h"
 #include "mlir/CAPI/IR.h"
@@ -11,7 +12,7 @@
 #include "lapis/Dialect/Kokkos/IR/KokkosDialect.h"
 #include "lapis/Dialect/Kokkos/Pipelines/Passes.h"
 #include "lapis/Dialect/Kokkos/Transforms/Passes.h"
-#ifdef ENABLE_PART_TENSOR
+#ifdef LAPIS_ENABLE_PART_TENSOR
 #include "lapis/Dialect/PartTensor/IR/PartTensor.h"
 #include "lapis/Dialect/PartTensor/Pipelines/Passes.h"
 #include "lapis/Dialect/PartTensor/Transforms/Passes.h"
@@ -52,7 +53,7 @@ using namespace mlir;
 static MLIRContext getLAPISContext() {
   DialectRegistry registry;
   registry.insert<
-#ifdef ENABLE_PART_TENSOR
+#ifdef LAPIS_ENABLE_PART_TENSOR
       mlir::part_tensor::PartTensorDialect,
 #endif
       mlir::LLVM::LLVMDialect, mlir::vector::VectorDialect,

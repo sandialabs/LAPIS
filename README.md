@@ -222,16 +222,14 @@ pip install --user lit
 ```
 #### Run tests: recipe A
 ```
-cd $WORKSPACE/lapisBuild/mlir/test
-# Just Kokkos dialect tests
-lit -v Dialect/Kokkos
+cd $WORKSPACE/lapisBuild
+ctest
 ```
 #### Run tests: recipe B
 ```
-cd $WORKSPACE/build/tools/lapis/mlir/test
-lit -v Dialect/Kokkos
+cd $WORKSPACE/lapisBuild/tools/lapis
+ctest
 ```
-
 ## Developer Guide
-### Adding tests
-see [AddingNewTests.txt](mlir/test/AddingNewTests.txt).
+### Adding dialect tests
+see [AddingNewTests.txt](tests/Dialect/AddingNewTests.txt).

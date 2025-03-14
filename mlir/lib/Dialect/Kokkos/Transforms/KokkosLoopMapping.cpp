@@ -171,6 +171,7 @@ static LogicalResult estimateParallelism(Value &parallelism,
         // Then the average parallelism of the inner loop is (R[N] - R[0]) / N.
         // Since it's better to over-provision than under-provision
         // threads/lanes, we take the ceiling of this: (R[N] - R[0] + N - 1) / N.
+        const bool debugCsrPattern = false;
         bool followsCsrPattern = true;
         Value csrPatternOffsets;
         // Check for conditions in a do-while, so that break will exit on the
@@ -180,6 +181,7 @@ static LogicalResult estimateParallelism(Value &parallelism,
           // but enclosing nested
           if (kokkos::getOpParallelDepth(topParallel) + 1 !=
               kokkos::getOpParallelDepth(nested)) {
+            if(debugCsrPattern) llvm::outs() << "Does not match CSR pattern: possible loop over row entries is not directly nested\n";
             followsCsrPattern = false;
             break;
           }
@@ -194,11 +196,13 @@ static LogicalResult estimateParallelism(Value &parallelism,
                          dyn_cast<kokkos::ThreadParallelOp>(topParallel)) {
             induction1D = thread.getInductionVar();
           } else {
+            if(debugCsrPattern) llvm::outs() << "Does not match CSR pattern: couldn't determine 1D induction variable for enclosing loop\n";
             followsCsrPattern = false;
             break;
           }
           arith::SubIOp sub = dyn_cast<arith::SubIOp>(bound.getDefiningOp());
           if (!sub) {
+            if(debugCsrPattern) llvm::outs() << "Does not match CSR pattern: inner loop bound is not the result of an arith.subi\n";
             followsCsrPattern = false;
             break;
           }
@@ -207,33 +211,39 @@ static LogicalResult estimateParallelism(Value &parallelism,
           auto Aload = dyn_cast<memref::LoadOp>(A.getDefiningOp());
           auto Bload = dyn_cast<memref::LoadOp>(B.getDefiningOp());
           if (!Aload || !Bload) {
+            if(debugCsrPattern) llvm::outs() << "Does not match CSR pattern: subi operands not both from memref.load\n";
             followsCsrPattern = false;
             break;
           }
           if (Aload->getParentOp() != topParallel ||
               Bload->getParentOp() != topParallel) {
+            if(debugCsrPattern) llvm::outs() << "Does not match CSR pattern: subi operands are loads, but they are not nested inside enclosing parallel\n";
             followsCsrPattern = false;
             break;
           }
           // A, B must both read the same memref
           if (Aload.getMemref() != Bload.getMemref()) {
+            if(debugCsrPattern) llvm::outs() << "Does not match CSR pattern: subi operands are loads, but they are not loads from the same memref\n";
             followsCsrPattern = false;
             break;
           }
           csrPatternOffsets = Aload.getMemref();
           // Offsets should be a 1D memref
           if (Aload.getIndices().size() != 1) {
+            if(debugCsrPattern) llvm::outs() << "Does not match CSR pattern: subi operands are loads, but they are from a memref with rank > 1\n";
             followsCsrPattern = false;
             break;
           }
           Value Aindex = followCast(Aload.getIndices().front());
           Value Bindex = followCast(Bload.getIndices().front());
           if (Aindex != induction1D) {
+            if(debugCsrPattern) llvm::outs() << "Does not match CSR pattern: RHS load is not using outer induction (e.g. row) as index\n";
             followsCsrPattern = false;
             break;
           }
           auto Badd = dyn_cast<arith::AddIOp>(Bindex.getDefiningOp());
           if (!Badd) {
+            if(debugCsrPattern) llvm::outs() << "Does not match CSR pattern: LHS load is not an arith.addi\n";
             followsCsrPattern = false;
             break;
           }
@@ -241,6 +251,7 @@ static LogicalResult estimateParallelism(Value &parallelism,
                 kokkos::valueIsIntegerConstantOne(Badd.getRhs())) &&
               !(followCast(Badd.getRhs()) == induction1D &&
                 kokkos::valueIsIntegerConstantOne(Badd.getLhs()))) {
+            if(debugCsrPattern) llvm::outs() << "Does not match CSR pattern: LHS load index is not one greater than RHS load index\n";
             followsCsrPattern = false;
             break;
           }
@@ -313,9 +324,11 @@ static LogicalResult estimateParallelism(Value &parallelism,
         }
       }
     }
-    Value totalEstimate =
-        buildIndexProduct(topParallel->getLoc(), rewriter, boundsToMultiply);
-    allEstimates.push_back(totalEstimate);
+    // If we recognized a pattern for this nested loop, record its parallelism level.
+    if(boundsToMultiply.size()) {
+      Value totalEstimate = buildIndexProduct(topParallel->getLoc(), rewriter, boundsToMultiply);
+      allEstimates.push_back(totalEstimate);
+    }
   }
   if (allEstimates.empty())
     return failure();

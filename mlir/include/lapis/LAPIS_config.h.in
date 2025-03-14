@@ -1,0 +1,8 @@
+#ifndef LAPIS_CONFIG_H
+#define LAPIS_CONFIG_H
+
+#cmakedefine LAPIS_HAS_TORCH_MLIR
+#cmakedefine LAPIS_HAS_MPACT
+#cmakedefine LAPIS_ENABLE_PART_TENSOR
+
+#endif
