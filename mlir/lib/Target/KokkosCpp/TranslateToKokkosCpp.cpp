@@ -164,6 +164,15 @@ struct KokkosCppEmitter {
   /// Return the existing or a new label of a Block.
   StringRef getOrCreateName(Block &block);
 
+  /// Declare the device and host views for a DualView
+  /// This should be added after most operations that produce a DualView result,
+  /// since it places the device and host views in the same scope as the DualView.
+  void declareDeviceHostViews(Value val) {
+    auto name = getOrCreateName(val);
+    os << "auto " << name << "_d = " << name << ".device_view();\n";
+    os << "auto " << name << "_h = " << name << ".host_view();\n";
+  }
+
   /// Whether to map an mlir integer to a unsigned integer in C++.
   bool shouldMapToUnsigned(IntegerType::SignednessSemantics val);
 
@@ -509,7 +518,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     emitter << " " << resultName << "_host(";
     if (failed(emitter.emitValue(source)))
       return failure();
-    emitter << ".host_view.data() + ";
+    emitter << "_h.data() + ";
     if (failed(emitOffset()))
       return failure();
     emitter << ", " << resultName << "_layout);\n";
@@ -519,7 +528,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     emitter << " " << resultName << "_device(";
     if (failed(emitter.emitValue(source)))
       return failure();
-    emitter << ".device_view.data() + ";
+    emitter << "_d.data() + ";
     if (failed(emitOffset()))
       return failure();
     emitter << ", " << resultName << "_layout);\n";
@@ -612,9 +621,9 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   if(kokkos::getMemSpace(op.getMemref()) == kokkos::MemorySpace::DualView) {
     // Which view to access depends if we are in host or device context
     if(kokkos::getOpExecutionSpace(op) == kokkos::ExecutionSpace::Device)
-      emitter << ".device_view";
+      emitter << "_d";
     else
-      emitter << ".host_view";
+      emitter << "_h";
   }
   emitter << "(";
   for(auto iter = op.getIndices().begin(); iter != op.getIndices().end(); iter++)
@@ -641,9 +650,9 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   if(kokkos::getMemSpace(op.getMemref()) == kokkos::MemorySpace::DualView) {
     // Which view to access depends if we are in host or device context
     if(kokkos::getOpExecutionSpace(op) == kokkos::ExecutionSpace::Device)
-      emitter << ".device_view";
+      emitter << "_d";
     else
-      emitter << ".host_view";
+      emitter << "_h";
   }
   emitter << "(";
   for(auto iter = op.getIndices().begin(); iter != op.getIndices().end(); iter++)
@@ -691,10 +700,10 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     emitter << "Kokkos::deep_copy(";
     if(failed(emitter.emitValue(op.getTarget())))
       return failure();
-    emitter << ".host_view, ";
+    emitter << "_h, ";
     if(failed(emitter.emitValue(op.getSource())))
       return failure();
-    emitter << ".host_view);";
+    emitter << "_h);";
     if(failed(emitter.emitValue(op.getTarget())))
       return failure();
     emitter << ".modifyHost();\n";
@@ -707,10 +716,10 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     emitter << "Kokkos::deep_copy(";
     if(failed(emitter.emitValue(op.getTarget())))
       return failure();
-    emitter << ".device_view, ";
+    emitter << "_d, ";
     if(failed(emitter.emitValue(op.getSource())))
       return failure();
-    emitter << ".device_view);";
+    emitter << "_d);";
     if(failed(emitter.emitValue(op.getTarget())))
       return failure();
     emitter << ".modifyDevice();\n";
@@ -732,11 +741,10 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     emitter << ", ";
     if(failed(emitter.emitValue(op.getSource())))
       return failure();
-    emitter << ".";
     if(dstSpace == kokkos::MemorySpace::Device)
-      emitter << "device_view);\n";
+      emitter << "_d);\n";
     else
-      emitter << "host_view);\n";
+      emitter << "_h);\n";
   }
   else {
     // dst is DualView but src isn't.
@@ -814,7 +822,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     emitter << " " << resultName << "_host(";
     if (failed(emitter.emitValue(source)))
       return failure();
-    emitter << ".host_view.data() + ";
+    emitter << "_h.data() + ";
     for(int i = 0; i < sourceRank; i++) {
       if(i)
         emitter << " + ";
@@ -823,7 +831,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
       emitter << " * ";
       if (failed(emitter.emitValue(source)))
         return failure();
-      emitter << ".host_view.stride_" << i << "()";
+      emitter << "_h.stride_" << i << "()";
     }
     emitter << ", " << resultName << "_layout);\n";
     if(failed(emitter.emitStridedMemrefType(op.getLoc(), resultType, kokkos::MemorySpace::Device))) {
@@ -832,7 +840,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     emitter << " " << resultName << "_device(";
     if (failed(emitter.emitValue(source)))
       return failure();
-    emitter << ".device_view.data() + ";
+    emitter << "_d.data() + ";
     for(int i = 0; i < sourceRank; i++) {
       if(i)
         emitter << " + ";
@@ -841,7 +849,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
       emitter << " * ";
       if (failed(emitter.emitValue(source)))
         return failure();
-      emitter << ".device_view.stride_" << i << "()";
+      emitter << "_d.stride_" << i << "()";
     }
     emitter << ", " << resultName << "_layout);\n";
     if(failed(emitter.emitStridedMemrefType(op.getLoc(), resultType, kokkos::MemorySpace::DualView))) {
@@ -1059,7 +1067,7 @@ static LogicalResult printSupportCall(KokkosCppEmitter &emitter, func::CallOp ca
       // arg's memory space should be either Host or DualView
       auto argMemSpace = kokkos::getMemSpace(arg);
       if(argMemSpace == kokkos::MemorySpace::DualView) {
-        os << ".host_view";
+        os << "_h";
       }
       else if(argMemSpace != kokkos::MemorySpace::Host) {
         return callOp.emitError("Passing memref to support function, whose space is neither host nor DualView");
@@ -2121,8 +2129,8 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
     return failure();
   os << ' ' << funcName;
   os << "(";
-  //Make a list of the memref parameters that need to be converted to Kokkos::Views inside the body
-  std::vector<BlockArgument> stridedMemrefParams;
+  //Make a list of the memref parameters (these will all be DualViews)
+  std::vector<BlockArgument> memrefParams;
   if (failed(interleaveCommaWithError(
           functionOp.getArguments(), os,
           [&](BlockArgument arg) -> LogicalResult {
@@ -2132,6 +2140,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
               kokkos::MemorySpace space = kokkos::getMemSpace(arg);
               if (failed(emitter.emitMemrefType(loc, mrt, space)))
                 return failure();
+              memrefParams.push_back(arg);
             }
             else {
               if (failed(emitter.emitType(loc, arg.getType())))
@@ -2144,14 +2153,9 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
   os << ") {\n";
   os.indent();
 
-  //Convert any StridedMemRefType parameters to Kokkos::View
-  for(BlockArgument arg : stridedMemrefParams) {
-    MemRefType mrt = cast<MemRefType>(arg.getType());
-    kokkos::MemorySpace space = kokkos::getMemSpace(arg);
-    emitter << "auto " << emitter.getOrCreateName(arg) << " = LAPIS::stridedMemrefToView<";
-    if (failed(emitter.emitMemrefType(loc, mrt, space)))
-      return failure();
-    emitter << ">(*" << emitter.getOrCreateName(arg) << "_smr);\n";
+  for(BlockArgument arg : memrefParams) {
+    emitter << "auto " << emitter.getOrCreateName(arg) << "_d = " << emitter.getOrCreateName(arg) << ".device_view();\n";
+    emitter << "auto " << emitter.getOrCreateName(arg) << "_h = " << emitter.getOrCreateName(arg) << ".host_view();\n";
   }
 
   Region::BlockListType &blocks = functionOp.getBlocks();
@@ -2192,6 +2196,14 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
       if (failed(emitter.emitOperation(
               op, /*trailingSemicolon=*/trailingSemicolon)))
         return failure();
+      // If op produced any DualView typed memrefs,
+      // declare variables for its host and device views 
+      for(auto result : op.getResults()) {
+        if(auto memrefType = dyn_cast<MemRefType>(result.getType())) {
+          if(kokkos::getMemSpace(result) == kokkos::MemorySpace::DualView)
+            emitter.declareDeviceHostViews(result);
+        }
+      }
     }
   }
   os.unindent() << "}\n\n";
@@ -2314,7 +2326,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
         os << "results";
       else
         os << "std::get<" << i << ">(results)";
-      os << ".host_view);\n";
+      os << ".host_view());\n";
       // Keep the host view alive until lapis_finalize() is called.
       // Otherwise it would be deallocated as soon as this function returns.
       os << "LAPIS::keepAlive(";
@@ -2322,7 +2334,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
         os << "results";
       else
         os << "std::get<" << i << ">(results)";
-      os << ".host_view);\n";
+      os << ".host_view());\n";
     }
     else
     {

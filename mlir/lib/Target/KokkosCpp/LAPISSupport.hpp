@@ -248,7 +248,7 @@ namespace LAPIS
         }
       }
       else if (parent->modified_device) {
-        if(parent == this) {
+        if(parent.get() == this) {
           Kokkos::deep_copy(host_view, device_view);
           modified_device = false;
         }
@@ -264,7 +264,7 @@ namespace LAPIS
       // because all host execution spaces are synchronous.
       // Any changes on the host side are immediately visible on the device side.
       if (device_view.data() != host_view.data()) {
-        if(parent == this) {
+        if(parent.get() == this) {
           if(modified_host) {
             Kokkos::deep_copy(device_view, host_view);
             modified_host = false;
