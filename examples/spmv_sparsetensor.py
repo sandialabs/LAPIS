@@ -1,3 +1,5 @@
+import ctypes
+import sys
 import torch
 from lapis import KokkosBackend
 from mpact.mpactbackend import mpact_linalg
@@ -7,7 +9,6 @@ from scipy.io import mmread
 from NewSparseTensorFactory import newSparseTensorFactory
 from NewSparseTensorFactory import LevelFormat
 import numpy as np
-import ctypes
 
 class SpMV(torch.nn.Module):
     def __init__(self):
@@ -44,9 +45,12 @@ def main():
     module_kokkos = backend.compile(module_linalg)
 
     print("y = Ax from torch:")
-    print(module_torch.forward(A, x).numpy())
+    ytorch = module_torch.forward(A, x).numpy()
+    print(ytorch)
     print("y = Ax from kokkos:")
-    print(module_kokkos.lapis_main(Asp, x.numpy()))
+    ykokkos = module_kokkos.lapis_main(Asp, x.numpy())
+    print(ykokkos)
+    sys.exit(0 if np.allclose(ytorch, ykokkos) else 1)
 
 if __name__ == "__main__":
     main()
