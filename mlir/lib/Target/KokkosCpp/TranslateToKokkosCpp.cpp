@@ -3348,6 +3348,23 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
 }
 
 static LogicalResult printOperation(KokkosCppEmitter &emitter,
+                                    LLVM::ExtractValueOp op) {
+  if(failed(emitter.emitType(op.getLoc(), op.getResult().getType())))
+    return failure();
+  emitter << ' ' << emitter.getOrCreateName(op.getResult()) << " = ";
+  for(size_t i = 0; i < op.getPosition().size(); i++) {
+    // Positions are given from outer to inner, so we can emit nested std::get
+    emitter << "std::get<" << op.getPosition()[i] << ">(";
+  }
+  if(failed(emitter.emitValue(op.getContainer())))
+    return failure();
+  for(size_t i = 0; i < op.getPosition().size(); i++) {
+    emitter << ")";
+  }
+  return success();
+}
+
+static LogicalResult printOperation(KokkosCppEmitter &emitter,
                                     vector::PrintOp op) {
   // It's possible that op doesn't print anything
   if(!op.getSource()
@@ -3460,7 +3477,7 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
           .Case<emitc::CallOp, emitc::CallOpaqueOp>(
               [&](auto op) { return printOperation(*this, op); })
           // LLVM ops.
-          .Case<LLVM::ZeroOp>(
+          .Case<LLVM::ZeroOp, LLVM::ExtractValueOp>(
               [&](auto op) { return printOperation(*this, op); })
           // Vector ops.
           .Case<vector::PrintOp>(
@@ -3646,6 +3663,19 @@ LogicalResult KokkosCppEmitter::emitType(Location loc, Type type, bool forSparse
     // LLVMPointerType is untyped
     os << "void*";
     return success();
+  }
+  if (auto structType = dyn_cast<LLVM::LLVMStructType>(type)) {
+    // Use a std::tuple to represent simple structs
+    return emitTypes(loc, structType.getBody(), false);
+  }
+  if (auto llvmArrayType = dyn_cast<LLVM::LLVMArrayType>(type)) {
+    // This is a statically sized (assuming small) array of another type.
+    // Use the same logic as for structs
+    SmallVector<Type> elemTypes;
+    for(size_t i = 0; i < llvmArrayType.getNumElements(); i++) {
+      elemTypes.push_back(llvmArrayType.getElementType());
+    }
+    return emitTypes(loc, elemTypes, false);
   }
   return emitError(loc, "cannot emit type ") << type << "\n";
 }
