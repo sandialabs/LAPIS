@@ -2267,9 +2267,9 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
   os.indent();
   //FOR DEBUGGING THE EMITTED CODE:
   //If uncommented, the following 3 lines make the generated function pause to let user attach a debugger
-  os << "std::cout << \"Starting MLIR function on process \" << getpid() << '\\n';\n";
-  os << "std::cout << \"Optionally attach debugger now, then press <Enter> to continue: \";\n";
-  os << "std::cin.get();\n";
+  //os << "std::cout << \"Starting MLIR function on process \" << getpid() << '\\n';\n";
+  //os << "std::cout << \"Optionally attach debugger now, then press <Enter> to continue: \";\n";
+  //os << "std::cin.get();\n";
   //Construct an unmanaged, LayoutRight Kokkos::View for each memref input parameter.
   //Note: stridedMemrefToView with LayoutRight will check the strides at runtime,
   //and the python wrapper will use numpy.require to deep-copy the data to the correct

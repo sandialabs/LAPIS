@@ -10,13 +10,14 @@ from shutil import which
 class KokkosBackend:
     """Main entry-point for the Kokkos backend for linalg-on-tensors dense/sparse code."""
 
-    def __init__(self, decompose_tensors = False, dump_mlir = False, index_instance=0, num_instances=0, ws = os.getcwd()):
+    def __init__(self, decompose_tensors = False, parallel_strategy="any-storage-any-loop", dump_mlir = False, index_instance=0, num_instances=0, ws = os.getcwd()):
         super().__init__()
         self.dump_mlir = dump_mlir
         self.ws = ws
         self.index_instance = index_instance
         self.num_instances = num_instances
         self.decompose_tensors = decompose_tensors
+        self.parallel_strategy = parallel_strategy
         if self.index_instance == 0:
             self.package_name = "lapis_package"
         else:
@@ -86,14 +87,14 @@ class KokkosBackend:
         pyOut = moduleRoot + "/" + self.package_name + ".py"
 
         # First lower to Kokkos dialect
-        pipeline = "--sparse-compiler-kokkos"
+        par = self.parallel_strategy
+        dst = ""
         if self.decompose_tensors:
-            # Turn on sparse tensor decomposition (off by default)
-            pipeline += "=decompose-sparse-tensors"
-        args = [pipeline]
+            dst = "decompose-sparse-tensors"
+        pipeline = f'--sparse-compiler-kokkos=parallelization-strategy={par} {dst}'
         moduleLowered = ""
         try:
-            moduleLowered = self.run_cli("lapis-opt", args, moduleText)
+            moduleLowered = self.run_cli("lapis-opt", [pipeline], moduleText)
         except:
             raise Exception("Lowering to Kokkos dialect failed.")
 
