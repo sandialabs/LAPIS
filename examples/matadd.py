@@ -5,6 +5,7 @@ from torch_mlir import torchscript
 from lapis import KokkosBackend
 from torch import nn
 import sys
+from numpy import allclose
 
 class Adder(torch.nn.Module):
     def __init__(self):
@@ -36,7 +37,7 @@ def main():
     sumKokkos = k_backend.forward(a, b)
     print(sumKokkos)
 
-    sys.exit(0 if np.allclose(sumTorch, sumKokkos) else 1)
+    sys.exit(0 if allclose(sumTorch, sumKokkos) else 1)
 
 if __name__ == "__main__":
     main()
