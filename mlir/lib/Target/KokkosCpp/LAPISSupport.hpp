@@ -340,10 +340,14 @@ namespace LAPIS
       impl->setParent(impl);
     }
 
-    DualView(const DeviceView& d, const HostView& h, const std::shared_ptr<DualViewBase>& parent)
+    template<typename Parent>
+    DualView(const DeviceView& d, const HostView& h, const Parent& parent)
     {
       impl = std::make_shared<ImplType>(d, h);
-      impl->setParent(parent);
+      // From the caller's point of view, parent is some DualView that is considered the parent of this.
+      // But we need parent to point to the top-level parent, not just the immediate parent.
+      // This way we don't have to pointer hop multiple times during sync/modify calls.
+      impl->setParent(parent.impl->parent);
     }
 
     DeviceView device_view() const {
