@@ -5,6 +5,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Dialect.h"
@@ -78,6 +79,16 @@ DenseSet<Value> getMemrefsWritten(Operation *op, kokkos::ExecutionSpace space);
 
 bool valueIsIntegerConstantZero(Value v);
 bool valueIsIntegerConstantOne(Value v);
+
+// If struct type contains only one type (as either single members or LLVM arrays)
+// then return that type.
+// Otherwise, return null.
+// Also returns null if st has no members.
+Type getStructElementType(LLVM::LLVMStructType st);
+
+// If the above function returns true, count the total number of elements in the struct:
+// sizeof(structType) / sizeof(elemType)
+int getStructElementCount(LLVM::LLVMStructType st);
 
 } // namespace kokkos
 } // namespace mlir

@@ -1,3 +1,5 @@
+import ctypes
+import sys
 import torch
 from lapis import KokkosBackend
 from mpact.mpactbackend import mpact_linalg
@@ -7,8 +9,6 @@ from scipy.io import mmread
 from NewSparseTensorFactory import newSparseTensorFactory
 from NewSparseTensorFactory import LevelFormat
 import numpy as np
-import ctypes
-import sys
 
 class SpMV(torch.nn.Module):
     def __init__(self):
@@ -34,17 +34,21 @@ def main():
     module_torch = SpMV()
     module_torch.train(False)
 
+    # Construct the SparseTensorStorage for A
+    #Asp = ctypes.pointer(newSparseTensorFactory()((m,n), np.double, postype=np.int32, crdtype=np.int32, buffers=[rowptrs, colinds, values], levelFormats=[LevelFormat.Dense, LevelFormat.Compressed]))
+    Asp = newSparseTensorFactory()((m,n), np.double, postype=np.int32, crdtype=np.int32, buffers=[rowptrs, colinds, values], levelFormats=[LevelFormat.Dense, LevelFormat.Compressed])
+
     # Use MPACT/TorchFX to export the torch module while maintaining sparsity
     # (torchscript, which we use for dense examples, can't do this)
     module_linalg = mpact_linalg(module_torch, A, x)
-    backend = KokkosBackend.KokkosBackend(decompose_tensors=True, dump_mlir=True)
+    backend = KokkosBackend.KokkosBackend()
     module_kokkos = backend.compile(module_linalg)
 
     print("y = Ax from torch:")
     ytorch = module_torch.forward(A, x).numpy()
     print(ytorch)
     print("y = Ax from kokkos:")
-    ykokkos = module_kokkos.lapis_main(rowptrs, colinds, values, ((m, n), (len(rowptrs), len(colinds), len(values))), x.numpy())
+    ykokkos = module_kokkos.lapis_main(Asp, x.numpy())
     print(ykokkos)
     sys.exit(0 if np.allclose(ytorch, ykokkos) else 1)
 

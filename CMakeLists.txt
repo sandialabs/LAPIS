@@ -7,9 +7,6 @@ set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard to conform to")
 
 # Turn on part tensor dialect by default
 option(LAPIS_ENABLE_PART_TENSOR "Enable the part tensor dialect" ON)
-if(LAPIS_ENABLE_PART_TENSOR)
-  add_compile_definitions(ENABLE_PART_TENSOR)
-endif()
 
 macro(lapis_add_llvm_external_project name identifier location)
   message(STATUS "Adding LLVM external project ${name} (${identifier}) -> ${location}")
@@ -114,4 +111,5 @@ add_subdirectory(cmake)
 
 enable_testing()
 add_subdirectory(tests)
+add_subdirectory(examples)
 

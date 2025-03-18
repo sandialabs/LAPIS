@@ -17,6 +17,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "lapis/Dialect/Kokkos/IR/KokkosDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -94,9 +95,9 @@ struct KokkosCppEmitter {
   /// Emits the functions lapis_initialize() and lapis_finalize()
   /// These are responsible for init/finalize of Kokkos, and allocation/initialization/deallocation
   /// of global Kokkos::Views.
-  LogicalResult emitInitAndFinalize();
+  LogicalResult emitInitAndFinalize(bool finalizeKokkos);
 
-  LogicalResult emitPythonBoilerplate(bool isLastKernel);
+  LogicalResult emitPythonBoilerplate();
 
   /// Emits type 'type' or returns failure.
   /// If forSparseRuntime, the emitted type is compatible with PyTACO runtime and the sparse support library.
@@ -162,6 +163,15 @@ struct KokkosCppEmitter {
 
   /// Return the existing or a new label of a Block.
   StringRef getOrCreateName(Block &block);
+
+  /// Declare the device and host views for a DualView
+  /// This should be added after most operations that produce a DualView result,
+  /// since it places the device and host views in the same scope as the DualView.
+  void declareDeviceHostViews(Value val) {
+    auto name = getOrCreateName(val);
+    os << "auto " << name << "_d = " << name << ".device_view();\n";
+    os << "auto " << name << "_h = " << name << ".host_view();\n";
+  }
 
   /// Whether to map an mlir integer to a unsigned integer in C++.
   bool shouldMapToUnsigned(IntegerType::SignednessSemantics val);
@@ -345,6 +355,8 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     //For constants (initialized views), keep the actual data in a 1D array (with a related name).
     if(failed(emitter.emitType(op.getLoc(), memrefType.getElementType())))
       return failure();
+    if(!memrefType.hasStaticShape())
+      return op.emitError("GlobalOp must have static shape");
     int64_t span = KokkosCppEmitter::getMemrefSpan(memrefType);
     emitter << ' ' << op.getSymName() << "_initial" << "[" << span << "] = ";
     //Emit the 1D array literal
@@ -377,11 +389,23 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     emitter << "(\"" << emitter.getOrCreateName(result) << "\"";
   else
     emitter << "(Kokkos::view_alloc(Kokkos::WithoutInitializing, \"" << name << "\")";
-  for(auto dynSize : op.getDynamicSizes())
-  {
-    emitter << ", ";
-    if(failed(emitter.emitValue(dynSize)))
-      return failure();
+  // If ANY dim is dynamic, we use ALL dynamic dimensions for the Kokkos::View.
+  // This is because Kokkos/C++ limit the orders that static and dynamic dimensions can go in the type,
+  // but MLIR allows all orderings.
+  if(!type.hasStaticShape()) {
+    int dynSizeIndex = 0;
+    for(int64_t staticSize : type.getShape()) {
+      emitter << ", ";
+      if(staticSize < 0) {
+        // Output the next dynamic size
+        if(failed(emitter.emitValue(op.getDynamicSizes()[dynSizeIndex++])))
+          return failure();
+      }
+      else {
+        // Output the static size
+        emitter << staticSize;
+      }
+    }
   }
   emitter << ")";
   return success();
@@ -494,7 +518,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     emitter << " " << resultName << "_host(";
     if (failed(emitter.emitValue(source)))
       return failure();
-    emitter << ".host_view.data() + ";
+    emitter << "_h.data() + ";
     if (failed(emitOffset()))
       return failure();
     emitter << ", " << resultName << "_layout);\n";
@@ -504,14 +528,14 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     emitter << " " << resultName << "_device(";
     if (failed(emitter.emitValue(source)))
       return failure();
-    emitter << ".device_view.data() + ";
+    emitter << "_d.data() + ";
     if (failed(emitOffset()))
       return failure();
     emitter << ", " << resultName << "_layout);\n";
     if(failed(emitter.emitStridedMemrefType(op.getLoc(), resultType, kokkos::MemorySpace::DualView))) {
       return failure();
     }
-    emitter << " " << resultName << "(" << resultName << "_device, " << resultName << "_host, &";
+    emitter << " " << resultName << "(" << resultName << "_device, " << resultName << "_host, ";
     if (failed(emitter.emitValue(source)))
       return failure();
     emitter << ");\n";
@@ -527,6 +551,61 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     if (failed(emitOffset()))
       return failure();
     emitter << ", " << resultName << "_layout);\n";
+  }
+  return success();
+}
+
+static LogicalResult printOperation(KokkosCppEmitter &emitter,
+                                    memref::ExtractStridedMetadataOp op) {
+  auto base = op.getBaseBuffer();
+  auto sizes = op.getSizes();
+  auto strides = op.getStrides();
+  MemRefType sourceType = cast<MemRefType>(op.getSource().getType());
+  MemRefType destType = cast<MemRefType>(base.getType());
+  int rank = sourceType.getRank();
+  auto sourceSpace = kokkos::getMemSpace(op.getSource());
+  auto destSpace = kokkos::getMemSpace(base);
+  auto loc = op.getLoc();
+  if(sourceSpace != destSpace) {
+    return op.emitError("Source and base buffer (result) memrefs should have the same Kokkos memory space");
+  }
+  // op produces 2 + 2*rank results:
+  // - base buffer (rank-0 memref)
+  // - offset into base buffer
+  // - sizes (one per rank)
+  // - strides (one per rank)
+  // In the kokkos implementation of memrefs, the offset is always 0.
+  emitter << "size_t " << emitter.getOrCreateName(op.getOffset()) << " = 0;\n";
+  for(int i = 0; i < rank; i++) {
+    emitter << "size_t " << emitter.getOrCreateName(sizes[i]) << " = " << emitter.getOrCreateName(op.getSource()) << ".extent(" << i << ");\n";
+  }
+  for(int i = 0; i < rank; i++) {
+    emitter << "size_t " << emitter.getOrCreateName(strides[i]) << " = " << emitter.getOrCreateName(op.getSource()) << ".stride(" << i << ");\n";
+  }
+  // Base: get a rank 0 view or DualView with the same pointer(s) as source.
+  if(destSpace == kokkos::MemorySpace::DualView) {
+    // Declare the device and host views first
+    if(failed(emitter.emitMemrefType(loc, destType, kokkos::MemorySpace::Device)))
+      return failure();
+    emitter << " " << emitter.getOrCreateName(base) << "_d_temp(" << emitter.getOrCreateName(op.getSource()) << ".device_view().data());\n";
+    if(failed(emitter.emitMemrefType(loc, destType, kokkos::MemorySpace::Host)))
+      return failure();
+    emitter << " " << emitter.getOrCreateName(base) << "_h_temp(" << emitter.getOrCreateName(op.getSource()) << ".host_view().data());\n";
+    if(failed(emitter.emitMemrefType(loc, destType, destSpace)))
+      return failure();
+    emitter << " " << emitter.getOrCreateName(base);
+    emitter << "(" << emitter.getOrCreateName(base) << "_d_temp, ";
+    emitter << emitter.getOrCreateName(base) << "_h_temp, " << emitter.getOrCreateName(op.getSource()) << ")";
+  }
+  else {
+    if(failed(emitter.emitMemrefType(loc, destType, destSpace)))
+      return failure();
+    emitter << " " << emitter.getOrCreateName(base) << "(" << emitter.getOrCreateName(op.getSource()) << ".";
+    if(destSpace == kokkos::MemorySpace::Device)
+      emitter << "device_view";
+    else
+      emitter << "host_view";
+    emitter << "().data())";
   }
   return success();
 }
@@ -597,9 +676,9 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   if(kokkos::getMemSpace(op.getMemref()) == kokkos::MemorySpace::DualView) {
     // Which view to access depends if we are in host or device context
     if(kokkos::getOpExecutionSpace(op) == kokkos::ExecutionSpace::Device)
-      emitter << ".device_view";
+      emitter << "_d";
     else
-      emitter << ".host_view";
+      emitter << "_h";
   }
   emitter << "(";
   for(auto iter = op.getIndices().begin(); iter != op.getIndices().end(); iter++)
@@ -626,9 +705,9 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   if(kokkos::getMemSpace(op.getMemref()) == kokkos::MemorySpace::DualView) {
     // Which view to access depends if we are in host or device context
     if(kokkos::getOpExecutionSpace(op) == kokkos::ExecutionSpace::Device)
-      emitter << ".device_view";
+      emitter << "_d";
     else
-      emitter << ".host_view";
+      emitter << "_h";
   }
   emitter << "(";
   for(auto iter = op.getIndices().begin(); iter != op.getIndices().end(); iter++)
@@ -676,10 +755,10 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     emitter << "Kokkos::deep_copy(";
     if(failed(emitter.emitValue(op.getTarget())))
       return failure();
-    emitter << ".host_view, ";
+    emitter << "_h, ";
     if(failed(emitter.emitValue(op.getSource())))
       return failure();
-    emitter << ".host_view);";
+    emitter << "_h);";
     if(failed(emitter.emitValue(op.getTarget())))
       return failure();
     emitter << ".modifyHost();\n";
@@ -692,10 +771,10 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     emitter << "Kokkos::deep_copy(";
     if(failed(emitter.emitValue(op.getTarget())))
       return failure();
-    emitter << ".device_view, ";
+    emitter << "_d, ";
     if(failed(emitter.emitValue(op.getSource())))
       return failure();
-    emitter << ".device_view);";
+    emitter << "_d);";
     if(failed(emitter.emitValue(op.getTarget())))
       return failure();
     emitter << ".modifyDevice();\n";
@@ -717,11 +796,10 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     emitter << ", ";
     if(failed(emitter.emitValue(op.getSource())))
       return failure();
-    emitter << ".";
     if(dstSpace == kokkos::MemorySpace::Device)
-      emitter << "device_view);\n";
+      emitter << "_d);\n";
     else
-      emitter << "host_view);\n";
+      emitter << "_h);\n";
   }
   else {
     // dst is DualView but src isn't.
@@ -799,7 +877,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     emitter << " " << resultName << "_host(";
     if (failed(emitter.emitValue(source)))
       return failure();
-    emitter << ".host_view.data() + ";
+    emitter << "_h.data() + ";
     for(int i = 0; i < sourceRank; i++) {
       if(i)
         emitter << " + ";
@@ -808,7 +886,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
       emitter << " * ";
       if (failed(emitter.emitValue(source)))
         return failure();
-      emitter << ".host_view.stride_" << i << "()";
+      emitter << "_h.stride_" << i << "()";
     }
     emitter << ", " << resultName << "_layout);\n";
     if(failed(emitter.emitStridedMemrefType(op.getLoc(), resultType, kokkos::MemorySpace::Device))) {
@@ -817,7 +895,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     emitter << " " << resultName << "_device(";
     if (failed(emitter.emitValue(source)))
       return failure();
-    emitter << ".device_view.data() + ";
+    emitter << "_d.data() + ";
     for(int i = 0; i < sourceRank; i++) {
       if(i)
         emitter << " + ";
@@ -826,7 +904,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
       emitter << " * ";
       if (failed(emitter.emitValue(source)))
         return failure();
-      emitter << ".device_view.stride_" << i << "()";
+      emitter << "_d.stride_" << i << "()";
     }
     emitter << ", " << resultName << "_layout);\n";
     if(failed(emitter.emitStridedMemrefType(op.getLoc(), resultType, kokkos::MemorySpace::DualView))) {
@@ -1044,7 +1122,7 @@ static LogicalResult printSupportCall(KokkosCppEmitter &emitter, func::CallOp ca
       // arg's memory space should be either Host or DualView
       auto argMemSpace = kokkos::getMemSpace(arg);
       if(argMemSpace == kokkos::MemorySpace::DualView) {
-        os << ".host_view";
+        os << "_h";
       }
       else if(argMemSpace != kokkos::MemorySpace::Host) {
         return callOp.emitError("Passing memref to support function, whose space is neither host nor DualView");
@@ -1090,20 +1168,15 @@ static LogicalResult printSupportCall(KokkosCppEmitter &emitter, func::CallOp ca
     if(resultSpace == kokkos::MemorySpace::DualView) {
       // The result is a DualView and came from a support function - add it to the list
       emitter.dualViewsFromTensors.push_back(callOp.getResult(0));
-      //if(failed(emitter.emitMemrefType(callOp.getLoc(), dyn_cast<MemRefType>(callOp.getResult(0).getType()), resultSpace)))
-      //  return failure();
-      //os << "(";
     }
     os << "LAPIS::stridedMemrefToView<";
     if(failed(emitter.emitMemrefType(callOp.getLoc(), dyn_cast<MemRefType>(callOp.getResult(0).getType()), kokkos::MemorySpace::Host)))
       return failure();
     os << ">(" << emitter.getOrCreateName(callOp.getResult(0)) << "_smr)";
-    //if(resultSpace == kokkos::MemorySpace::DualView)
-    //  os << ")";
     os << ";\n";
   }
   os.unindent();
-  os << "}\n";
+  os << "}";
   return success();
 }
 
@@ -2011,12 +2084,15 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
   bool isSupportFunc = emitter.isSparseSupportFunction(functionOp.getName());
   // Does the function provide its results via pointer arguments, preceding the input arguments?
   bool pointerResults = isSupportFunc && emitter.sparseSupportFunctionPointerResults(functionOp.getName());
+  auto loc = functionOp.getLoc();
   std::string funcName;
   if(isSupportFunc) {
     funcName = emitter.getSparseSupportFunctionName(functionOp.getName());
   }
   else if (functionOp.getName().str() == "main") {
-    funcName = "mymain";
+    // TorchFX exporter names the entry point "main",
+    // but this name can't be used in C++
+    funcName = "lapis_main";
   }
   else {
     funcName = functionOp.getName().str();
@@ -2039,11 +2115,11 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
     }
     else {
       if(isSupportFunc) {
-        if (failed(emitter.emitTypes(functionOp.getLoc(), functionOp.getFunctionType().getResults(), isSupportFunc)))
+        if (failed(emitter.emitTypes(loc, functionOp.getFunctionType().getResults(), isSupportFunc)))
           return failure();
       }
       else {
-        if (failed(emitter.emitFuncResultTypes(functionOp.getLoc(), functionOp.getFunctionType().getResults())))
+        if (failed(emitter.emitFuncResultTypes(loc, functionOp.getFunctionType().getResults())))
           return failure();
       }
       os << ' ';
@@ -2052,7 +2128,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
     if (pointerResults) {
       if (failed(interleaveCommaWithError(functionOp.getFunctionType().getResults(), os,
         [&](Type resultType) -> LogicalResult {
-          if (failed(emitter.emitType(functionOp.getLoc(), resultType, isSupportFunc)))
+          if (failed(emitter.emitType(loc, resultType, isSupportFunc)))
             return failure();
           // Memrefs are returned by pointer
           if (isSupportFunc && isa<MemRefType>(resultType))
@@ -2070,7 +2146,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
     if (failed(interleaveCommaWithError(functionOp.getArgumentTypes(), os,
       [&](Type argType) -> LogicalResult
       {
-        if (failed(emitter.emitType(functionOp.getLoc(), argType, isSupportFunc)))
+        if (failed(emitter.emitType(loc, argType, isSupportFunc)))
           return failure();
         // Memrefs are passed by pointer
         if (isSupportFunc && isa<MemRefType>(argType))
@@ -2086,12 +2162,12 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
   }
   // Otherwise, it's a function definition with body.
   KokkosCppEmitter::Scope scope(emitter);
-  if (failed(emitter.emitFuncResultTypes(functionOp.getLoc(), functionOp.getFunctionType().getResults())))
+  if (failed(emitter.emitFuncResultTypes(loc, functionOp.getFunctionType().getResults())))
     return failure();
   os << ' ' << funcName;
   os << "(";
-  //Make a list of the memref parameters that need to be converted to Kokkos::Views inside the body
-  std::vector<BlockArgument> stridedMemrefParams;
+  //Make a list of the memref parameters (these will all be DualViews)
+  std::vector<BlockArgument> memrefParams;
   if (failed(interleaveCommaWithError(
           functionOp.getArguments(), os,
           [&](BlockArgument arg) -> LogicalResult {
@@ -2099,11 +2175,12 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
             if (MemRefType mrt = dyn_cast<MemRefType>(arg.getType())) {
               // Get the space based on how this argument gets used
               kokkos::MemorySpace space = kokkos::getMemSpace(arg);
-              if (failed(emitter.emitMemrefType(functionOp.getLoc(), mrt, space)))
+              if (failed(emitter.emitMemrefType(loc, mrt, space)))
                 return failure();
+              memrefParams.push_back(arg);
             }
             else {
-              if (failed(emitter.emitType(functionOp.getLoc(), arg.getType())))
+              if (failed(emitter.emitType(loc, arg.getType())))
                 return failure();
             }
             os << " " << emitter.getOrCreateName(arg);
@@ -2113,14 +2190,9 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
   os << ") {\n";
   os.indent();
 
-  //Convert any StridedMemRefType parameters to Kokkos::View
-  for(BlockArgument arg : stridedMemrefParams) {
-    MemRefType mrt = cast<MemRefType>(arg.getType());
-    kokkos::MemorySpace space = kokkos::getMemSpace(arg);
-    emitter << "auto " << emitter.getOrCreateName(arg) << " = LAPIS::stridedMemrefToView<";
-    if (failed(emitter.emitMemrefType(functionOp.getLoc(), mrt, space)))
-      return failure();
-    emitter << ">(*" << emitter.getOrCreateName(arg) << "_smr);\n";
+  for(BlockArgument arg : memrefParams) {
+    emitter << "auto " << emitter.getOrCreateName(arg) << "_d = " << emitter.getOrCreateName(arg) << ".device_view();\n";
+    emitter << "auto " << emitter.getOrCreateName(arg) << "_h = " << emitter.getOrCreateName(arg) << ".host_view();\n";
   }
 
   Region::BlockListType &blocks = functionOp.getBlocks();
@@ -2161,17 +2233,28 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
       if (failed(emitter.emitOperation(
               op, /*trailingSemicolon=*/trailingSemicolon)))
         return failure();
+      // If op produced any DualView typed memrefs,
+      // declare variables for its host and device views 
+      for(auto result : op.getResults()) {
+        if(auto memrefType = dyn_cast<MemRefType>(result.getType())) {
+          if(kokkos::getMemSpace(result) == kokkos::MemorySpace::DualView)
+            emitter.declareDeviceHostViews(result);
+        }
+      }
     }
   }
   os.unindent() << "}\n\n";
-  // Finally, create the corresponding wrapper function that is callable from Python (if one is needed)
   if(!emitter.emittingPython())
     return success();
-  // Emit a wrapper function without Kokkos::View for Python to call
+  // Finally, create the corresponding wrapper function that is callable from Python (if one is needed)
+  // This version of the function:
+  //  - has non-mangled name, so easier to call through ctypes
+  //  - returns all results through pointers (preceding the input parameters)
+  //  - uses StridedMemRefType<T,N> to represent memrefs, instead of Kokkos::View
+
   os << "extern \"C\" void " << "py_" << funcName << '(';
   // Put the results first: primitives and memrefs are both passed by pointer.
-  // Python interface will enforce LayoutRight on all numpy arrays.
-  //
+  // Python interface will enforce LayoutRight on all input memrefs.
   FunctionType ftype = functionOp.getFunctionType();
   size_t numResults = ftype.getNumResults();
   size_t numParams = ftype.getNumInputs();
@@ -2182,16 +2265,16 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
     auto retType = ftype.getResult(i);
     if(auto memrefType = dyn_cast<MemRefType>(retType))
     {
-      //This is represented using a pointer to the element type
-      if(failed(emitter.emitType(functionOp.getLoc(), memrefType.getElementType())))
-        return failure();
-      os << "* ret" << i;
+      os << "StridedMemRefType<";
+      if (failed(emitter.emitType(loc, memrefType.getElementType())))
+        return functionOp.emitError("Failed to emit result type as StridedMemRefType");
+      os << ", " << memrefType.getShape().size() << ">** ret" << i;
     }
     else
     {
       //Assuming it is a scalar primitive
-      if(failed(emitter.emitType(functionOp.getLoc(), retType)))
-        return failure();
+      if(failed(emitter.emitType(loc, retType)))
+        return functionOp.emitError("Failed to emit non-memref result type");
       os << "* ret" << i;
     }
   }
@@ -2203,17 +2286,16 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
     auto paramType = ftype.getInput(i);
     if(auto memrefType = dyn_cast<MemRefType>(paramType))
     {
-      //For Torch/NumPy:
-      //This is represented using a pointer to the element type
-      if(failed(emitter.emitType(functionOp.getLoc(), memrefType.getElementType())))
-        return failure();
-      os << "* param" << i;
+      os << "StridedMemRefType<";
+      if (failed(emitter.emitType(loc, memrefType.getElementType())))
+        return functionOp.emitError("Failed to emit param type as StridedMemRefType");
+      os << ", " << memrefType.getShape().size() << ">* param" << i;
     }
     else
     {
       //Assuming it is a scalar primitive
-      if(failed(emitter.emitType(functionOp.getLoc(), paramType)))
-        return failure();
+      if(failed(emitter.emitType(loc, paramType)))
+        return functionOp.emitError("Failed to emit non-memref param type");
       os << " param" << i;
     }
   }
@@ -2221,31 +2303,30 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
   os << "{\n";
   os.indent();
   //FOR DEBUGGING THE EMITTED CODE:
-  //The next 3 lines makes the generated function pause to let you attach a debugger
+  //If uncommented, the following 3 lines make the generated function pause to let user attach a debugger
   //os << "std::cout << \"Starting MLIR function on process \" << getpid() << '\\n';\n";
   //os << "std::cout << \"Optionally attach debugger now, then press <Enter> to continue: \";\n";
   //os << "std::cin.get();\n";
-  //Create/allocate device Kokkos::Views for the memref inputs.
+  //Construct an unmanaged, LayoutRight Kokkos::View for each memref input parameter.
+  //Note: stridedMemrefToView with LayoutRight will check the strides at runtime,
+  //and the python wrapper will use numpy.require to deep-copy the data to the correct
+  //layout if it's not already.
   for(size_t i = 0; i < numParams; i++)
   {
     auto paramType = ftype.getInput(i);
-    if(auto memrefType = dyn_cast<MemRefType>(paramType))
+    auto memrefType = dyn_cast<MemRefType>(paramType);
+    if(memrefType)
     {
-      int64_t span = KokkosCppEmitter::getMemrefSpan(memrefType);
-      os << "Kokkos::View<";
-      if(failed(emitter.emitType(functionOp.getLoc(), memrefType.getElementType())))
-        return failure();
-      os << "*> param" << i << "_buf(\"param buffer " << i << "\", ";
-      os << span << ");\n";
-      //Copy from the NumPy buffer
-      os << "Kokkos::deep_copy(Kokkos::DefaultExecutionSpace(), param" << i << "_buf, Kokkos::View<";
-      if(failed(emitter.emitType(functionOp.getLoc(), memrefType.getElementType())))
-        return failure();
-      os << "*, Kokkos::HostSpace>(param" << i << ", " << span << "));\n";
+      os << "auto param" << i << "_smr = LAPIS::stridedMemrefToView<";
+      if(failed(emitter.emitMemrefType(loc, memrefType, kokkos::MemorySpace::Host)))
+        return functionOp.emitError("Failed to emit memref type as host view");
+      os << ">(*param" << i << ");\n";
     }
   }
-  os << "auto results = " << funcName << "(";
-  //Construct a Kokkos::View for each memref input, from raw pointer.
+  // Emit the call
+  if(numResults)
+    os << "auto results = ";
+  os << funcName << "(";
   for(size_t i = 0; i < numParams; i++)
   {
     if(i != 0)
@@ -2254,10 +2335,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
     auto memrefType = dyn_cast<MemRefType>(paramType);
     if(memrefType)
     {
-      //TODO: handle dynamic sized and unranked memrefs here
-      if(failed(emitter.emitMemrefType(functionOp.getLoc(), memrefType, kokkos::MemorySpace::Device)))
-        return failure();
-      os << "(param" << i << "_buf.data())";
+      os << "param" << i << "_smr";
     }
     else
     {
@@ -2280,21 +2358,20 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
         os << "results.syncHost();\n";
       else
         os << "std::get<" << i << ">(results).syncHost();\n";
-      int64_t span = KokkosCppEmitter::getMemrefSpan(memrefType);
-      os << "Kokkos::deep_copy(Kokkos::DefaultExecutionSpace(), Kokkos::View<";
-      if(failed(emitter.emitType(functionOp.getLoc(), memrefType.getElementType())))
-        return failure();
-      os << "*, Kokkos::HostSpace>(ret" << i << ", " << span << "), Kokkos::View<";
-      if(failed(emitter.emitType(functionOp.getLoc(), memrefType.getElementType())))
-        return failure();
-      os << "*>(";
+      os << "**ret" << i << " = LAPIS::viewToStridedMemref(";
       if(numResults == size_t(1))
         os << "results";
       else
         os << "std::get<" << i << ">(results)";
-      // note: memref results from the primary function will always be DualView,
-      // so we want the host data
-      os << ".host_view.data(), " << span << "));\n";
+      os << ".host_view());\n";
+      // Keep the host view alive until lapis_finalize() is called.
+      // Otherwise it would be deallocated as soon as this function returns.
+      os << "LAPIS::keepAlive(";
+      if(numResults == size_t(1))
+        os << "results";
+      else
+        os << "std::get<" << i << ">(results)";
+      os << ".host_view());\n";
     }
     else
     {
@@ -2305,8 +2382,8 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
         os << "std::get<" << i << ">(results);\n";
     }
   }
-  // All kernels and deep copies so far have been asynchronous; fence to make
-  // sure results are ready for Python to access.
+  // All kernels and deep copies so far have been asynchronous on default instance.
+  // Fence to make sure results are ready for Python to access.
   os << "Kokkos::DefaultExecutionSpace().fence();\n";
   os.unindent();
   os << "}\n";
@@ -2343,16 +2420,41 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
       return "numpy.float64";
     return "";
   };
+  auto getCtypesType = [](Type t) -> std::string
+  {
+    if(t.isIndex())
+      return "ctypes.c_ulong";
+    //Note: treating MLIR "signless" integer types as equivalent to unsigned NumPy integers.
+    if(t.isSignlessInteger(8) || t.isUnsignedInteger(8))
+      return "ctypes.c_ubyte";
+    if(t.isSignlessInteger(16) || t.isUnsignedInteger(16))
+      return "ctypes.c_ushort";
+    if(t.isSignlessInteger(32) || t.isUnsignedInteger(32))
+      return "ctypes.c_uint";
+    if(t.isSignlessInteger(64) || t.isUnsignedInteger(64))
+      return "ctypes.c_ulong";
+    if(t.isSignedInteger(8))
+      return "ctypes.c_byte";
+    if(t.isSignedInteger(16))
+      return "ctypes.c_short";
+    if(t.isSignedInteger(32))
+      return "ctypes.c_int";
+    if(t.isSignedInteger(64))
+      return "ctypes.c_long";
+    if(t.isF16())
+      // ctypes doesn't have an fp16/half type
+      return "ctypes.c_short";
+    if(t.isF32())
+      return "ctypes.c_float";
+    if(t.isF64())
+      return "ctypes.c_double";
+    return "";
+  };
 
   // Use this to enforce LayoutRight for input memrefs (zero cost if it already is):
   // arr = numpy.require(arr, dtype=TYPE, requirements=['C'])
-  // NOTE: numpy.zeros(shape, dtype=...) already defaults to LayoutRight, so that is ok.
-  //
-  // TODO: need to pass and return runtime extents here.
-  // For return values, need 3 phases:
-  //  - compute results in Kokkos and hold them temporarily.
-  //  - get the extents back to Python and allocate
-  //  - copy out the results to Python and then free the Kokkos temporaries.
+  // NOTE: numpy.zeros(shape, dtype=...) already defaults to LayoutRight (and probably most other functions)
+  // so in practice this shouldn't usually trigger a deep-copy.
   auto& py_os = emitter.py_ostream();
   //NOTE: this function is a member of the module's class, but py_os is already indented to write methods.
   py_os << "def " << funcName << "(self, ";
@@ -2368,27 +2470,93 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
   //
   // Pointer-typed params are only used for sparse tensors, so there is no equivalent to "require" for them.
   // They need to have the correct data type on input.
+  std::function<void(std::string, std::string, int&, Type)> genStructFlatten =
+    [&](std::string orig, std::string flat, int& index, Type t)
+    {
+      if(auto structType = dyn_cast<LLVM::LLVMStructType>(t)) {
+        int memIdx = 0;
+        for(auto mem : structType.getBody()) {
+          std::string memExpr = orig + "[" + std::to_string(memIdx) + "]";
+          genStructFlatten(memExpr, flat, index, mem);
+          memIdx++;
+        }
+      }
+      else if(auto arrayType = dyn_cast<LLVM::LLVMArrayType>(t)) {
+        int n = arrayType.getNumElements();
+        py_os << "for i in range(" << n << "):\n";
+        py_os.indent();
+        py_os << flat << "[" << index << " + i] = " << orig << "[i]\n";
+        py_os.unindent();
+      }
+      else {
+        //must be a scalar of the correct type
+        py_os << flat << "[" << index++ << "] = " << orig << "\n";
+      }
+    };
+  // Generate an un-flattened nested tuple expression for the given type.
+  // This can be constructed directly in the Python return statement.
+  std::function<void(std::string, int&, Type)> genStructUnflatten =
+    [&](std::string flat, int& index, Type t) -> void
+    {
+      if(auto structType = dyn_cast<LLVM::LLVMStructType>(t)) {
+        py_os << "(";
+        int memIdx = 0;
+        for(auto mem : structType.getBody()) {
+          if(memIdx)
+            py_os << ", ";
+          genStructUnflatten(flat, index, mem);
+          memIdx++;
+        }
+        py_os << ")";
+      }
+      else if(auto arrayType = dyn_cast<LLVM::LLVMArrayType>(t)) {
+        int n = arrayType.getNumElements();
+        py_os << "(";
+        for(int i = 0; i < n; i++) {
+          if(i)
+            py_os << ", ";
+          py_os << flat << "[" << index++ << "]";
+        }
+      }
+      else {
+        //must be a scalar of the correct type
+        py_os << flat << "[" << index++ << "]";
+      }
+    };
   for(size_t i = 0; i < numParams; i++)
   {
     auto paramType = ftype.getInput(i);
     if(!isa<LLVM::LLVMPointerType>(paramType))
     {
-      py_os << "param" << i << " = ";
       if(auto memrefType = dyn_cast<MemRefType>(paramType))
       {
         std::string numpyDType = getNumpyType(memrefType.getElementType());
         if(!numpyDType.size())
-          return failure();
-        py_os << "numpy.require(param" << i << ", dtype=" << numpyDType << ", requirements=['C'])\n";
+          return functionOp.emitError("Could not determine corresponding numpy type for memref element type");
+        py_os << "param" << i << " = numpy.require(param" << i << ", dtype=" << numpyDType << ", requirements=['C'])\n";
       }
-      else 
-      {
+      else if(auto structType = dyn_cast<LLVM::LLVMStructType>(paramType)) {
+        // Expect this parameter to be a tuple with the correct structure. Flatten it to a numpy array.
+        Type elem = kokkos::getStructElementType(structType);
+        if(!elem)
+          return functionOp.emitError("Cannot yet pass structs with multiple element types to/from Python");
+        int size = kokkos::getStructElementCount(structType);
+        std::string numpyDType = getNumpyType(elem);
+        if(!numpyDType.size())
+          return functionOp.emitError("Could not determine corresponding numpy type for result scalar type");
+        py_os << "param_flat" << i << " = numpy.zeros(" << size << ", dtype=" << numpyDType << ")\n";
+        int flatIdx = 0;
+        genStructFlatten("param" + std::to_string(i), "param_flat" + std::to_string(i), flatIdx, structType);
+        // Replace original param with flattened version, as we don't need original anymore
+        py_os << "param" << i << " = param_flat" << i << "\n";
+      }
+      else {
         //Wrap scalar primitives in 1D NumPy array.
         //This gives it the correct type, and lets us use the same ndarray CTypes API as memrefs.
         std::string numpyDType = getNumpyType(paramType);
         if(!numpyDType.size())
-          return failure();
-        py_os << "numpy.array(param" << i << ", dtype=" << numpyDType << ", ndmin=1)\n";
+          return functionOp.emitError("Could not determine corresponding numpy type for scalar type");
+        py_os << "param" << i << " = numpy.array(param" << i << ", dtype=" << numpyDType << ", ndmin=1)\n";
       }
     }
   }
@@ -2399,30 +2567,30 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
     auto retType = ftype.getResult(i);
     if(auto memrefType = dyn_cast<MemRefType>(retType))
     {
-      std::string numpyDType = getNumpyType(memrefType.getElementType());
-      if(!numpyDType.size())
-        return failure();
-      py_os << "ret" << i << " = numpy.zeros((";
-      //TODO: this assumes static dimensions
-      for(size_t j = 0; j < memrefType.getShape().size(); j++)
-      {
-        if(j != 0)
-          py_os << ", ";
-        py_os << memrefType.getShape()[j];
-      }
-      py_os << "), dtype=" << numpyDType << ")\n";
+      int rank = memrefType.hasRank() ? memrefType.getShape().size() : 1;
+      py_os << "ret" << i << " = ctypes.pointer(ctypes.pointer(rt.make_nd_memref_descriptor(" << rank << ", " << getCtypesType(memrefType.getElementType()) << ")()))\n";
     }
     else if(isa<LLVM::LLVMPointerType>(retType))
     {
-      //For pointer results, declare a void* and pass its address (void**)
+      //For pointer results, declare a void* (initially null) and pass its address (void**)
       py_os << "ret" << i << " = ctypes.pointer(ctypes.pointer(ctypes.c_char(0)))\n";
+    }
+    else if(auto structType = dyn_cast<LLVM::LLVMStructType>(retType)) {
+      Type elem = kokkos::getStructElementType(structType);
+      if(!elem)
+        return functionOp.emitError("Cannot yet pass structs with multiple element types to/from Python");
+      int size = kokkos::getStructElementCount(structType);
+      std::string numpyDType = getNumpyType(elem);
+      if(!numpyDType.size())
+        return functionOp.emitError("Could not determine corresponding numpy type for result scalar type");
+      py_os << "ret" << i << " = numpy.zeros(" << size << ", dtype=" << numpyDType << ")\n";
     }
     else
     {
       //For scalars, construct a single-element numpy ndarray so that we can use its CTypes API
       std::string numpyDType = getNumpyType(retType);
       if(!numpyDType.size())
-        return failure();
+        return functionOp.emitError("Could not determine corresponding numpy type for result scalar type");
       py_os << "ret" << i << " = numpy.zeros(1, dtype=" << numpyDType << ")\n";
     }
   }
@@ -2439,9 +2607,13 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
       // Pointer
       py_os << "ctypes.pointer(ret" << i << ")";
     }
+    else if(isa<MemRefType>(retType))
+    {
+      py_os << "ret" << i;
+    }
     else
     {
-      // numpy array, or scalar
+      // numpy array, flattened struct or scalar
       py_os << "ret" << i << ".ctypes.data_as(ctypes.c_void_p)";
     }
   }
@@ -2456,6 +2628,11 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
     {
       py_os << "param" << i;
     }
+    else if(isa<MemRefType>(paramType))
+    {
+      //Numpy array (or a scalar from a numpy array)
+      py_os << "ctypes.pointer(rt.get_ranked_memref_descriptor(param" << i << "))";
+    }
     else
     {
       //Numpy array (or a scalar from a numpy array)
@@ -2463,7 +2640,8 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
     }
   }
   py_os << ")\n";
-  // Finally, generate the return. Note that in Python, a 1-elem tuple is equivalent to scalar.
+  // Finally, generate the return statement.
+  // Note that in Python, a 1-elem tuple is equivalent to scalar.
   if(numResults)
   {
     py_os << "return (";
@@ -2472,10 +2650,17 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
       if(i != 0)
         py_os << ", ";
       auto retType = ftype.getResult(i);
-      if(isa<MemRefType, LLVM::LLVMPointerType>(retType))
+      if(isa<LLVM::LLVMPointerType>(retType))
       {
-        //Return the whole memref
         py_os << "ret" << i;
+      }
+      else if(isa<MemRefType>(retType))
+      {
+        py_os << "rt.ranked_memref_to_numpy(ret" << i << "[0])";
+      }
+      else if(auto structType = dyn_cast<LLVM::LLVMStructType>(retType)) {
+        int idx = 0;
+        genStructUnflatten("ret" + std::to_string(i), idx, structType);
       }
       else
       {
@@ -3280,6 +3465,72 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   return success();
 }
 
+static LogicalResult printOperation(KokkosCppEmitter &emitter,
+                                    LLVM::ExtractValueOp op) {
+  if(failed(emitter.emitType(op.getLoc(), op.getResult().getType())))
+    return failure();
+  emitter << ' ' << emitter.getOrCreateName(op.getResult()) << " = ";
+  for(size_t i = 0; i < op.getPosition().size(); i++) {
+    // Positions are given from outer to inner, so we can emit nested std::get with
+    // reversed positions to extract the correct element
+    emitter << "std::get<" << op.getPosition()[op.getPosition().size() - 1 - i] << ">(";
+  }
+  if(failed(emitter.emitValue(op.getContainer())))
+    return failure();
+  for(size_t i = 0; i < op.getPosition().size(); i++) {
+    emitter << ")";
+  }
+  return success();
+}
+
+static LogicalResult printOperation(KokkosCppEmitter &emitter,
+                                    vector::PrintOp op) {
+  // It's possible that op doesn't print anything
+  if(!op.getSource()
+      && op.getPunctuation() == vector::PrintPunctuation::NoPunctuation
+      && !op.getStringLiteral()) {
+    return success();
+  }
+  emitter << "std::cout ";
+  // Print the operand (if there is one)
+  if(Value val = op.getSource()) {
+    emitter << "<< ";
+    if(failed(emitter.emitValue(val)))
+      return failure();
+  }
+  // Then the string literal (if there is one)
+  if(auto stringLiteral = op.getStringLiteral()) {
+    emitter << "<< \"";
+    auto& os = emitter.ostream();
+    os.write_escaped(stringLiteral.value().getValue(), true);
+    emitter << "\"";
+  }
+  // and finally punctuation
+  emitter << "<< \"";
+  switch(op.getPunctuation()) {
+    case vector::PrintPunctuation::NoPunctuation:
+      break;
+    case vector::PrintPunctuation::NewLine:
+      // It appears that the upstream vector->LLVM lowering
+      // skips newlines for PrintOps with a string literal,
+      // so match that behavior here for consistent output
+      if(!op.getStringLiteral())
+        emitter << "\\n";
+      break;
+    case vector::PrintPunctuation::Comma:
+      emitter << ",";
+      break;
+    case vector::PrintPunctuation::Open:
+      emitter << "[";
+      break;
+    case vector::PrintPunctuation::Close:
+      emitter << "]";
+      break;
+  }
+  emitter << '"';
+  return success();
+}
+
 LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemicolon) {
   // Some ops need to be processed by the emitter, but don't print anything to the C++ code.
   // Avoid printing the semicolon in this case.
@@ -3339,17 +3590,20 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
                 memref::AllocaOp, memref::StoreOp, memref::LoadOp,
                 memref::CopyOp, memref::SubViewOp, /* memref::CollapseShapeOp, */
                 memref::CastOp, memref::DeallocOp, memref::DimOp,
-                memref::ReinterpretCastOp>(
+                memref::ReinterpretCastOp, memref::ExtractStridedMetadataOp>(
               [&](auto op) { return printOperation(*this, op); })
           // EmitC ops.
           .Case<emitc::CallOp, emitc::CallOpaqueOp>(
               [&](auto op) { return printOperation(*this, op); })
           // LLVM ops.
-          .Case<LLVM::ZeroOp>(
+          .Case<LLVM::ZeroOp, LLVM::ExtractValueOp>(
+              [&](auto op) { return printOperation(*this, op); })
+          // Vector ops.
+          .Case<vector::PrintOp>(
               [&](auto op) { return printOperation(*this, op); })
           // Other operations are unknown/unsupported.
           .Default([&](Operation *) {
-            return op.emitOpError("unable to find printer for op");
+            return op.emitOpError("Kokkos emitter doesn't know how to output op of this type");
           });
 
   if (failed(status))
@@ -3360,7 +3614,7 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
   return success();
 }
 
-LogicalResult KokkosCppEmitter::emitInitAndFinalize()
+LogicalResult KokkosCppEmitter::emitInitAndFinalize(bool finalizeKokkos = true)
 {
   os << "extern \"C\" void lapis_initialize()\n";
   os << "{\n";
@@ -3425,12 +3679,12 @@ LogicalResult KokkosCppEmitter::emitInitAndFinalize()
     os.unindent();
     os << "}\n";
   }
-  os << "Kokkos::DefaultExecutionSpace().fence();\n";
   os.unindent();
   os << "}\n\n";
   os << "extern \"C\" void lapis_finalize()\n";
   os << "{\n";
   os.indent();
+  // Free all global views
   for(auto& op : globalViews)
   {
     auto space = kokkos::getMemSpace(op);
@@ -3444,16 +3698,20 @@ LogicalResult KokkosCppEmitter::emitInitAndFinalize()
       os << "();\n";
     }
   }
-  os << "Kokkos::finalize();\n";
+  // Free views returned to Python
+  os << "LAPIS::alives.clear();\n";
+  if(finalizeKokkos)
+    os << "Kokkos::finalize();\n";
   os.unindent();
   os << "}\n";
   return success();
 }
 
-LogicalResult KokkosCppEmitter::emitPythonBoilerplate(bool isLastKernel)
+LogicalResult KokkosCppEmitter::emitPythonBoilerplate()
 {
   *py_os << "import ctypes\n";
   *py_os << "import numpy\n";
+  *py_os << "from mlir import runtime as rt\n";
   *py_os << "class LAPISModule:\n";
   *py_os << "  def __init__(self, libPath):\n";
   //*py_os << "    print('Hello from LAPISModule.__init__!')\n";
@@ -3463,11 +3721,9 @@ LogicalResult KokkosCppEmitter::emitPythonBoilerplate(bool isLastKernel)
   *py_os << "    self.libHandle.lapis_initialize()\n";
   //*py_os << "    print('Done initializing module.')\n";
   *py_os << "  def __del__(self):\n";
-  //*py_os << "    print('Finalizing module.')\n";
-  if(isLastKernel)
-    *py_os << "    self.libHandle.lapis_finalize()\n";
-  //From here, just function wrappers are emitted as class members.
-  //Indent now for all of them.
+  *py_os << "      self.libHandle.lapis_finalize()\n";
+  //From here, only function wrappers are emitted.
+  //These are class members so indent all of them now.
   py_os->indent();
   return success();
 }
@@ -3526,6 +3782,19 @@ LogicalResult KokkosCppEmitter::emitType(Location loc, Type type, bool forSparse
     // LLVMPointerType is untyped
     os << "void*";
     return success();
+  }
+  if (auto structType = dyn_cast<LLVM::LLVMStructType>(type)) {
+    // Use a std::tuple to represent simple structs
+    return emitTypes(loc, structType.getBody(), false);
+  }
+  if (auto llvmArrayType = dyn_cast<LLVM::LLVMArrayType>(type)) {
+    // This is a statically sized (assuming small) array of another type.
+    // Use the same logic as for structs
+    SmallVector<Type> elemTypes;
+    for(size_t i = 0; i < llvmArrayType.getNumElements(); i++) {
+      elemTypes.push_back(llvmArrayType.getElementType());
+    }
+    return emitTypes(loc, elemTypes, false);
   }
   return emitError(loc, "cannot emit type ") << type << "\n";
 }
@@ -3737,14 +4006,14 @@ LogicalResult kokkos::translateToKokkosCpp(Operation *op, raw_ostream &os, raw_o
   //Emit the C++ boilerplate to os
   emitCppBoilerplate(emitter, true);
   //Emit the ctypes boilerplate to py_os first - function wrappers need to come after this.
-  if(failed(emitter.emitPythonBoilerplate(isLastKernel)))
+  if(failed(emitter.emitPythonBoilerplate()))
       return failure();
   //Global preamble.
   //Emit the actual module (global variables and functions)
   if(failed(emitter.emitOperation(*op, /*trailingSemicolon=*/false)))
     return failure();
   //Emit the init and finalize function definitions.
-  if(failed(emitter.emitInitAndFinalize()))
+  if(failed(emitter.emitInitAndFinalize(isLastKernel)))
     return failure();
   os << cppDeclBuffer << cppBuffer;
   return success();

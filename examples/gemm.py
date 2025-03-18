@@ -4,40 +4,33 @@ import torch_mlir
 from torch_mlir import torchscript
 from lapis import KokkosBackend
 from torch import nn
-import sys
-from numpy import allclose
 
-class Adder(torch.nn.Module):
+class Matmul(torch.nn.Module):
     def __init__(self):
         super().__init__()
 
     def forward(self, a: Tensor, b: Tensor) -> Tensor:
-        return a + b
-
+        return torch.matmul(a, b)
 
 def main():
-    a = torch.ones((5, 5))
-    b = torch.eye(5)
+    a = torch.ones((5, 5)) + torch.eye(5)
+    b = torch.ones((5, 5)) - torch.eye(5)
 
-    m = Adder()
+    m = Matmul()
     m.train(False)
 
     mlir_module = torchscript.compile(m, (a, b), output_type='linalg-on-tensors')
 
     print(mlir_module)
 
-    backend = KokkosBackend.KokkosBackend()
+    backend = KokkosBackend.KokkosBackend(dump_mlir=True)
     k_backend = backend.compile(mlir_module)
 
-    print("a+b from pytorch")
-    sumTorch = m.forward(a, b).numpy()
-    print(sumTorch)
+    print("a*b from kokkos")
+    print(k_backend.forward(a, b))
 
-    print("a+b from kokkos")
-    sumKokkos = k_backend.forward(a, b)
-    print(sumKokkos)
-
-    sys.exit(0 if allclose(sumTorch, sumKokkos) else 1)
+    print("a*b from pytorch")
+    print(m.forward(a, b).numpy())
 
 if __name__ == "__main__":
     main()
