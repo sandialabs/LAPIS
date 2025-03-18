@@ -19,7 +19,7 @@ from mlir.dialects import func
 from mlir.dialects import arith
 from mlir.dialects import linalg
 from mlir.dialects.linalg.opdsl import lang as dsl
-from NewSparseTensorFactory import newSparseTensorFactory
+from utils.NewSparseTensorFactory import newSparseTensorFactory
 
 from lapis import KokkosBackend
 
