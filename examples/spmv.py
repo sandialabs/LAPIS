@@ -4,8 +4,8 @@ from mpact.mpactbackend import mpact_linalg
 from torch import nn
 
 from scipy.io import mmread
-from NewSparseTensorFactory import newSparseTensorFactory
-from NewSparseTensorFactory import LevelFormat
+from utils.NewSparseTensorFactory import newSparseTensorFactory
+from utils.NewSparseTensorFactory import LevelFormat
 import numpy as np
 import ctypes
 import sys

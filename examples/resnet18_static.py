@@ -16,7 +16,7 @@ from lapis import KokkosBackend
 from PIL import Image
 
 sys.path.append(str(Path(__file__).absolute().parent))
-from _example_utils import (
+from utils._example_utils import (
     top3_possibilities,
     load_labels
 )
