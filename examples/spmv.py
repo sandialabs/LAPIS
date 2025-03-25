@@ -37,7 +37,7 @@ def main():
     # Use MPACT/TorchFX to export the torch module while maintaining sparsity
     # (torchscript, which we use for dense examples, can't do this)
     module_linalg = mpact_linalg(module_torch, A, x)
-    backend = KokkosBackend.KokkosBackend(decompose_tensors=True, dump_mlir=True)
+    backend = KokkosBackend.KokkosBackend(decompose_tensors=True)
     module_kokkos = backend.compile(module_linalg)
 
     print("y = Ax from torch:")
