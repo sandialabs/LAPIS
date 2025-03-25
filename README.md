@@ -151,6 +151,9 @@ cmake \
 ```
 
 ### For both recipes: build and install Kokkos
+It is recommended to build Kokkos as shared libraries. This is
+required for more advanced use cases where multiple compiled LAPIS
+programs are loaded at the same time.
 ```
 cd $WORKSPACE
 mkdir kokkosBuild
@@ -160,6 +163,7 @@ cd kokkosBuild
 cmake \
   -DCMAKE_BUILD_TYPE=Release \
   -DKokkos_ENABLE_SERIAL=ON \
+  -DBUILD_SHARED_LIBS=ON \
   -DCMAKE_CXX_FLAGS="-fPIC" \
   -DCMAKE_INSTALL_PREFIX=$WORKSPACE/kokkosInstall \
   ../kokkos
