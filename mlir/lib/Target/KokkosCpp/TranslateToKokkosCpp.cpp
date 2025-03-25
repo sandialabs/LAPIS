@@ -128,8 +128,7 @@ struct KokkosCppEmitter {
   LogicalResult emitTupleType(Location loc, ArrayRef<Type> types);
 
   /// Emits a variable declaration for a result of an operation.
-  LogicalResult emitVariableDeclaration(Value result,
-                                        bool trailingSemicolon);
+  LogicalResult emitVariableDeclaration(Location loc, Value result, bool trailingSemicolon);
 
   /// Emits the variable declaration and assignment prefix for 'op'.
   /// - emits separate variable followed by std::tie for multi-valued operation;
@@ -339,7 +338,7 @@ static LogicalResult printConstantOp(KokkosCppEmitter &emitter, Operation *opera
   if (auto oAttr = dyn_cast<emitc::OpaqueAttr>(value)) {
     if (oAttr.getValue().empty())
       // The semicolon gets printed by the emitOperation function.
-      return emitter.emitVariableDeclaration(result,
+      return emitter.emitVariableDeclaration(operation->getLoc(), result,
                                              /*trailingSemicolon=*/false);
   }
 
@@ -1220,7 +1219,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::ForOp forOp)
   Operation::result_range results = forOp.getResults();
 
   for (OpResult result : results) {
-    if (failed(emitter.emitVariableDeclaration(result,
+    if (failed(emitter.emitVariableDeclaration(forOp.getLoc(), result,
                                                /*trailingSemicolon=*/true)))
       return failure();
   }
@@ -1309,11 +1308,11 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::WhileOp whil
     emitter << ";\n";
   }
   for (auto afterArg : whileOp.getAfterArguments()) {
-    if (failed(emitter.emitVariableDeclaration(afterArg, /*trailingSemicolon=*/true)))
+    if (failed(emitter.emitVariableDeclaration(whileOp.getLoc(), afterArg, /*trailingSemicolon=*/true)))
       return failure();
   }
   for (OpResult result : whileOp.getResults()) {
-    if (failed(emitter.emitVariableDeclaration(result, /*trailingSemicolon=*/true)))
+    if (failed(emitter.emitVariableDeclaration(whileOp.getLoc(), result, /*trailingSemicolon=*/true)))
       return failure();
   }
 
@@ -1949,7 +1948,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::IfOp ifOp) {
   raw_indented_ostream &os = emitter.ostream();
 
   for (OpResult result : ifOp.getResults()) {
-    if (failed(emitter.emitVariableDeclaration(result,
+    if (failed(emitter.emitVariableDeclaration(ifOp.getLoc(), result,
                                                /*trailingSemicolon=*/true)))
       return failure();
   }
@@ -2936,11 +2935,10 @@ KokkosCppEmitter::emitValue(Value val)
   }
 }
 
-LogicalResult KokkosCppEmitter::emitVariableDeclaration(Value result,
-                                                  bool trailingSemicolon) {
+LogicalResult KokkosCppEmitter::emitVariableDeclaration(
+    Location loc, Value result, bool trailingSemicolon) {
   auto op = result.getDefiningOp();
   auto type = result.getType();
-  Location loc = op ? op->getLoc() : Location(LocationAttr());
   if (hasValueInScope(result)) {
     if(op) {
       return op->emitError(
@@ -2976,14 +2974,14 @@ LogicalResult KokkosCppEmitter::emitAssignPrefix(Operation &op) {
     break;
   case 1: {
     OpResult result = op.getResult(0);
-    if (failed(emitVariableDeclaration(result, /*trailingSemicolon=*/false)))
+    if (failed(emitVariableDeclaration(op.getLoc(), result, /*trailingSemicolon=*/false)))
       return failure();
     os << " = ";
     break;
   }
   default:
     for (OpResult result : op.getResults()) {
-      if (failed(emitVariableDeclaration(result, /*trailingSemicolon=*/true)))
+      if (failed(emitVariableDeclaration(op.getLoc(), result, /*trailingSemicolon=*/true)))
         return failure();
     }
     os << "std::tie(";
