@@ -4,6 +4,7 @@ import torch_mlir
 from torch_mlir import torchscript
 from lapis import KokkosBackend
 from torch import nn
+from torch_mlir.compiler_utils import TensorPlaceholder
 
 class Matmul(torch.nn.Module):
     def __init__(self):
@@ -19,7 +20,10 @@ def main():
     m = Matmul()
     m.train(False)
 
-    mlir_module = torchscript.compile(m, (a, b), output_type='linalg-on-tensors')
+    aPH = TensorPlaceholder([-1, -1], a.dtype)
+    bPH = TensorPlaceholder([-1, -1], b.dtype)
+
+    mlir_module = torchscript.compile(m, (aPH, bPH), output_type='linalg-on-tensors')
 
     print(mlir_module)
 
