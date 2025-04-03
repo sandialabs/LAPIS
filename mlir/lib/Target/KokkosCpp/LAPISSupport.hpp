@@ -142,6 +142,11 @@ namespace LAPIS
     bool modified_host = false;
     bool modified_device = false;
     std::shared_ptr<DualViewBase> parent;
+
+    void setParent(const std::shared_ptr<DualViewBase>& parent_)
+    {
+      this->parent = parent_;
+    }
   };
 
   template<typename DataType, typename Layout>
@@ -298,11 +303,6 @@ namespace LAPIS
       return device_view.stride(dim);
     }
 
-    void setParent(const std::shared_ptr<DualViewBase>& parent_)
-    {
-      this->parent = parent_;
-    }
-
     DeviceView device_view;
     HostView host_view;
   };
@@ -326,8 +326,7 @@ namespace LAPIS
     DualView(
         const std::string& label,
         size_t ex0 = KOKKOS_INVALID_INDEX, size_t ex1 = KOKKOS_INVALID_INDEX, size_t ex2 = KOKKOS_INVALID_INDEX, size_t ex3 = KOKKOS_INVALID_INDEX,
-        size_t ex4 = KOKKOS_INVALID_INDEX, size_t ex5 = KOKKOS_INVALID_INDEX, size_t ex6 = KOKKOS_INVALID_INDEX, size_t ex7 = KOKKOS_INVALID_INDEX)
-    {
+        size_t ex4 = KOKKOS_INVALID_INDEX, size_t ex5 = KOKKOS_INVALID_INDEX, size_t ex6 = KOKKOS_INVALID_INDEX, size_t ex7 = KOKKOS_INVALID_INDEX) {
       impl = std::make_shared<ImplType>(label, ex0, ex1, ex2, ex3, ex4, ex5, ex6, ex7);
       impl->setParent(impl);
     }
@@ -341,13 +340,29 @@ namespace LAPIS
     }
 
     template<typename Parent>
-    DualView(const DeviceView& d, const HostView& h, const Parent& parent)
-    {
+    DualView(const DeviceView& d, const HostView& h, const Parent& parent) {
       impl = std::make_shared<ImplType>(d, h);
       // From the caller's point of view, parent is some DualView that is considered the parent of this.
       // But we need parent to point to the top-level parent, not just the immediate parent.
       // This way we don't have to pointer hop multiple times during sync/modify calls.
       impl->setParent(parent.impl->parent);
+    }
+
+    ~DualView() {
+      DualViewBase* parent = impl->parent.get();
+      impl.reset();
+      // All DualViewBases keep a shared reference to themselves, so
+      // parent always keeps a shared_ptr to itself. This would normally
+      // prevent the parent destructor ever being called.
+      //
+      // So if parent now has a use count of 1, it is
+      // only pointing to itself and no other DualView objects
+      // are using it anymore.
+      if(parent->parent.use_count() == 1) {
+        // This will reset the last shared_ptr reference,
+        // causing parent to be destroyed.
+        parent->parent.reset();
+      }
     }
 
     DeviceView device_view() const {
