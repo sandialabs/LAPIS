@@ -46,6 +46,19 @@ def predictions(torch_func, kokkos_func, img, labels):
     return pred1[0][0] == pred2[0][0] and math.fabs(pred1[0][1] - pred2[0][1]) < 0.001
 
 img = load_and_preprocess_image_file("images/dog.jpg")
+print(img.shape)
+
+# Uncomment the following lines to write the raw values of preprocessed input
+# tensor to a file, for use in standalone C++ driver
+#print("Writing img (preprocessed) values to dog_preprocessed.txt")
+#with open('dog_preprocessed.txt', 'w') as f:
+#    for i in range(3):
+#        for j in range(224):
+#            for k in range(224):
+#                f.write(str(float(img[0, i, j, k])))
+#                f.write('\n')
+#print("Done")
+
 labels = load_labels()
 
 resnet18 = models.resnet18(pretrained=True).eval()

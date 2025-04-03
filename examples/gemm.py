@@ -27,7 +27,7 @@ def main():
 
     print(mlir_module)
 
-    backend = KokkosBackend.KokkosBackend(dump_mlir=True)
+    backend = KokkosBackend.KokkosBackend(dump_mlir=False)
     k_backend = backend.compile(mlir_module)
 
     print("a*b from kokkos")
