@@ -45,8 +45,15 @@ void mlir::kokkos::buildSparseKokkosCompiler(
 #ifdef LAPIS_ENABLE_PART_TENSOR
   pm.addPass(::mlir::createPartTensorConversionPass(options.partTensorBackend));
 #endif
+
   // Rewrite named linalg ops into generic ops and apply fusion.
   pm.addNestedPass<func::FuncOp>(createLinalgGeneralizeNamedOpsPass());
+
+  // Remove compile-time unit extent dimensions from linalg ops.
+  // For example, a 3D loop over (N, M, 1) will be rewritten to 2D loop over (N, M).
+  // This does not affect tensor types, at least in function parameter/return types,
+  // so it is transparent to any caller.
+  pm.addPass(createLinalgFoldUnitExtentDimsPass());
 
   if(options.decompose) {
     pm.addPass(createPreSparsificationRewritePass());
