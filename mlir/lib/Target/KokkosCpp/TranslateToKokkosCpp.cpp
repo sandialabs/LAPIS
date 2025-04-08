@@ -320,12 +320,6 @@ public:
   // Get the real C function name for the given MLIR function name
   std::string getSparseSupportFunctionName(StringRef mlirName) {return sparseSupportFunctions[mlirName.str()].second;}
 
-  // List of DualViews which originated from sparse support functions
-  // (meaning that a SparseTensorStorageBase object owns the host-side memory).
-  // Right before a function return, all these should be synced to host in case
-  // the owning tensor is an output.
-  SmallVector<Value> dualViewsFromTensors;
-
   void ensureTypeDeclared(Location loc, Type t);
 };
 } // namespace
@@ -924,7 +918,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     if(failed(emitter.emitStridedMemrefType(op.getLoc(), resultType, kokkos::MemorySpace::DualView))) {
       return failure();
     }
-    emitter << " " << resultName << "(" << resultName << "_device, " << resultName << "_host, &";
+    emitter << " " << resultName << "(" << resultName << "_device, " << resultName << "_host, ";
     if (failed(emitter.emitValue(source)))
       return failure();
     emitter << ");\n";
@@ -952,25 +946,78 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   return success();
 }
 
-/*
 static LogicalResult printOperation(KokkosCppEmitter &emitter,
-                                    memref::CollapseShapeOp op) {
-  //CollapseShape flattens a subset of dimensions. The op semantics require that this can alias the existing data without copying/shuffling.
-  //TODO: expressing this with unmanaged view, so need to manage the lifetime of the owning view so it doesn't end up with a dangling pointer.
-  //MemRefType srcType = op.src().getType().cast<MemRefType>();
-  MemRefType dstType = op.getResult().getType().cast<MemRefType>();
-  emitter.memrefSpaces[op.getResult()] = emitter.memrefSpaces[op.getSrc()];
-  if(failed(emitter.emitType(op.getLoc(), dstType)))
-    return failure();
-  emitter << ' ' << emitter.getOrCreateName(op.getResult());
-  //TODO: handle dynamic dimensions here
-  emitter << '(';
-  if(failed(emitter.emitValue(op.getSrc())))
-    return failure();
-  emitter << ".data())";
+                                    memref::ReshapeOp op) {
+  Value result = op.getResult();
+  Value source = op.getSource();
+  // Shape is a statically sized, 1D memref of integers defining result shape
+  Value shape = op.getShape();
+  if(kokkos::getMemSpace(shape) != kokkos::MemorySpace::Host) {
+    return op.emitError("shape memref is used in device code, this case must be added to Kokkos emitter");
+  }
+  // Using that simplifying assumption, can easily read shape values on host
+  auto resultName = emitter.getOrCreateName(result);
+  MemRefType resultType = dyn_cast<MemRefType>(result.getType());
+  if(!resultType) {
+    return op.emitError("not supporting unranked result yet, this case must be added to Kokkos emitter");
+  }
+  int resultRank = resultType.getRank();
+  auto space = kokkos::getMemSpace(result);
+  if(space == kokkos::MemorySpace::DualView) {
+    if(failed(emitter.emitMemrefType(op.getLoc(), resultType, kokkos::MemorySpace::Host))) {
+      return failure();
+    }
+    emitter << " " << resultName << "_host(";
+    if (failed(emitter.emitValue(source)))
+      return failure();
+    emitter << "_h.data()";
+    for(int i = 0; i < resultRank; i++) {
+      emitter << ", ";
+      if(failed(emitter.emitValue(shape)))
+        return failure();
+      emitter << "(" << i << ")";
+    }
+    emitter << ");\n";
+    if(failed(emitter.emitMemrefType(op.getLoc(), resultType, kokkos::MemorySpace::Device))) {
+      return failure();
+    }
+    emitter << " " << resultName << "_device(";
+    if (failed(emitter.emitValue(source)))
+      return failure();
+    emitter << "_d.data()";
+    for(int i = 0; i < resultRank; i++) {
+      emitter << ", ";
+      if(failed(emitter.emitValue(shape)))
+        return failure();
+      emitter << "(" << i << ")";
+    }
+    emitter << ");\n";
+    if(failed(emitter.emitMemrefType(op.getLoc(), resultType, kokkos::MemorySpace::DualView))) {
+      return failure();
+    }
+    emitter << " " << resultName << "(" << resultName << "_device, " << resultName << "_host, ";
+    if (failed(emitter.emitValue(source)))
+      return failure();
+    emitter << ")";
+  }
+  else {
+    if(failed(emitter.emitMemrefType(op.getLoc(), resultType, space))) {
+      return failure();
+    }
+    emitter << " " << resultName << "(";
+    if (failed(emitter.emitValue(source)))
+      return failure();
+    emitter << ".data()";
+    for(int i = 0; i < resultRank; i++) {
+      emitter << ", ";
+      if(failed(emitter.emitValue(shape)))
+        return failure();
+      emitter << "(" << i << ")";
+    }
+    emitter << ")";
+  }
   return success();
 }
-*/
 
 static LogicalResult printOperation(KokkosCppEmitter &emitter,
                                     memref::CastOp op) {
@@ -1179,15 +1226,14 @@ static LogicalResult printSupportCall(KokkosCppEmitter &emitter, func::CallOp ca
     // stridedMemrefToView produces an unmanaged host view.
     // If result is a DualView, wrap it in a DualView here.
     os << emitter.getOrCreateName(callOp.getResult(0)) << " = ";
-    if(resultSpace == kokkos::MemorySpace::DualView) {
-      // The result is a DualView and came from a support function - add it to the list
-      emitter.dualViewsFromTensors.push_back(callOp.getResult(0));
-    }
     os << "LAPIS::stridedMemrefToView<";
     if(failed(emitter.emitMemrefType(callOp.getLoc(), dyn_cast<MemRefType>(callOp.getResult(0).getType()), kokkos::MemorySpace::Host)))
       return failure();
     os << ">(" << emitter.getOrCreateName(callOp.getResult(0)) << "_smr)";
     os << ";\n";
+    if(resultSpace == kokkos::MemorySpace::DualView) {
+      os << emitter.getOrCreateName(callOp.getResult(0)) << ".syncHostOnDestroy();\n";
+    }
   }
   os.unindent();
   os << "}";
@@ -2020,9 +2066,6 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
                                     func::ReturnOp returnOp) {
   // First, sync all tensor-owned DualViews with
   // lifetimes inside this function to host.
-  for(auto dv : emitter.dualViewsFromTensors) {
-    emitter << emitter.getOrCreateName(dv) << ".syncHost();\n";
-  }
   raw_ostream &os = emitter.ostream();
   os << "return";
   switch (returnOp.getNumOperands()) {
@@ -2051,8 +2094,6 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, ModuleOp moduleOp
 }
 
 static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp functionOp) {
-  // Clear dualViewsFromTensors of any values from previously emitted functions.
-  emitter.dualViewsFromTensors.clear();
   // Need to replace function names in 2 cases:
   //  1. functionOp is a forward declaration for a sparse support function
   //  2. functionOp's name is "main"
@@ -2208,14 +2249,6 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
       if (failed(emitter.emitOperation(
               op, /*trailingSemicolon=*/trailingSemicolon)))
         return failure();
-      // If op produced any DualView typed memrefs,
-      // declare variables for its host and device views 
-      for(auto result : op.getResults()) {
-        if(auto memrefType = dyn_cast<MemRefType>(result.getType())) {
-          if(kokkos::getMemSpace(result) == kokkos::MemorySpace::DualView)
-            emitter.declareDeviceHostViews(result);
-        }
-      }
     }
   }
   os.unindent() << "}\n\n";
@@ -3574,7 +3607,7 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
           // Memref ops.
           .Case<memref::GlobalOp, memref::GetGlobalOp, memref::AllocOp,
                 memref::AllocaOp, memref::StoreOp, memref::LoadOp,
-                memref::CopyOp, memref::SubViewOp, /* memref::CollapseShapeOp, */
+                memref::CopyOp, memref::SubViewOp, memref::ReshapeOp,
                 memref::CastOp, memref::DeallocOp, memref::DimOp,
                 memref::ReinterpretCastOp, memref::ExtractStridedMetadataOp>(
               [&](auto op) { return printOperation(*this, op); })
@@ -3596,6 +3629,18 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
     return failure();
   if(!skipPrint) {
     os << (trailingSemicolon ? ";\n" : "\n");
+  }
+  // If op produced any DualView typed memrefs,
+  // declare variables for its host and device views 
+  for(auto result : op.getResults()) {
+    if(auto memrefType = dyn_cast<MemRefType>(result.getType())) {
+      if(kokkos::getMemSpace(result) == kokkos::MemorySpace::DualView) {
+        if(skipPrint || !trailingSemicolon) {
+          return op.emitOpError("op produced at least one DualView, but op was emitted in a context where we can't declare v_d and v_h views");
+        }
+        declareDeviceHostViews(result);
+      }
+    }
   }
   return success();
 }

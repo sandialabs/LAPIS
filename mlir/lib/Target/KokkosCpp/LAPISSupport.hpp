@@ -315,6 +315,7 @@ namespace LAPIS
     using HostView = typename ImplType::HostView;
 
     std::shared_ptr<ImplType> impl;
+    bool syncHostWhenDestroyed = false;
 
     DualView() {
       impl = std::make_shared<ImplType>();
@@ -349,6 +350,7 @@ namespace LAPIS
     }
 
     ~DualView() {
+      if(syncHostWhenDestroyed) syncHost();
       DualViewBase* parent = impl->parent.get();
       impl.reset();
       // All DualViewBases keep a shared reference to themselves, so
@@ -415,6 +417,10 @@ namespace LAPIS
 
     void keepAliveHost() const {
       impl->parent->keepAliveHost();
+    }
+
+    void syncHostOnDestroy() {
+      syncHostWhenDestroyed = true;
     }
   };
 
