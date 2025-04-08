@@ -53,7 +53,9 @@ void mlir::kokkos::buildSparseKokkosCompiler(
   // For example, a 3D loop over (N, M, 1) will be rewritten to 2D loop over (N, M).
   // This does not affect tensor types, at least in function parameter/return types,
   // so it is transparent to any caller.
-  pm.addPass(createLinalgFoldUnitExtentDimsPass());
+
+  // NOTE BMK: this pass is buggy; see LAPIS issue #69
+  //pm.addPass(createLinalgFoldUnitExtentDimsPass());
 
   if(options.decompose) {
     pm.addPass(createPreSparsificationRewritePass());
