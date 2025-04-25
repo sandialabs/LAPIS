@@ -1,4 +1,6 @@
 be_model.zip contains the complete pre-trained DFT model for beryllium atoms.
+We include the exact model version used for the experiments in this paper, but
+the most up-to-date model is provided by the MALA developers at github.com/mala-project/test-data.
 
 snap_descriptors.txt contains the raw preprocessed atom descriptors from a
 LAMMPS+MALA example simulation. This serves as the model input.
