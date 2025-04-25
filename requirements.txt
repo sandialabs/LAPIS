@@ -1,0 +1,8 @@
+torch==2.5.0
+torchvision==0.20.0
+pybind11
+packaging
+PyYAML
+requests
+scipy
+
