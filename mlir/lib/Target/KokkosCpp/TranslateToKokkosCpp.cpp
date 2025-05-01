@@ -3583,7 +3583,7 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
           .Case<arith::AddFOp, arith::AddIOp, arith::SubFOp, arith::SubIOp, arith::MulFOp, arith::MulIOp, arith::DivFOp, arith::DivSIOp, arith::DivUIOp, arith::AndIOp, arith::OrIOp, arith::XOrIOp>(
               [&](auto op) { return printBinaryInfixOperation(*this, op); })
           // Arithmetic ops: type casting that C++ compiler can handle automatically with implicit conversion: "result = operand;"
-          .Case<arith::UIToFPOp, arith::FPToSIOp, arith::TruncFOp, arith::ExtFOp, arith::ExtSIOp, arith::ExtUIOp>(
+          .Case<arith::UIToFPOp, arith::FPToSIOp, arith::TruncIOp, arith::TruncFOp, arith::ExtFOp, arith::ExtSIOp, arith::ExtUIOp>(
               [&](auto op) { return printImplicitConversionOperation(*this, op); })
           // Arithmetic ops: min/max expressed using ternary operator.
           .Case<arith::MinimumFOp>(
