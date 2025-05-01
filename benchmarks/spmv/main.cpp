@@ -47,7 +47,7 @@ int main(int argc, const char** argv) {
     Vector_DV y("y", A.numRows());
     Struct0 shape = {
       {A.numRows(), A.numCols()},
-      {A_rowptrs.extent(0), A_entries.extent(0), A_values.extent(0)}
+      {(int64_t) A_rowptrs.extent(0), (int64_t) A_entries.extent(0), (int64_t) A_values.extent(0)}
     };
     // Warmup
     spmv(A_rowptrs, A_entries, A_values, shape, x, y);

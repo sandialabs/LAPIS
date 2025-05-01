@@ -583,12 +583,17 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   // - sizes (one per rank)
   // - strides (one per rank)
   // In the kokkos implementation of memrefs, the offset is always 0.
-  emitter << "size_t " << emitter.getOrCreateName(op.getOffset()) << " = 0;\n";
-  for(int i = 0; i < rank; i++) {
-    emitter << "size_t " << emitter.getOrCreateName(sizes[i]) << " = " << emitter.getOrCreateName(op.getSource()) << ".extent(" << i << ");\n";
+  if(!op.getOffset().use_empty()) {
+    // Only declare the value if it actually has at least one use
+    emitter << "size_t " << emitter.getOrCreateName(op.getOffset()) << " = 0;\n";
   }
   for(int i = 0; i < rank; i++) {
-    emitter << "size_t " << emitter.getOrCreateName(strides[i]) << " = " << emitter.getOrCreateName(op.getSource()) << ".stride(" << i << ");\n";
+    if(!sizes[i].use_empty())
+      emitter << "size_t " << emitter.getOrCreateName(sizes[i]) << " = " << emitter.getOrCreateName(op.getSource()) << ".extent(" << i << ");\n";
+  }
+  for(int i = 0; i < rank; i++) {
+    if(!strides[i].use_empty())
+      emitter << "size_t " << emitter.getOrCreateName(strides[i]) << " = " << emitter.getOrCreateName(op.getSource()) << ".stride(" << i << ");\n";
   }
   // Base: get a rank 0 view or DualView with the same pointer(s) as source.
   if(destSpace == kokkos::MemorySpace::DualView) {
@@ -3358,10 +3363,14 @@ static LogicalResult printBinaryInfixOperation(KokkosCppEmitter &emitter, T op) 
 }
 
 template<typename T>
-static LogicalResult printImplicitConversionOperation(KokkosCppEmitter &emitter, T op) {
+static LogicalResult printScalarCastOp(KokkosCppEmitter &emitter, T op) {
   if(failed(emitter.emitType(op.getLoc(), op.getOut().getType())))
     return failure();
-  emitter << ' ' << emitter.getOrCreateName(op.getOut()) << " = ";
+  emitter << " " << emitter.getOrCreateName(op.getOut()) << " = ";
+  emitter << "(";
+  if(failed(emitter.emitType(op.getLoc(), op.getOut().getType())))
+    return failure();
+  emitter << ") ";
   if(failed(emitter.emitValue(op.getIn())))
     return failure();
   return success();
@@ -3582,9 +3591,9 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
           // ArithBinaryInfixOperator<Op>::get() will provide the <operator>.
           .Case<arith::AddFOp, arith::AddIOp, arith::SubFOp, arith::SubIOp, arith::MulFOp, arith::MulIOp, arith::DivFOp, arith::DivSIOp, arith::DivUIOp, arith::AndIOp, arith::OrIOp, arith::XOrIOp>(
               [&](auto op) { return printBinaryInfixOperation(*this, op); })
-          // Arithmetic ops: type casting that C++ compiler can handle automatically with implicit conversion: "result = operand;"
+          // Arithmetic ops: scalar type casting that can be done easily with C-style cast
           .Case<arith::UIToFPOp, arith::FPToSIOp, arith::TruncIOp, arith::TruncFOp, arith::ExtFOp, arith::ExtSIOp, arith::ExtUIOp>(
-              [&](auto op) { return printImplicitConversionOperation(*this, op); })
+              [&](auto op) { return printScalarCastOp(*this, op); })
           // Arithmetic ops: min/max expressed using ternary operator.
           .Case<arith::MinimumFOp>(
               [&](auto op) { return printFloatMinMax(*this, op, "<"); })
