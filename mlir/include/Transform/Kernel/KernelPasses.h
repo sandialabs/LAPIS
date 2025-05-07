@@ -11,6 +11,9 @@
 namespace mlir {
 namespace kernel {
 
+#define GEN_PASS_DECL_LINALGGENERICREORDERINGPASS
+std::unique_ptr<Pass> createLinalgGenericReorderingPass();
+
 #define GEN_PASS_DECL_FUSEDKERNELINLININGPASS
 std::unique_ptr<Pass> createFusedKernelInliningPass();
 

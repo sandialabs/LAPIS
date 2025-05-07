@@ -16,8 +16,6 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/Casting.h"
 
-#include <iostream>
-
 namespace mlir {
 namespace kernel {
 
@@ -72,40 +70,6 @@ CallMap getCallMap(FuncOp mainFuncOp) {
   }
 
   return callMap;
-}
-
-int computeCallOpAsymptoticCost(ModuleOp module, CallOp call) {
-  /* There are two cases worth considering here.
-   *
-   * 1. Shapes are known by both the caller and the callee. Given this, we do
-   * not need to do any work to determine the asymptotic cost of the call.
-   *
-   * 2. Shapes are only known by the caller and must be inferred within the
-   * scope of the callee to determine the cost. This allows kernels (callees)
-   * to be generalized (e.g. a single matrix multiplication routine for matrices
-   * of any size)
-   *
-   * Case 2 requires propagating information from the caller into the callee.
-   * Arguments need to be mapped to linalgop operands. From there, we can
-   * utilize shape information to compute loop sizes, compute the product of all
-   * loops, and sum the cost of all linalgops within a particular call.
-   */
-  int cost = 0;
-
-  // get associated FuncOp
-  FuncOp func = dyn_cast<FuncOp>(SymbolTable::lookupNearestSymbolFrom(
-    module, call.getCallableForCallee().get<SymbolRefAttr>()
-  ));
-
-  // use existing functionality to compute cost
-  for (LinalgOp laOp : func.getOps<LinalgOp>()) {
-    int laOp_cost = 1;
-    for (auto loop_size : laOp.computeStaticLoopSizes())
-      laOp_cost *= loop_size;
-    cost += laOp_cost;
-  }
-
-  return cost;
 }
 
 void reduceIntermediateSizes(FuncOp main, DenseMap<CallOp, int> callsToCosts) {
@@ -164,8 +128,7 @@ bool parallelIterationSpacesMatch(ModuleOp module, CallOp firstCall,
 
 bool markedForFusion(CallOp keyKernel, CallOp valKernel) {
   // FIXME: segfault if one of the kernels does not have this attribute
-  if (!keyKernel->hasAttr("fuse_with") ||
-      !valKernel->hasAttr("fuse_with")) {
+  if (!keyKernel->hasAttr("fuse_with") || !valKernel->hasAttr("fuse_with")) {
     return false;
   }
 
@@ -271,12 +234,6 @@ struct KernelFusionPass : impl::KernelFusionPassBase<KernelFusionPass> {
       }
     }
 
-    // 0. compute asymptotic cost of calls
-    DenseMap<CallOp, int> callsToCosts;
-    for (auto call : mainFuncOp.getOps<CallOp>()) {
-      callsToCosts[call] = computeCallOpAsymptoticCost(module, call);
-    }
-
     // 1. identify candidate kernels
     CallMap callMap = getCallMap(mainFuncOp);
 
@@ -357,7 +314,7 @@ struct KernelFusionPass : impl::KernelFusionPassBase<KernelFusionPass> {
       // create a FuncOp and insert at the top of the module
       builder.setInsertionPointToStart(
           dyn_cast<ModuleOp>(getOperation()).getBody());
-      StringRef fusedKernelName =
+      std::string fusedKernelName =
           "fusedKernel_" + std::to_string(fusedKernelCounter);
       FuncOp fusedKernelOp = builder.create<FuncOp>(
           module.getLoc(), fusedKernelName, fusedKernelType);
@@ -432,7 +389,7 @@ struct KernelFusionPass : impl::KernelFusionPassBase<KernelFusionPass> {
         for (auto result : newCall.getResults()) {
           // compute the number of users
           int numUsers = 0;
-          for (auto user : result.getUsers())
+          for (auto _ : result.getUsers())
             numUsers++;
 
           if (numUsers == 0)

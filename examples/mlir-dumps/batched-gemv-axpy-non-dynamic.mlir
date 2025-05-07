@@ -31,4 +31,3 @@ module {
     return %6 : tensor<10x10xf64>
   }
 }
-
