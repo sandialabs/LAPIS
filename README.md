@@ -90,36 +90,22 @@ cd ..
 ```
 #### Recipe B: build LAPIS in-tree with LLVM/MLIR, and optionally torch-mlir/mpact
 This recipe builds LAPIS as an external project with LLVM.
-torch-mlir and mpact require this recipe, but torch-mlir and mpact are still optional.
+torch-mlir and mpact require this recipe, but torch-mlir and mpact are still optional
+(though some of LAPIS's examples require one or both).
+
 mpact requires torch-mlir, however.
 **ninja is required due to an issue in torch-mlir. make will not work.**
+
+First, install Python dependencies. ``LAPIS/requirements.txt`` includes everything
+needed by torch-mlir, mpact and LAPIS's tests and examples. It is recommended to install
+these inside a python virtual environment, since specific versions of torch and torchvision
+are needed and they might conflict with the requirements of other projects.
 ```
-# If enabling torch-mlir, need to install Python dependencies first.
-# This can be done inside a python virtual env.
-
-cd $TORCH_MLIR_SRC
-pip install -r build-requirements.txt
-pip install -r test-requirements.txt
-```
-
-Then install the torch and torchvision Python packages from source.
-It needs to be from source because torch-mlir only works with specific nightly versions
-of these packages, but the package repository only stores nightly binaries for a limited amount of time.
-
-A CPU-only build is sufficient for LAPIS.
-* [torch repository](https://github.com/pytorch/pytorch), version 995ec16c)
-* [torchvision repository](https://github.com/pytorch/vision), version c7ea645b)
-[Instructions for building from source can be found here](https://github.com/pytorch/pytorch#from-source)
-
-These Git SHAs correspond to the nightly versions 2.5.0.dev20240909 and 0.20.0.dev20240909 respectively.
-*Note for developers:* from installed nightly versions, the exact Git versions can be found with:
-```
-import torch
-import torchvision
-print(torch.version.git_version)
-print(torchvision.version.git_version)
+cd $LAPIS_SRC
+pip install -r requirements.txt
 ```
 
+Then configure all desired LLVM-based packages (including LAPIS) in one build, and build using Ninja:
 ```
 cd $WORKSPACE
 mkdir build
@@ -147,10 +133,13 @@ cmake \
   -DLLVM_EXTERNAL_PROJECTS="torch-mlir;mpact;lapis" \
   -DLLVM_EXTERNAL_MPACT_SOURCE_DIR="$MPACT_SRC" \
 
-# Then run make.
+# Then run ninja.
 ```
 
 ### For both recipes: build and install Kokkos
+It is recommended to build Kokkos as shared libraries. This is
+required for more advanced use cases where multiple compiled LAPIS
+programs are loaded at the same time.
 ```
 cd $WORKSPACE
 mkdir kokkosBuild
@@ -160,6 +149,7 @@ cd kokkosBuild
 cmake \
   -DCMAKE_BUILD_TYPE=Release \
   -DKokkos_ENABLE_SERIAL=ON \
+  -DBUILD_SHARED_LIBS=ON \
   -DCMAKE_CXX_FLAGS="-fPIC" \
   -DCMAKE_INSTALL_PREFIX=$WORKSPACE/kokkosInstall \
   ../kokkos
@@ -222,16 +212,14 @@ pip install --user lit
 ```
 #### Run tests: recipe A
 ```
-cd $WORKSPACE/lapisBuild/mlir/test
-# Just Kokkos dialect tests
-lit -v Dialect/Kokkos
+cd $WORKSPACE/lapisBuild
+ctest
 ```
 #### Run tests: recipe B
 ```
-cd $WORKSPACE/build/tools/lapis/mlir/test
-lit -v Dialect/Kokkos
+cd $WORKSPACE/lapisBuild/tools/lapis
+ctest
 ```
-
 ## Developer Guide
-### Adding tests
-see [AddingNewTests.txt](mlir/test/AddingNewTests.txt).
+### Adding dialect tests
+see [AddingNewTests.txt](tests/Dialect/AddingNewTests.txt).

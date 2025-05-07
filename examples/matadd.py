@@ -4,6 +4,8 @@ import torch_mlir
 from torch_mlir import torchscript
 from lapis import KokkosBackend
 from torch import nn
+import sys
+from numpy import allclose
 
 class Adder(torch.nn.Module):
     def __init__(self):
@@ -14,23 +16,28 @@ class Adder(torch.nn.Module):
 
 
 def main():
-    a = 5 * torch.ones((5, 5))
-    b = torch.ones((5, 5))
+    a = torch.ones((5, 5))
+    b = torch.eye(5)
 
     m = Adder()
     m.train(False)
 
     mlir_module = torchscript.compile(m, (a, b), output_type='linalg-on-tensors')
 
-    backend = KokkosBackend.KokkosBackend(dump_mlir=True)
+    print(mlir_module)
+
+    backend = KokkosBackend.KokkosBackend()
     k_backend = backend.compile(mlir_module)
 
-    c = k_backend.forward(a, b)
-    print("c from kokkos")
-    print(c)
+    print("a+b from pytorch")
+    sumTorch = m.forward(a, b).numpy()
+    print(sumTorch)
 
-    print("c from pytorch")
-    print(m.forward(a, b))
+    print("a+b from kokkos")
+    sumKokkos = k_backend.forward(a, b)
+    print(sumKokkos)
+
+    sys.exit(0 if allclose(sumTorch, sumKokkos) else 1)
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,17 @@
+module {
+  func.func @myfunc(%arg0: memref<?x?x?xf64>, %arg1: memref<?xindex>, %arg2: memref<?xf64>, %arg3: memref<?xf64>, %arg4: index) {
+    %cst = arith.constant 3.141590e+00 : f32
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c5 = arith.constant 5 : index
+    kokkos.range_parallel (%arg5, %arg6) -> (%c5, %arg4) {
+      %alloc = memref.alloc(%c5) : memref<?xf32>
+      scf.for %arg7 = %c0 to %c5 step %c1 {
+        memref.store %cst, %alloc[%arg7] : memref<?xf32>
+      }
+      kokkos.yield
+    } {executionSpace = 0 : i64, parallelLevel = 0 : i64}
+    return
+  }
+}
+

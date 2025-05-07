@@ -1,0 +1,16 @@
+module {
+  func.func @sum(%arg0: index) -> index {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %0 = kokkos.range_parallel (%arg1) -> (%arg0) -> index {
+      "kokkos.update_reduction"(%c1, %c0) ({
+      ^bb0(%arg2: index, %arg3: index):
+        %1 = arith.addi %arg2, %arg3 : index
+        kokkos.yield %1 : index
+      }) : (index, index) -> ()
+      kokkos.yield
+    } {executionSpace = 1 : i64, parallelLevel = 0 : i64}
+    return %0 : index
+  }
+}
+

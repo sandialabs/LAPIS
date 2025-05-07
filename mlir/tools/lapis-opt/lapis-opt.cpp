@@ -9,10 +9,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "lapis/LAPIS_config.h"
 #include "lapis/Dialect/Kokkos/IR/KokkosDialect.h"
 #include "lapis/Dialect/Kokkos/Pipelines/Passes.h"
 #include "lapis/Dialect/Kokkos/Transforms/Passes.h"
-#ifdef ENABLE_PART_TENSOR
+#ifdef LAPIS_ENABLE_PART_TENSOR
 #include "lapis/Dialect/PartTensor/IR/PartTensor.h"
 #include "lapis/Dialect/PartTensor/Pipelines/Passes.h"
 #include "lapis/Dialect/PartTensor/Transforms/Passes.h"
@@ -25,12 +26,14 @@
 #include "mlir/Dialect/Bufferization/Transforms/FuncBufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Func/Extensions/AllExtensions.h"
+#include "mlir/Dialect/SCF/IR/ValueBoundsOpInterfaceImpl.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Transforms/AllInterfaces.h"
 #include "mlir/Dialect/Linalg/Transforms/RuntimeOpVerification.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/MemRef/IR/ValueBoundsOpInterfaceImpl.h"
 #include "mlir/Dialect/MLProgram/IR/MLProgram.h"
 #include "mlir/Dialect/MLProgram/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -61,7 +64,7 @@ int main(int argc, char **argv) {
   // Use mlir-opt for those passes.
   DialectRegistry registry;
   registry.insert<
-#ifdef ENABLE_PART_TENSOR
+#ifdef LAPIS_ENABLE_PART_TENSOR
       mlir::part_tensor::PartTensorDialect,
 #endif
       mlir::LLVM::LLVMDialect, mlir::vector::VectorDialect,
@@ -79,9 +82,11 @@ int main(int argc, char **argv) {
   builtin::registerCastOpInterfaceExternalModels(registry);
   linalg::registerAllDialectInterfaceImplementations(registry);
   linalg::registerRuntimeVerifiableOpInterfaceExternalModels(registry);
+  memref::registerValueBoundsOpInterfaceExternalModels(registry);
   ml_program::registerBufferizableOpInterfaceExternalModels(registry);
   scf::registerBufferDeallocationOpInterfaceExternalModels(registry);
   scf::registerBufferizableOpInterfaceExternalModels(registry);
+  scf::registerValueBoundsOpInterfaceExternalModels(registry);
   sparse_tensor::registerBufferizableOpInterfaceExternalModels(registry);
   tensor::registerBufferizableOpInterfaceExternalModels(registry);
   tensor::registerFindPayloadReplacementOpInterfaceExternalModels(registry);
@@ -97,7 +102,7 @@ int main(int argc, char **argv) {
   func::registerAllExtensions(registry);
 
   // Register LAPIS pipelines and passes
-#ifdef ENABLE_PART_TENSOR
+#ifdef LAPIS_ENABLE_PART_TENSOR
   mlir::registerPartTensorPasses();
 #endif
 

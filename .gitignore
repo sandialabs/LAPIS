@@ -105,7 +105,7 @@ tests/*.mlir
 tests/*.tns
 
 # Other test artifacts
-mlir/test/Dialect/*/Output
+tests/Dialect/*/Output
 mlir/test/Dialect/*/.*.txt
 mlir/test/.*.txt
 
@@ -132,3 +132,11 @@ compile_commands.json
 spack.lock
 
 llvm-project
+
+benchmarks/build
+benchmarks/*/lapis_package/
+benchmarks/MALA/forward_snap.hpp
+benchmarks/batched_gemm/batched_gemm.hpp
+benchmarks/gemm/gemm.hpp
+benchmarks/spmv/spmv.hpp
+benchmarks/resnet/resnet.hpp

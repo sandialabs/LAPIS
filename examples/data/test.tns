@@ -1,8 +1,0 @@
-# 25x25x25 tensor
-# extended FROSTT Format
-3 4
-25 25 25
-1 1 1 1.0
-2 2 2 1.0
-3 3 3 1.0
-4 4 4 1.0

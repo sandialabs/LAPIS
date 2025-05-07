@@ -479,15 +479,24 @@ void UpdateReductionOp::build(
 //===----------------------------------------------------------------------===//
 
 namespace mlir::kokkos {
+
+static bool isViewAliasingOp(Operation* op) {
+  // This is not a complete list, but is kept up to date
+  // with what the emitter supports
+  return isa<
+    memref::SubViewOp, memref::CollapseShapeOp,
+    memref::CastOp, memref::ReinterpretCastOp,
+    memref::ExtractStridedMetadataOp, memref::ReshapeOp
+      >(op);
+}
+
 Value getParentMemref(Value v) {
   Operation *op = v.getDefiningOp();
   if (!op)
     return v;
-  return llvm::TypeSwitch<Operation *, Value>(op)
-      .Case<memref::SubViewOp, memref::CollapseShapeOp, memref::CastOp,
-            memref::ReinterpretCastOp>(
-          [&](auto op) { return getParentMemref(op->getOperand(0)); })
-      .Default([&](Operation *) { return v; });
+  if(isViewAliasingOp(op))
+    return getParentMemref(op->getOperand(0));
+  return v;
 }
 
 func::FuncOp getCalledFunction(func::CallOp callOp) {
@@ -555,8 +564,7 @@ static MemorySpace getMemSpaceImpl(Value v) {
       // Direct element access outside of any parallel loop must be on host.
       hostRepresented = true;
     }
-    else if(isa<memref::ReinterpretCastOp, memref::CastOp, memref::SubViewOp>(usingOp)) {
-      // TODO: these op types are not a complete list
+    else if(isViewAliasingOp(usingOp) && v == usingOp->getOperand(0)) {
       // usingOp does not directly access v's memory, but its result can be accessed.
       // Recursively find the usages of this result too.
       MemorySpace childSpace = getMemSpaceImpl(usingOp->getResult(0));
@@ -601,7 +609,7 @@ static MemorySpace getMemSpaceImpl(Value v) {
 
 MemorySpace getMemSpace(Value v) {
   auto op = v.getDefiningOp();
-  if(op && isa<memref::ReinterpretCastOp, memref::CastOp, memref::SubViewOp>(op)) {
+  if(op && isViewAliasingOp(op)) {
     // op's first operand is the "parent" memref of v.
     // Recursively get the memory space of the parent. If it's a DualView then v needs to be one also.
     Value parent = op->getOperand(0);
@@ -767,6 +775,58 @@ bool valueIsIntegerConstantOne(Value v) {
     return false;
   }
   return false;
+}
+
+// If struct type contains only one type (as either single members,
+// nested structs, or LLVM arrays) then return that type.
+// Otherwise, return null.
+// Also returns null if st has no members.
+Type getStructElementType(LLVM::LLVMStructType st)
+{
+  SmallVector<Type> types;
+  for(Type t : st.getBody()) {
+    if(auto nestedArray = dyn_cast<LLVM::LLVMArrayType>(t)) {
+      types.push_back(nestedArray.getElementType());
+    }
+    else if(auto nestedStruct = dyn_cast<LLVM::LLVMStructType>(t)) {
+      Type nestedElemType = getStructElementType(nestedStruct);
+      if(!nestedElemType)
+        return nullptr;
+      types.push_back(nestedElemType);
+    }
+    else {
+      types.push_back(t);
+    }
+  }
+  if(types.size() == size_t(0))
+    return nullptr;
+  else if(types.size() == size_t(1))
+    return types[0];
+  Type t = types[0];
+  for(size_t i = 1; i < types.size(); i++) {
+    if(types[i] != t)
+      return nullptr;
+  }
+  return t;
+}
+
+// If the above function returns true, count the total number of elements in the struct:
+// sizeof(structType) / sizeof(elemType)
+int getStructElementCount(LLVM::LLVMStructType st)
+{
+  int size = 0;
+  for(Type t : st.getBody()) {
+    if(auto nestedArray = dyn_cast<LLVM::LLVMArrayType>(t)) {
+      size += nestedArray.getNumElements();
+    }
+    else if(auto nestedStruct = dyn_cast<LLVM::LLVMStructType>(t)) {
+      size += getStructElementCount(nestedStruct);
+    }
+    else {
+      size++;
+    }
+  }
+  return size;
 }
 
 } // namespace mlir::kokkos
