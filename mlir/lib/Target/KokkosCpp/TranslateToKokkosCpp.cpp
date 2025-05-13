@@ -2414,6 +2414,8 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
     if(t.isIndex())
       return "numpy.uint64";
     //Note: treating MLIR "signless" integer types as equivalent to unsigned NumPy integers.
+    if(t.isSignlessInteger(1) || t.isUnsignedInteger(1))
+      return "numpy.bool";
     if(t.isSignlessInteger(8) || t.isUnsignedInteger(8))
       return "numpy.uint8";
     if(t.isSignlessInteger(16) || t.isUnsignedInteger(16))
@@ -2443,6 +2445,8 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
     if(t.isIndex())
       return "ctypes.c_ulong";
     //Note: treating MLIR "signless" integer types as equivalent to unsigned NumPy integers.
+    if(t.isSignlessInteger(1) || t.isUnsignedInteger(1))
+      return "ctypes.c_bool";
     if(t.isSignlessInteger(8) || t.isUnsignedInteger(8))
       return "ctypes.c_ubyte";
     if(t.isSignlessInteger(16) || t.isUnsignedInteger(16))
@@ -2570,12 +2574,11 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
         py_os << "param" << i << " = param_flat" << i << "\n";
       }
       else {
-        //Wrap scalar primitives in 1D NumPy array.
-        //This gives it the correct type, and lets us use the same ndarray CTypes API as memrefs.
-        std::string numpyDType = getNumpyType(paramType);
-        if(!numpyDType.size())
-          return functionOp.emitError("Could not determine corresponding numpy type for scalar type");
-        py_os << "param" << i << " = numpy.array(param" << i << ", dtype=" << numpyDType << ", ndmin=1)\n";
+        // Ensure scalars have the correct type.
+        std::string ctypesType = getCtypesType(paramType);
+        if(!ctypesType.size())
+          return functionOp.emitError("Could not determine corresponding ctypes type for scalar");
+        py_os << "param" << i << " = " << ctypesType << "(param" << i << ")\n";
       }
     }
   }
@@ -2652,10 +2655,14 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
       //Numpy array (or a scalar from a numpy array)
       py_os << "ctypes.pointer(rt.get_ranked_memref_descriptor(param" << i << "))";
     }
-    else
+    else if(isa<LLVM::LLVMStructType>(paramType))
     {
-      //Numpy array (or a scalar from a numpy array)
+      //Structs are flattened to 1D Numpy arrays
       py_os << "param" << i << ".ctypes.data_as(ctypes.c_void_p)";
+    }
+    else {
+      //Scalar
+      py_os << "param" << i;
     }
   }
   py_os << ")\n";
