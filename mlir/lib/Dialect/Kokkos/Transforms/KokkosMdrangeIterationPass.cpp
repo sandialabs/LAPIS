@@ -641,7 +641,7 @@ static std::shared_ptr<Expr> iteration_space_expr(scf::ParallelOp &op, int dim) 
     auto num = Add::make(Sub::make(ubExpr, lbExpr), Sub::make(stExpr, Constant::make(1)));
     auto ret = Div::make(num, stExpr);
 
-    llvm::outs() << "Trip count of " << op << " dim " << dim << " = ";
+    llvm::outs() << "Trip count (dim " << dim << ") of:\n" << op <<"\n: ";
     ret->dump(llvm::outs());
     llvm::outs() << "\n";
     return ret;
@@ -661,23 +661,24 @@ using IterationSpaceExprs = llvm::DenseMap<scf::ParallelOp, std::shared_ptr<Expr
 
 // Get expressions represeting the iteration space for all parallel loops in the module
 static IterationSpaceExprs build_parallel_trip_counts(ModuleOp &mod) {
+  // create expr for each op, ignoring nesting
+  IterationSpaceExprs ISE1;
+  mod.walk([&](scf::ParallelOp op){
+    std::shared_ptr<Expr> expr = iteration_space_expr(op);
+    ISE1[op] = expr;
+  });
 
-  IterationSpaceExprs ISE;
+  // fixup, incorporate parent trip counts into expression
+  IterationSpaceExprs ISE2;
+  mod.walk([&](scf::ParallelOp op){
+    std::shared_ptr<Expr> expr = ISE1[op];
+    for (auto parent : enclosing_parallel_ops(op)) {
+      expr = Mul::make(expr, ISE1[parent]);
+    }
+    ISE2[op] = expr;
+  });
 
-    mod.walk([&](Operation *op) {
-      if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
-        // create an expression representing the trip count for this loop
-        std::shared_ptr<Expr> expr = iteration_space_expr(parallelOp);
-        ISE[parallelOp] = expr;
-
-        // descend into the body of the loop
-        IterationSpaceExprs exprs = build_parallel_trip_counts(parallelOp, expr);
-        ISE.insert(exprs.begin(), exprs.end());
-      }
-    }); // walk
-
-
-  return ISE;
+  return ISE2;
 }
 
 static IterationSpaceExprs build_parallel_trip_counts(scf::ParallelOp &parentOp, std::shared_ptr<Expr> parentCount) {
@@ -857,6 +858,15 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
     }
   }
 
+  static std::vector<scf::ParallelOp> enclosing_parallel_ops(mlir::Operation *op) {
+    std::vector<scf::ParallelOp> ops;
+    scf::ParallelOp parent = op->getParentOfType<scf::ParallelOp>();
+    while (parent) {
+      ops.push_back(parent);
+      parent = parent->getParentOfType<scf::ParallelOp>();
+    }
+    return ops;
+  }
 
   static std::vector<scf::ParallelOp> get_parallel_ops(ModuleOp &mod) {
     std::vector<scf::ParallelOp> ret;
@@ -925,13 +935,13 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
       if (auto it = cfg.perms_.find(parallelOp); it != cfg.perms_.end()) {
 
         const Permutation &perm = it->second;
-        Value rightMostVar = parallelOp.getInductionVars()[perm[perm.size() - 1]];
+        Value leftMostVar = parallelOp.getInductionVars()[perm[0]];
 
-        llvm::outs() << "under permutation, right-most enclosing induction var is " << rightMostVar << "\n";
+        llvm::outs() << "under permutation, left-most enclosing induction var is " << leftMostVar << "\n";
         
 
         // FIXME: why does this work? the table should expect key to be pair<Operation*, Value> not pair<Operation, Value>
-        auto costKey = std::make_pair(memrefOp, rightMostVar);
+        auto costKey = std::make_pair(memrefOp, leftMostVar);
         if (auto jt = costTable.find(costKey); jt != costTable.end()) {
           Cost model = jt->second;
           size_t cost = monte_carlo(model);
