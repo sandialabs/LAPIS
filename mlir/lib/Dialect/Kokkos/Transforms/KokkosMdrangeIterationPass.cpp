@@ -841,49 +841,6 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
     return parallelOp.getInductionVars().size();
   }
 
-  template <typename Lambda>
-  void walk_configurations(scf::ParallelOp &parentOp, ParallelConfig cfg, Lambda &&f) {
-    bool found = false;
-#if 1
-    for (scf::ParallelOp parallelOp : parentOp.getBody()->getOps<scf::ParallelOp>()) {
-      found = true;
-
-      // walk all configurations of this parallel op too
-      Permutation perm(get_num_induction_vars(parallelOp));
-      std::iota(perm.begin(), perm.end(), 0);
-      do {
-        cfg.perms_[parallelOp] = perm;
-        walk_configurations(parallelOp, cfg, std::forward<Lambda>(f));
-      } while (std::next_permutation(perm.begin(), perm.end()));
-    }
-#else
-    parentOp.getBody()->walk([&](Operation *op) {
-      if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
-        found = true;
-
-        // walk all configurations of this parallel op too
-        Permutation perm(get_num_induction_vars(parallelOp));
-        std::iota(perm.begin(), perm.end(), 0);
-        do {
-          cfg.perms_[parallelOp] = perm;
-          walk_configurations(parallelOp, cfg, std::forward<Lambda>(f));
-        } while (std::next_permutation(perm.begin(), perm.end()));
-      } 
-    }); // walk
-#endif
-    // no nested parallel regions, no more configurations to go through, call f
-    if (!found) {
-      llvm::outs() << "reached fully-nested configuration\n"; 
-      f(cfg);
-    }
-  }
-
-  template <typename Lambda>
-  void walk_configurations(mlir::Operation *op, Lambda &&f) {
-    ParallelConfig cfg;
-    walk_configurations(op, std::forward<Lambda>(f), cfg);
-  }
-
   // call f on every operation immediately nested under op
   template <typename Lambda>
   void for_each_nested(mlir::Operation *op, Lambda &&f) {
@@ -900,40 +857,15 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
     }
   }
 
-  // return true if op, or any of its nested children, were scf parallel
-  template <typename Lambda>
-  bool walk_configurations(mlir::Operation *op, Lambda &&f, const ParallelConfig &cfg) {
-    if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
-        // create a permutation of induction variables
-        Permutation perm(get_num_induction_vars(parallelOp));
-        std::iota(perm.begin(), perm.end(), 0);
 
-        // walk the children of this op with all different induction variable configurations
-        do  {
-          ParallelConfig newCfg = cfg;
-          newCfg.perms_[parallelOp] = perm;
-
-          bool anyParallel = false;
-          for_each_nested(op, [&](mlir::Operation *child){
-            anyParallel |= walk_configurations(child, std::forward<Lambda>(f), newCfg);
-          });
-
-          // if no parallels are nested underneath here, this is a complete
-          // configuration
-          if (!anyParallel) {
-            llvm::outs() << "no parallel regions nested below this...\n" << *op 
-                         << "\n...invoking callable on ParallelConfig of " << newCfg.perms_.size() << " regions\n";
-            f(newCfg);
-          }
-        } while (std::next_permutation(perm.begin(), perm.end()));
-      return true;
-    } else {
-      bool anyParallel = false;
-      for_each_nested(op, [&](mlir::Operation *child){
-        anyParallel |= walk_configurations(child, std::forward<Lambda>(f), cfg);
-      });
-      return anyParallel;
-    }
+  static std::vector<scf::ParallelOp> get_parallel_ops(ModuleOp &mod) {
+    std::vector<scf::ParallelOp> ret;
+    mod.walk([&](Operation *op) {
+      if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
+        ret.push_back(parallelOp);
+      }
+    });
+    return ret;
   }
 
   // cost of a module with a given parallel configuration
@@ -1049,6 +981,34 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
     parallelOp.erase();
   }
 
+  template <typename Lambda>
+  void walk_configurations(std::vector<scf::ParallelOp> &ops, Lambda &&f) {
+    ParallelConfig cfg;
+    walk_configurations(ops, std::forward<Lambda>(f), cfg);
+  }
+
+// return true if op, or any of its nested children, were scf parallel
+  template <typename Lambda>
+  void walk_configurations(std::vector<scf::ParallelOp> &ops, Lambda &&f, const ParallelConfig &cfg) {
+    if (ops.empty()) {
+      f(cfg);
+    } else {
+      scf::ParallelOp &first = ops[0];
+      std::vector<scf::ParallelOp> rest;
+      for (size_t oi = 1; oi < ops.size(); ++oi) {
+        rest.push_back(ops[oi]);
+      }
+      Permutation perm(get_num_induction_vars(first));
+      std::iota(perm.begin(), perm.end(), 0);
+
+      do {
+        ParallelConfig newCfg = cfg;
+        newCfg.perms_[first] = perm;
+        walk_configurations(rest, std::forward<Lambda>(f), newCfg);
+      } while (std::next_permutation(perm.begin(), perm.end()));
+    }
+  }
+
   void runOnOperation() override {
     ModuleOp module = getOperation();
 
@@ -1072,11 +1032,13 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
     llvm::outs() << "====\nbuild_cost_table\n====\n";
     MemrefInductionCosts costTable = build_cost_table(module, tripCounts);
 
-    llvm::outs() << "====\nmodel reordered induction vars\n====\n";
+    llvm::outs() << "====\nExtract parallel ops\n====\n";
+    auto parallelOps = get_parallel_ops(module);
+
+    llvm::outs() << "====\nModel Reordered Induction variables\n====\n";
     size_t minCost = std::numeric_limits<size_t>::max();
     ParallelConfig minCfg;
-    walk_configurations(module, [&](const ParallelConfig &cfg){
-
+    walk_configurations(parallelOps, [&](const ParallelConfig &cfg){
       llvm::outs() << "modeling ParallelConfig:\n";
       for (const auto &kv : cfg.perms_) {
         kv.first->print(llvm::outs());
@@ -1105,11 +1067,10 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
         minCfg = cfg;
       }
 
-    }); // walk_configurations
+    });
     llvm::outs() << "min cost: " << minCost << "\n";
 
     llvm::outs() << "====\nbuild new module\n====\n";
-
 #if 0
     // clone the existing module
     ModuleOp newModule = module.clone();
