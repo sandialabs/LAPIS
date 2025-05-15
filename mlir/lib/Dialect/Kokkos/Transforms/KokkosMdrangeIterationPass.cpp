@@ -241,11 +241,11 @@ struct KokkosMdrangeIterationPass
       auto lhs_const = llvm::dyn_cast<Constant>(lhs.get());
       auto rhs_const = llvm::dyn_cast<Constant>(rhs.get());
 
-      if (lhs_const && lhs_const->value_ == 0) {
+      if (lhs_const && lhs_const->value_ == 0) { // 0 - x --> -x
           return Mul::make(rhs, Constant::make(-1));
-      } else if (rhs_const && rhs_const->value_ == 0) {
+      } else if (rhs_const && rhs_const->value_ == 0) { // x - 0 --> x
           return lhs;
-      } else if (rhs_const && lhs_const) {
+      } else if (rhs_const && lhs_const) { // c1 - c2 --> c3
         return Constant::make(lhs_const->value_ - rhs_const->value_);
       }
 
@@ -639,7 +639,12 @@ static std::shared_ptr<Expr> iteration_space_expr(scf::ParallelOp &op, int dim) 
     // (ub - lb + step - 1) / step
     // TODO: this could be a special DivCeil operation or something
     auto num = Add::make(Sub::make(ubExpr, lbExpr), Sub::make(stExpr, Constant::make(1)));
-    return Div::make(num, stExpr);
+    auto ret = Div::make(num, stExpr);
+
+    llvm::outs() << "Trip count of " << op << " dim " << dim << " = ";
+    ret->dump(llvm::outs());
+    llvm::outs() << "\n";
+    return ret;
 }
 
 // Get an expression representing the size of the iteration space of `op`
@@ -675,14 +680,14 @@ static IterationSpaceExprs build_parallel_trip_counts(ModuleOp &mod) {
   return ISE;
 }
 
-static IterationSpaceExprs build_parallel_trip_counts(scf::ParallelOp &parentOp, std::shared_ptr<Expr> cost) {
+static IterationSpaceExprs build_parallel_trip_counts(scf::ParallelOp &parentOp, std::shared_ptr<Expr> parentCount) {
   IterationSpaceExprs ISE;
 
   parentOp.getBody()->walk([&](Operation *op) {
       if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
         // create an expression representing the trip count for this loop
         std::shared_ptr<Expr> expr = iteration_space_expr(parallelOp);
-        ISE[parallelOp] = expr;
+        ISE[parallelOp] = Mul::make(expr, parentCount);
 
         // descend into the body of the loop
         IterationSpaceExprs exprs = build_parallel_trip_counts(parallelOp, expr);
@@ -733,6 +738,11 @@ static MemrefInductionCosts build_cost_table(ModuleOp &mod, IterationSpaceExprs 
   return build_cost_table(mod, tripCounts, stack);
 }
 
+
+  // compute the partial derivative of each memref with respect to all enclosing induction variables via the chain rule:
+  // d(offset)/d(indvar) = sum( 
+  //    d(offset)/d(index) * d(index)/d(indvar), 
+  //    for each index in indices)
 template <typename Memref>
 static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tripCounts, ParallelOpStack &stack) {
   static_assert(std::is_same_v<Memref, memref::LoadOp> || std::is_same_v<Memref, memref::StoreOp>);
@@ -751,31 +761,26 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
   }
   scf::ParallelOp &parentOp = stack.back();
 
-  // compute the partial derivative of each memref with respect to all induction variables via the chain rule:
-  // d(offset)/d(indvar) = sum( 
-  //    d(offset)/d(index) * d(index)/d(indvar), 
-  //    for each index in indices)
-
   for (Value indVar : indVars) {
     std::shared_ptr<Expr> dodi = Constant::make(0);
     for (Value indexVar : memrefOp.getIndices()) {
       auto e1 = do_di(memrefOp, indexVar);
 
-      llvm::outs() << "pd of " << memrefOp << " w.r.t " << indexVar << "\n";
+      llvm::outs() << "∂(" << memrefOp << ")/∂(" << indexVar << ") = ";
       if (e1) {
         e1->dump(llvm::outs());
       } else {
-        llvm::outs() << " undefined ";
+        llvm::outs() << "undefined";
       }
       llvm::outs() << "\n";
 
       auto e2 = df_dx(indexVar, indVar);
 
-      llvm::outs() << "pd of " << indexVar << " w.r.t " << indVar << "\n";
+      llvm::outs() << "∂(" << indexVar << ")/∂(" << indVar << ") = ";
       if (e2) {
         e2->dump(llvm::outs());
       } else {
-        llvm::outs() << " undefined ";
+        llvm::outs() << "undefined";
       }
       llvm::outs() << "\n";
 
@@ -787,11 +792,11 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
       }
     }
 
-    llvm::outs() << "pd of " << memrefOp << " w.r.t " << indVar << "\n";
+    llvm::outs() << "∂(" << memrefOp << ")/∂(" << indVar << ") = ";
     if (dodi) {
       dodi->dump(llvm::outs());
     } else {
-      llvm::outs() << " undefined ";
+      llvm::outs() << "undefined";
     }
     llvm::outs() << "\n";
 
