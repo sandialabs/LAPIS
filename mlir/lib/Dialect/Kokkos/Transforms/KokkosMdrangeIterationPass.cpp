@@ -422,7 +422,7 @@ static std::shared_ptr<Expr> df_dx(Value &f, Value &x) {
     llvm::outs() << "Info: df_dx of equal values\n";
     return Constant::make(1);
   } else if (mlir::isa<BlockArgument>(f) && mlir::isa<BlockArgument>(x)) {
-    llvm::outs() << "Info: df_dx of different block arguments\n";
+    llvm::outs() << "Info: df_dx of different block arguments:\n";
     return Constant::make(0);
   } else {
     // FIXME: what other scenarios if there is no defining op.
@@ -505,12 +505,14 @@ static std::shared_ptr<Expr> df_dx(Value &f, Value &x) {
 
         // Get the size in bits of the element type
         mlir::Type elementType = memrefType.getElementType();
-        unsigned sizeInBytes = elementType.getIntOrFloatBitWidth() / CHAR_BIT;
+        const unsigned sizeInBytes = elementType.getIntOrFloatBitWidth() / CHAR_BIT;
 
         std::shared_ptr<Expr> res = std::make_shared<Constant>(sizeInBytes);
         
+        // LayoutRight: work in from the right, multiplying in dimensions
         auto memrefShape = memrefType.getShape();
-        for (int dim = 0; dim < indexVarDim; ++dim) {
+        const int nDim = memrefShape.size();
+        for (int dim = nDim - 1; dim > indexVarDim; --dim) {
           if (memrefShape[dim] == ShapedType::kDynamic) {
             std::string name = std::string("memref") + std::to_string(uintptr_t(memrefOp.getOperation())) + "_extent" + std::to_string(dim);
             res = std::make_shared<Mul>(res, Unknown::make(name)); 
@@ -927,39 +929,38 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
   template <typename MemrefOp>
   static size_t model_cost(MemrefOp &memrefOp, const ParallelConfig &cfg, const MemrefInductionCosts &costTable) {
     static_assert(std::is_same_v<MemrefOp, memref::LoadOp> || std::is_same_v<MemrefOp, memref::StoreOp>);
-    
     llvm::outs() << "model cost of " << memrefOp << "...\n";
 
-    auto parentOp = memrefOp.getOperation()->getParentOp();
-    if (auto parallelOp = dyn_cast<scf::ParallelOp>(parentOp)) {
+    auto parents = enclosing_parallel_ops(memrefOp);
+
+    llvm::outs() << "... memref op above has " << parents.size() << " enclosing parallels\n";
+
+    size_t cost = 0;
+    for (scf::ParallelOp &parallelOp : parents) {
       if (auto it = cfg.perms_.find(parallelOp); it != cfg.perms_.end()) {
 
         const Permutation &perm = it->second;
         Value leftMostVar = parallelOp.getInductionVars()[perm[0]];
 
-        llvm::outs() << "under permutation, left-most enclosing induction var is " << leftMostVar << "\n";
+        llvm::outs() << "... under permutation, left-most induction var of enclosing parallel is " << leftMostVar << "\n";
         
-
         // FIXME: why does this work? the table should expect key to be pair<Operation*, Value> not pair<Operation, Value>
         auto costKey = std::make_pair(memrefOp, leftMostVar);
         if (auto jt = costTable.find(costKey); jt != costTable.end()) {
           Cost model = jt->second;
-          size_t cost = monte_carlo(model);
-          llvm::outs() << "..." << memrefOp << " contributes " << cost << "\n";
-          return cost;
+          size_t parallelContrib = monte_carlo(model);
+          cost += parallelContrib;
+          llvm::outs() << "..." << memrefOp << " contributes " << parallelContrib << " (now " << cost << ")\n";
         } else {
-          llvm::outs() << "couldn't find model for memref / induction variable combo\n";
+          llvm::outs() << "WARN: couldn't find model for memref / induction variable combo\n";
           return 0;
         }
-        
       } else {
-        llvm::outs() << "couldn't find permutation for parent parallel op\n";
+        llvm::outs() << "WARN: couldn't find permutation for parent parallel op\n";
         return 0;
       }
-    } else {
-      llvm::outs() << "memrefOp " << memrefOp << " has no parallel parent\n";
-      return 0;
     }
+    return cost;
   }
 
 
