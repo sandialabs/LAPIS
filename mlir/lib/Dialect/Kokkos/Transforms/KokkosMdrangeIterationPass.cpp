@@ -10,6 +10,7 @@
 #include <map>
 #include <utility> // pair
 #include <random>
+#include <vector>
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
@@ -140,7 +141,7 @@ namespace {
     Expr(Kind kind) : kind_(kind) {}
     Kind kind_;
 
-    virtual int eval(const Ctx &ctx) = 0;
+    virtual size_t eval(const Ctx &ctx) = 0;
     virtual void dump(llvm::raw_fd_ostream &os) const = 0;
     virtual void dump(llvm::raw_ostream &os) const = 0;
     virtual std::vector<std::string> unknowns() const = 0;
@@ -233,7 +234,7 @@ struct KokkosMdrangeIterationPass
   struct Add : public Binary {
     Add(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) : Binary(Kind::Add, "+", lhs, rhs) {}
 
-    virtual int eval(const Ctx &ctx) override {
+    virtual size_t eval(const Ctx &ctx) override {
       return lhs_->eval(ctx) + rhs_->eval(ctx);
     }
 
@@ -264,7 +265,7 @@ struct KokkosMdrangeIterationPass
   struct Sub : public Binary {
     Sub(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) : Binary(Kind::Add, "-", lhs, rhs) {}
 
-    virtual int eval(const Ctx &ctx) override {
+    virtual size_t eval(const Ctx &ctx) override {
       return lhs_->eval(ctx) + rhs_->eval(ctx);
     }
 
@@ -295,7 +296,7 @@ struct KokkosMdrangeIterationPass
   struct Mul : public Binary {
     Mul(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) : Binary(Kind::Mul, "*", lhs, rhs) {}
 
-    virtual int eval(const Ctx &ctx) override {
+    virtual size_t eval(const Ctx &ctx) override {
       return lhs_->eval(ctx) * rhs_->eval(ctx);
     }
 
@@ -334,7 +335,7 @@ struct KokkosMdrangeIterationPass
   struct Div : public Binary {
     Div(std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) : Binary(Kind::Div, "/", lhs, rhs) {}
 
-    virtual int eval(const Ctx &ctx) override {
+    virtual size_t eval(const Ctx &ctx) override {
       return lhs_->eval(ctx) / rhs_->eval(ctx);
     }
 
@@ -369,7 +370,7 @@ struct KokkosMdrangeIterationPass
     Constant(int value) : Expr(Kind::Constant), value_(value) {}
     int value_;
 
-    virtual int eval(const Ctx &ctx) override {
+    virtual size_t eval(const Ctx &ctx) override {
       return value_;
     }
 
@@ -407,7 +408,7 @@ struct KokkosMdrangeIterationPass
     Unknown(const std::string &name) : Expr(Kind::Unknown), name_(name) {}
     std::string name_;
 
-    virtual int eval(const Ctx &ctx) override {
+    virtual size_t eval(const Ctx &ctx) override {
       return ctx.values.at(name_);
     }
 
@@ -452,7 +453,7 @@ struct KokkosMdrangeIterationPass
 
     std::shared_ptr<Expr> stride_; // stride of the memref w.r.t an induction variable
     std::shared_ptr<Expr> count_;  // number of times the memref is executed
-    int sf_; // scaling factor, 1 for load, 3 for store
+    size_t sf_; // scaling factor, 1 for load, 3 for store
 
     std::vector<std::string> unknowns() const {
       std::vector<std::string> ret;
@@ -897,36 +898,41 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
   }
 
   // cost of a module with a given parallel configuration
-  static size_t model_cost(ModuleOp &mod, const ParallelConfig &cfg, const MemrefInductionCosts &costTable) {
+  static size_t model_cost(ModuleOp &mod, const ParallelConfig &cfg, const MemrefInductionCosts &costTable, const std::vector<std::string> &unknowns) {
     size_t cost = 0;
     mod.walk([&](Operation *op) {
       if (auto memrefOp = dyn_cast<memref::LoadOp>(op)) {
-        cost += model_cost(memrefOp, cfg, costTable);
+        cost += model_cost(memrefOp, cfg, costTable, unknowns);
       } else if (auto memrefOp = dyn_cast<memref::StoreOp>(op)) {
-        cost += model_cost(memrefOp, cfg, costTable);
+        cost += model_cost(memrefOp, cfg, costTable, unknowns);
       }
     }); // walk
     return cost;
   }
 
-  static size_t monte_carlo(const Cost &model, int n = 5, int seed = 31337) {
+  // TODO: unknowns is all unknowns combined from all models
+  // this means unkowns is the same for all calls here
+  // this is a bit confusing since model also has model.unkowns() which is a subset
+  static size_t monte_carlo(const std::vector<std::string> &unknowns, const Cost &model, int n = 500, int seed = 31337) {
     std::mt19937 gen(seed);
 
     std::vector<size_t> costs;
 
-    std::vector<std::string> unknowns = model.unknowns();
-
     for (int i = 0; i < n; i++) {
+
+      // MDRANGE_DEBUG("MC iteration " << i << ":\n");
 
       // generate random values for all unknowns in cost model
       Ctx ctx;
-      for (auto &name : unknowns) {
+      for (auto &unk : unknowns) {
         auto val = log_random_int(gen, 1, 100000);
-        MDRANGE_DEBUG(name << ": " << val << "\n");
-        ctx.values[name] = val;
+        // MDRANGE_DEBUG(unk << ": " << val << "\n");
+        ctx.values[unk] = val;
       }
       
-      costs.push_back(model.stride_->eval(ctx) * model.count_->eval(ctx) * model.sf_);
+      const size_t cost = model.stride_->eval(ctx) * model.count_->eval(ctx) * model.sf_;
+      // MDRANGE_DEBUG("MC iteration " << i << " cost=" << cost << "\n");
+      costs.push_back(cost);
     }
 
     // FIXME: here we do median, is there a principled aggregation strategy?
@@ -943,7 +949,7 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
   }
 
   template <typename MemrefOp>
-  static size_t model_cost(MemrefOp &memrefOp, const ParallelConfig &cfg, const MemrefInductionCosts &costTable) {
+  static size_t model_cost(MemrefOp &memrefOp, const ParallelConfig &cfg, const MemrefInductionCosts &costTable, const std::vector<std::string> &unknowns) {
     static_assert(std::is_same_v<MemrefOp, memref::LoadOp> || std::is_same_v<MemrefOp, memref::StoreOp>);
     MDRANGE_DEBUG("model cost of " << memrefOp << "...\n");
 
@@ -964,7 +970,7 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
         auto costKey = std::make_pair(memrefOp, leftMostVar);
         if (auto jt = costTable.find(costKey); jt != costTable.end()) {
           Cost model = jt->second;
-          size_t parallelContrib = monte_carlo(model);
+          size_t parallelContrib = monte_carlo(unknowns, model);
           cost += parallelContrib;
           MDRANGE_DEBUG("..." << memrefOp << " contributes " << parallelContrib << " (now " << cost << ")\n");
         } else {
@@ -1056,6 +1062,21 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
     MDRANGE_DEBUG("====\nbuild_cost_table\n====\n");
     MemrefInductionCosts costTable = build_cost_table(module, tripCounts);
 
+    MDRANGE_DEBUG("====\nunknowns:\n====\n");
+    std::vector<std::string> unknowns;
+    for (const auto &kv : costTable) {
+      for (const std::string &unk : kv.second.unknowns()) {
+        if (unknowns.end() == std::find(unknowns.begin(), unknowns.end(), unk)) {
+          unknowns.push_back(unk);
+        }
+      }
+    }
+    MDRANGE_DEBUG(unknowns.size() << " unknowns:\n");
+    std::sort(unknowns.begin(), unknowns.end());
+    for (const std::string &unk : unknowns) {
+      MDRANGE_DEBUG(unk << "\n");
+    }
+
     MDRANGE_DEBUG("====\nExtract parallel ops\n====\n");
     auto parallelOps = get_parallel_ops(module);
 
@@ -1073,7 +1094,7 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
         MDRANGE_DEBUG("}\n");
       }
 
-      size_t cost = model_cost(module, cfg, costTable);
+      size_t cost = model_cost(module, cfg, costTable, unknowns);
       MDRANGE_DEBUG("cost was " << cost << "\n");
       if (cost < minCost) {
         MDRANGE_DEBUG("Info: new optimal! cost=" << cost << "\n");
