@@ -129,6 +129,10 @@ struct KokkosMdrangeIterationPass
   KokkosMdrangeIterationPass() = default;
   KokkosMdrangeIterationPass(const KokkosMdrangeIterationPass& pass) = default;
 
+  using ParallelOpVec = llvm::SmallVector<scf::ParallelOp, 4>;
+  using ValueVec = llvm::SmallVector<Value, 8>;
+  using Permutation = llvm::SmallVector<size_t, 16>;
+
   // generate a log-random integer within a specified range
   static size_t log_random_int(std::mt19937 &gen, size_t min, size_t max) {
       // Create a uniform real distribution between log(min) and log(max)
@@ -704,11 +708,11 @@ static IterationSpaceExprs build_parallel_trip_counts(scf::ParallelOp &parentOp,
 // map of (Operation*, Value) -> Cost
 // map of the cost model for a given memref / induction variable pair
 using MemrefInductionCosts = llvm::DenseMap<std::pair<Operation*, mlir::Value>, Cost>;
-using ParallelOpStack = llvm::SmallVector<scf::ParallelOp, 4>;
+
 
 // return all induction variables for all parallel ops
-static std::vector<Value> all_induction_variables(ParallelOpStack &ops) {
-  std::vector<Value> vars;
+static ValueVec all_induction_variables(ParallelOpVec &ops) {
+  ValueVec vars;
   for (auto &op : ops) {
     for (auto &var : op.getInductionVars()) {
       vars.push_back(var);
@@ -717,37 +721,12 @@ static std::vector<Value> all_induction_variables(ParallelOpStack &ops) {
   return vars;
 }
 
-static MemrefInductionCosts build_cost_table(ModuleOp &mod, IterationSpaceExprs &tripCounts, ParallelOpStack &stack) {
-
-    MemrefInductionCosts MIC;
-
-    mod.walk([&](Operation *op) {
-      // skip memrefs outside a parallel region
-      if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
-        stack.push_back(parallelOp);
-        MemrefInductionCosts costs = build_cost_table(parallelOp, tripCounts, stack);
-        stack.pop_back();
-        MIC.insert(costs.begin(), costs.end());
-      }
-    }); // walk
-
-    return MIC;
-  }
-
-
-
-static MemrefInductionCosts build_cost_table(ModuleOp &mod, IterationSpaceExprs &tripCounts) {
-  ParallelOpStack stack;
-  return build_cost_table(mod, tripCounts, stack);
-}
-
-
   // compute the partial derivative of each memref with respect to all enclosing induction variables via the chain rule:
   // d(offset)/d(indvar) = sum( 
   //    d(offset)/d(index) * d(index)/d(indvar), 
   //    for each index in indices)
 template <typename Memref>
-static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tripCounts, ParallelOpStack &stack) {
+static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tripCounts) {
   static_assert(std::is_same_v<Memref, memref::LoadOp> || std::is_same_v<Memref, memref::StoreOp>);
 
   if constexpr (std::is_same_v<Memref, memref::LoadOp>) {
@@ -758,11 +737,16 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
 
   MemrefInductionCosts MIC;
 
-  std::vector<Value> indVars = all_induction_variables(stack);
-  if (stack.empty()) {
-    llvm::report_fatal_error("get_costs: memref is not enclosed in an scf::ParallelOp");
+  // get all the parallel ops that enclose this memref
+  auto ancestors = enclosing_parallel_ops(memrefOp);
+  if (ancestors.empty()) {
+    llvm::outs() << "get_costs: memref is not enclosed in an scf::ParallelOp\n";
+    return MIC;
   }
-  scf::ParallelOp &parentOp = stack.back();
+  scf::ParallelOp &parentOp = *ancestors.begin();
+
+  ValueVec indVars = all_induction_variables(ancestors);
+  
 
   for (Value indVar : indVars) {
     std::shared_ptr<Expr> dodi = Constant::make(0);
@@ -810,21 +794,16 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
   return MIC;
 }
 
-// FIXME: parentOp is also the back of the stack?
-static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, IterationSpaceExprs &tripCounts, ParallelOpStack &stack) {
+  static MemrefInductionCosts build_cost_table(ModuleOp &mod, IterationSpaceExprs &tripCounts) {
     MemrefInductionCosts MIC;
 
-    parentOp.getBody()->walk([&](Operation *op) {
-      if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
-        stack.push_back(parallelOp);
-        MemrefInductionCosts costs = build_cost_table(parallelOp, tripCounts, stack);
-        stack.pop_back();
-        MIC.insert(costs.begin(), costs.end());
-      } else if (auto memrefOp = dyn_cast<memref::LoadOp>(op)) {
-        MemrefInductionCosts costs = get_costs(memrefOp, tripCounts, stack);
+    // compute for loads
+    mod.walk([&](Operation *op){
+      if (auto memrefOp = dyn_cast<memref::LoadOp>(op)) {
+        MemrefInductionCosts costs = get_costs(memrefOp, tripCounts);
         MIC.insert(costs.begin(), costs.end());
       } else if (auto memrefOp = dyn_cast<memref::StoreOp>(op)) {
-        MemrefInductionCosts costs = get_costs(memrefOp, tripCounts, stack);
+        MemrefInductionCosts costs = get_costs(memrefOp, tripCounts);
         MIC.insert(costs.begin(), costs.end());
       }
     });
@@ -832,7 +811,8 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
     return MIC;
   }
 
-  using Permutation = llvm::SmallVector<size_t, 16>;
+
+  
 
   struct ParallelConfig {
     // permutation of induction variables for each parallel op
@@ -860,8 +840,8 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
     }
   }
 
-  static std::vector<scf::ParallelOp> enclosing_parallel_ops(mlir::Operation *op) {
-    std::vector<scf::ParallelOp> ops;
+  static ParallelOpVec enclosing_parallel_ops(mlir::Operation *op) {
+    ParallelOpVec ops;
     scf::ParallelOp parent = op->getParentOfType<scf::ParallelOp>();
     while (parent) {
       ops.push_back(parent);
@@ -870,8 +850,8 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
     return ops;
   }
 
-  static std::vector<scf::ParallelOp> get_parallel_ops(ModuleOp &mod) {
-    std::vector<scf::ParallelOp> ret;
+  static ParallelOpVec get_parallel_ops(ModuleOp &mod) {
+    ParallelOpVec ret;
     mod.walk([&](Operation *op) {
       if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
         ret.push_back(parallelOp);
@@ -993,19 +973,19 @@ static MemrefInductionCosts build_cost_table(scf::ParallelOp &parentOp, Iteratio
   }
 
   template <typename Lambda>
-  void walk_configurations(std::vector<scf::ParallelOp> &ops, Lambda &&f) {
+  void walk_configurations(ParallelOpVec &ops, Lambda &&f) {
     ParallelConfig cfg;
     walk_configurations(ops, std::forward<Lambda>(f), cfg);
   }
 
 // return true if op, or any of its nested children, were scf parallel
   template <typename Lambda>
-  void walk_configurations(std::vector<scf::ParallelOp> &ops, Lambda &&f, const ParallelConfig &cfg) {
+  void walk_configurations(ParallelOpVec &ops, Lambda &&f, const ParallelConfig &cfg) {
     if (ops.empty()) {
       f(cfg);
     } else {
       scf::ParallelOp &first = ops[0];
-      std::vector<scf::ParallelOp> rest;
+      ParallelOpVec rest;
       for (size_t oi = 1; oi < ops.size(); ++oi) {
         rest.push_back(ops[oi]);
       }
