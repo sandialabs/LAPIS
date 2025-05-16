@@ -2384,12 +2384,11 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
       os << ".host_view());\n";
       // Keep the host view alive until lapis_finalize() is called.
       // Otherwise it would be deallocated as soon as this function returns.
-      os << "LAPIS::keepAlive(";
+
       if(numResults == size_t(1))
-        os << "results";
+        os << "results.keepAliveHost();\n";
       else
-        os << "std::get<" << i << ">(results)";
-      os << ".host_view());\n";
+        os << "std::get<" << i << ">(results).keepAliveHost();\n";
     }
     else
     {

@@ -135,6 +135,14 @@ namespace LAPIS
 
   struct DualViewBase
   {
+    enum AliasStatus
+    {
+        ALIAS_STATUS_UNKNOWN = 0,
+        HOST_IS_ALIAS = 1,
+        DEVICE_IS_ALIAS = 2,
+        NEITHER_IS_ALIAS = 3
+    };
+
     virtual ~DualViewBase() {}
     virtual void syncHost() = 0;
     virtual void syncDevice() = 0;
@@ -142,6 +150,7 @@ namespace LAPIS
     bool modified_host = false;
     bool modified_device = false;
     std::shared_ptr<DualViewBase> parent;
+    AliasStatus alias_status;
 
     void setParent(const std::shared_ptr<DualViewBase>& parent_)
     {
@@ -202,9 +211,11 @@ namespace LAPIS
         modified_device = true;
         if constexpr(deviceAccessesHost) {
           host_view = HostView(v.data(), v.layout());
+          alias_status = AliasStatus::HOST_IS_ALIAS;
         }
         else {
           host_view = HostView(Kokkos::view_alloc(Kokkos::WithoutInitializing, v.label() + "_host"), v.layout());
+          alias_status = AliasStatus::NEITHER_IS_ALIAS;
         }
         device_view = v;
       }
@@ -212,9 +223,11 @@ namespace LAPIS
         modified_host = true;
         if constexpr(deviceAccessesHost) {
           device_view = DeviceView(v.data(), v.layout());
+          alias_status = AliasStatus::DEVICE_IS_ALIAS;
         }
         else {
           device_view = DeviceView(Kokkos::view_alloc(Kokkos::WithoutInitializing, v.label() + "_dev"), v.layout());
+          alias_status = AliasStatus::NEITHER_IS_ALIAS;
         }
         host_view = v;
       }
@@ -287,7 +300,16 @@ namespace LAPIS
       // It is assumed to be either managed,
       // or unmanaged but references memory (e.g. from numpy)
       // with a longer lifetime that any result from the current LAPIS function.
-      keepAlive(host_view);
+      //
+      // However, if it's unmanaged because of aliasing during initialization,
+      // then keep alive the device_view instead to avoid reference counting
+      // issues in Kokkos::View.
+      if(alias_status != AliasStatus::HOST_IS_ALIAS)
+      {
+        keepAlive(host_view);
+      }else{
+        keepAlive(device_view);
+      }
     }
 
     void deallocate() {
