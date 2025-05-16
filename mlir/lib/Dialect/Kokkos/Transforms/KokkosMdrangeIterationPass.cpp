@@ -123,8 +123,52 @@ We compute the cost under each combination.
 We chosoe the induction variable ordering with the lowest cost
 
 */
+
+// Put these out here so we can overload operator<< easily
+namespace {
+
+  // a context for expression evaluation
+  struct Ctx {
+    std::unordered_map<std::string, int> values; // FIXME: llvm data structures
+  };
+
+  struct Expr {
+    enum class Kind {
+      Add, Sub, Mul, Div, Constant, Unknown
+    };
+
+    Expr(Kind kind) : kind_(kind) {}
+    Kind kind_;
+
+    virtual int eval(const Ctx &ctx) = 0;
+    virtual void dump(llvm::raw_fd_ostream &os) const = 0;
+    virtual void dump(llvm::raw_ostream &os) const = 0;
+    virtual std::vector<std::string> unknowns() const = 0;
+    virtual std::shared_ptr<Expr> clone() const = 0;
+    virtual ~Expr() {}
+  };
+
+} // namespace
+
+static llvm::raw_fd_ostream & operator<<(llvm::raw_fd_ostream &os, const std::shared_ptr<Expr> &e) {
+  e->dump(os);
+  return os;
+}
+
+static llvm::raw_ostream & operator<<(llvm::raw_ostream &os, const std::shared_ptr<Expr> &e) {
+  e->dump(os);
+  return os;
+}
+
 struct KokkosMdrangeIterationPass
     : public impl::KokkosMdrangeIterationBase<KokkosMdrangeIterationPass> {
+
+#if 1
+#define MDRANGE_DEBUG(x) \
+  llvm::outs() << x;
+#else
+#define MDRANGE_DEBUG(x)
+#endif
 
   KokkosMdrangeIterationPass() = default;
   KokkosMdrangeIterationPass(const KokkosMdrangeIterationPass& pass) = default;
@@ -149,38 +193,26 @@ struct KokkosMdrangeIterationPass
       return res;
   }
 
-  // a context for expression evaluation
-  struct Ctx {
 
-    // FIXME: llvm data structures
-    std::unordered_map<std::string, int> values;
-  };
-
-  struct Expr {
-
-    enum class Kind {
-      Add, Sub, Mul, Div, Constant, Unknown
-    };
-
-    Expr(Kind kind) : kind_(kind) {}
-    Kind kind_;
-
-    virtual int eval(const Ctx &ctx) = 0;
-    virtual void dump(llvm::raw_fd_ostream &os) = 0;
-    virtual std::vector<std::string> unknowns() const = 0;
-    virtual std::shared_ptr<Expr> clone() const = 0;
-    virtual ~Expr() {}
-  };
 
   struct Binary : public Expr {
     Binary(Kind kind, const std::string sym, std::shared_ptr<Expr> lhs, std::shared_ptr<Expr> rhs) : Expr(kind), sym_(sym), lhs_(lhs), rhs_(rhs) {}
 
-    virtual void dump(llvm::raw_fd_ostream &os) override {
+    template <typename OS>
+    void dump_impl(OS &os) const {
       os << "(";
       lhs_->dump(os);
       os << sym_;
       rhs_->dump(os);
       os << ")";
+    }
+
+    virtual void dump(llvm::raw_fd_ostream &os) const override {
+      dump_impl(os);
+    }
+
+    virtual void dump(llvm::raw_ostream &os) const override {
+      dump_impl(os);
     }
 
     virtual std::vector<std::string> unknowns() const override {
@@ -346,7 +378,16 @@ struct KokkosMdrangeIterationPass
       return make(value_);
     }
 
-    virtual void dump(llvm::raw_fd_ostream &os) override {
+    virtual void dump(llvm::raw_fd_ostream &os) const override {
+      dump_impl(os);
+    }
+
+    virtual void dump(llvm::raw_ostream &os) const override {
+      dump_impl(os);
+    }
+
+    template <typename OS>
+    void dump_impl(OS &os) const {
       os << value_;
     }
 
@@ -375,7 +416,16 @@ struct KokkosMdrangeIterationPass
       return make(name_);
     }
 
-    virtual void dump(llvm::raw_fd_ostream &os) override {
+    virtual void dump(llvm::raw_fd_ostream &os) const override {
+      dump_impl(os);
+    }
+
+    virtual void dump(llvm::raw_ostream &os) const override {
+      dump_impl(os);
+    }
+
+    template <typename OS>
+    void dump_impl(OS &os) const {
       os << "(" << name_ << ")";
     }
 
@@ -423,10 +473,10 @@ struct KokkosMdrangeIterationPass
 // partial derivative df/dx
 static std::shared_ptr<Expr> df_dx(Value &f, Value &x) {
   if (f == x) {
-    llvm::outs() << "Info: df_dx of equal values\n";
+    MDRANGE_DEBUG("Info: df_dx of equal values\n");
     return Constant::make(1);
   } else if (mlir::isa<BlockArgument>(f) && mlir::isa<BlockArgument>(x)) {
-    llvm::outs() << "Info: df_dx of different block arguments:\n";
+    MDRANGE_DEBUG("Info: df_dx of different block arguments:\n");
     return Constant::make(0);
   } else {
     // FIXME: what other scenarios if there is no defining op.
@@ -435,7 +485,7 @@ static std::shared_ptr<Expr> df_dx(Value &f, Value &x) {
         return df_dx(fOp, xOp);
       }
     }
-    llvm::outs() << "ERROR: One of the values has no defining operation\n";
+    MDRANGE_DEBUG("ERROR: One of the values has no defining operation\n");
     return nullptr;
   }
 }
@@ -443,10 +493,10 @@ static std::shared_ptr<Expr> df_dx(Value &f, Value &x) {
   // FIXME: better written as df_dx(f, x) I guess
   static std::shared_ptr<Expr> df_dx(Operation *df, Operation *dx) {
     if (!df) {
-      llvm::outs() << "Warn: df_dx requested on null df\n";
+      MDRANGE_DEBUG("Warn: df_dx requested on null df\n");
       return nullptr;
     } else if (!dx) {
-      llvm::outs() << "Warn: df_dx requested on null dx\n";
+      MDRANGE_DEBUG("Warn: df_dx requested on null dx\n");
       return nullptr;
     } else if (df == dx) {
       // df/dx (dx) = 1
@@ -485,10 +535,7 @@ static std::shared_ptr<Expr> df_dx(Value &f, Value &x) {
       }
     } // TODO: sub, div
 
-    llvm::outs() << "WARN: unhandled case in df_dx of ";
-    df->print(llvm::outs());
-    llvm::outs() << " w.r.t.";
-    dx->print(llvm::outs());
+    MDRANGE_DEBUG("WARN: unhandled case in df_dx of " << df << " w.r.t " << dx << "\n");
     return nullptr;
   }
 
@@ -531,62 +578,54 @@ static std::shared_ptr<Expr> df_dx(Value &f, Value &x) {
     }
 
     // memref address is not a function of this variable
-    llvm::outs() << "Info: ";
-    memrefOp.print(llvm::outs());
-    llvm::outs() << " is not a function of ";
-    indexVar.print(llvm::outs());
-    llvm::outs() << "\n";
+    MDRANGE_DEBUG("Info: " << memrefOp << " is not a function of " << indexVar << "\n");
     return std::make_shared<Constant>(0);
   }
 
   static void dump_ops(ModuleOp &mod) {
     mod.walk([&](Operation *op) {
       if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
-        llvm::outs() << "Found scf.parallel operation:\n";
-        llvm::outs() << "Induction variables and strides:\n";
+        MDRANGE_DEBUG("Found scf.parallel operation:\n");
+        MDRANGE_DEBUG("Induction variables and strides:\n");
         for (auto iv : llvm::zip(parallelOp.getInductionVars(), parallelOp.getStep())) {
-          std::get<0>(iv).print(llvm::outs());
-          llvm::outs() << " with stride ";
-          std::get<1>(iv).print(llvm::outs());
-          llvm::outs() << "\n";
+          (void) iv;
+          MDRANGE_DEBUG(std::get<0>(iv) << " with stride " << std::get<1>(iv) << "\n");
         }
-        llvm::outs() << "\n\n";
+        MDRANGE_DEBUG("\n\n");
       }
 
       if (auto memrefOp = dyn_cast<memref::LoadOp>(op)) {
-        llvm::outs() << "Found memref.load operation:\n";
-        llvm::outs() << "MemRef: ";
-        memrefOp.getMemRef().print(llvm::outs());
-        llvm::outs() << "\nIndex variables:\n";
+        MDRANGE_DEBUG("Found memref.load operation:\n");
+        MDRANGE_DEBUG("MemRef: " << memrefOp.getMemRef() << "\nIndex variables:\n");
         for (Value index : memrefOp.getIndices()) {
-          index.print(llvm::outs());
-          llvm::outs() << "\n";
+          (void) index;
+          MDRANGE_DEBUG(index << "\n");
         }
         if (auto memrefType = dyn_cast<MemRefType>(memrefOp.getMemRef().getType())) {
-          llvm::outs() << "MemRef extents:\n";
+          MDRANGE_DEBUG("MemRef extents:\n");
           for (int64_t dim : memrefType.getShape()) {
-            llvm::outs() << dim << "\n";
+            (void) dim;
+            MDRANGE_DEBUG(dim << "\n");
           }
         }
-        llvm::outs() << "\n\n";
+        MDRANGE_DEBUG("\n\n");
       }
 
       if (auto memrefOp = dyn_cast<memref::StoreOp>(op)) {
-        llvm::outs() << "Found memref.store operation:\n";
-        llvm::outs() << "MemRef: ";
-        memrefOp.getMemRef().print(llvm::outs());
-        llvm::outs() << "\nIndex variables:\n";
+        MDRANGE_DEBUG("Found memref.store operation:\n");
+        MDRANGE_DEBUG("MemRef: " << memrefOp.getMemRef() << "\nIndex variables:\n");
         for (Value index : memrefOp.getIndices()) {
-          index.print(llvm::outs());
-          llvm::outs() << "\n";
+          (void) index;
+          MDRANGE_DEBUG(index << "\n");
         }
         if (auto memrefType = dyn_cast<MemRefType>(memrefOp.getMemRef().getType())) {
-          llvm::outs() << "MemRef extents:\n";
+          MDRANGE_DEBUG("MemRef extents:\n");
           for (int64_t dim : memrefType.getShape()) {
-            llvm::outs() << dim << "\n";
+            (void) dim;
+            MDRANGE_DEBUG(dim << "\n");
           }
         }
-        llvm::outs() << "\n\n";
+        MDRANGE_DEBUG("\n\n");
       }
     });
   }
@@ -647,9 +686,7 @@ static std::shared_ptr<Expr> iteration_space_expr(scf::ParallelOp &op, int dim) 
     auto num = Add::make(Sub::make(ubExpr, lbExpr), Sub::make(stExpr, Constant::make(1)));
     auto ret = Div::make(num, stExpr);
 
-    llvm::outs() << "Trip count (dim " << dim << ") of:\n" << op <<"\n: ";
-    ret->dump(llvm::outs());
-    llvm::outs() << "\n";
+    MDRANGE_DEBUG("Trip count (dim " << dim << ") of:\n" << op << "\n: " << ret << "\n");
     return ret;
 }
 
@@ -730,9 +767,9 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
   static_assert(std::is_same_v<Memref, memref::LoadOp> || std::is_same_v<Memref, memref::StoreOp>);
 
   if constexpr (std::is_same_v<Memref, memref::LoadOp>) {
-    llvm::outs() << "get_cost: memref::LoadOp\n";
+    MDRANGE_DEBUG("get_cost: memref::LoadOp\n");
   } else if constexpr (std::is_same_v<Memref, memref::StoreOp>) {
-    llvm::outs() << "get_cost: memref::StoreOp\n";
+    MDRANGE_DEBUG("get_cost: memref::StoreOp\n");
   }
 
   MemrefInductionCosts MIC;
@@ -740,7 +777,7 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
   // get all the parallel ops that enclose this memref
   auto ancestors = enclosing_parallel_ops(memrefOp);
   if (ancestors.empty()) {
-    llvm::outs() << "get_costs: memref is not enclosed in an scf::ParallelOp\n";
+    MDRANGE_DEBUG("get_costs: memref is not enclosed in an scf::ParallelOp\n");
     return MIC;
   }
   scf::ParallelOp &parentOp = *ancestors.begin();
@@ -753,23 +790,23 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
     for (Value indexVar : memrefOp.getIndices()) {
       auto e1 = do_di(memrefOp, indexVar);
 
-      llvm::outs() << "∂(" << memrefOp << ")/∂(" << indexVar << ") = ";
+      MDRANGE_DEBUG("∂(" << memrefOp << ")/∂(" << indexVar << ") = ");
       if (e1) {
-        e1->dump(llvm::outs());
+        MDRANGE_DEBUG(e1);
       } else {
-        llvm::outs() << "undefined";
+        MDRANGE_DEBUG("undefined");
       }
-      llvm::outs() << "\n";
+      MDRANGE_DEBUG("\n");
 
       auto e2 = df_dx(indexVar, indVar);
 
-      llvm::outs() << "∂(" << indexVar << ")/∂(" << indVar << ") = ";
+      MDRANGE_DEBUG("∂(" << indexVar << ")/∂(" << indVar << ") = ");
       if (e2) {
-        e2->dump(llvm::outs());
+        MDRANGE_DEBUG(e2);
       } else {
-        llvm::outs() << "undefined";
+        MDRANGE_DEBUG("undefined");
       }
-      llvm::outs() << "\n";
+      MDRANGE_DEBUG("\n");
 
       if (e1 && e2) {
         dodi = Add::make(dodi, Mul::make(e1, e2));
@@ -779,13 +816,13 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
       }
     }
 
-    llvm::outs() << "∂(" << memrefOp << ")/∂(" << indVar << ") = ";
+    MDRANGE_DEBUG("∂(" << memrefOp << ")/∂(" << indVar << ") = ");
     if (dodi) {
-      dodi->dump(llvm::outs());
+      MDRANGE_DEBUG(dodi);
     } else {
-      llvm::outs() << "undefined";
+      MDRANGE_DEBUG("undefined");
     }
-    llvm::outs() << "\n";
+    MDRANGE_DEBUG("\n");
 
     std::shared_ptr<Expr> tripCount = tripCounts[parentOp];
 
@@ -890,7 +927,7 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
         ctx.values[name] = val;
       }
       
-      costs.push_back(model.stride_->eval(ctx) * model.count_->eval(ctx));
+      costs.push_back(model.stride_->eval(ctx) * model.count_->eval(ctx) * model.sf_);
     }
 
     // FIXME: here we do median, is there a principled aggregation strategy?
@@ -909,11 +946,11 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
   template <typename MemrefOp>
   static size_t model_cost(MemrefOp &memrefOp, const ParallelConfig &cfg, const MemrefInductionCosts &costTable) {
     static_assert(std::is_same_v<MemrefOp, memref::LoadOp> || std::is_same_v<MemrefOp, memref::StoreOp>);
-    llvm::outs() << "model cost of " << memrefOp << "...\n";
+    MDRANGE_DEBUG("model cost of " << memrefOp << "...\n");
 
     auto parents = enclosing_parallel_ops(memrefOp);
 
-    llvm::outs() << "... memref op above has " << parents.size() << " enclosing parallels\n";
+    MDRANGE_DEBUG("... memref op above has " << parents.size() << " enclosing parallels\n");
 
     size_t cost = 0;
     for (scf::ParallelOp &parallelOp : parents) {
@@ -922,7 +959,7 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
         const Permutation &perm = it->second;
         Value leftMostVar = parallelOp.getInductionVars()[perm[0]];
 
-        llvm::outs() << "... under permutation, left-most induction var of enclosing parallel is " << leftMostVar << "\n";
+        MDRANGE_DEBUG("... under permutation, left-most induction var of enclosing parallel is " << leftMostVar << "\n");
         
         // FIXME: why does this work? the table should expect key to be pair<Operation*, Value> not pair<Operation, Value>
         auto costKey = std::make_pair(memrefOp, leftMostVar);
@@ -930,13 +967,13 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
           Cost model = jt->second;
           size_t parallelContrib = monte_carlo(model);
           cost += parallelContrib;
-          llvm::outs() << "..." << memrefOp << " contributes " << parallelContrib << " (now " << cost << ")\n";
+          MDRANGE_DEBUG("..." << memrefOp << " contributes " << parallelContrib << " (now " << cost << ")\n");
         } else {
-          llvm::outs() << "WARN: couldn't find model for memref / induction variable combo\n";
+          MDRANGE_DEBUG("WARN: couldn't find model for memref / induction variable combo\n");
           return 0;
         }
       } else {
-        llvm::outs() << "WARN: couldn't find permutation for parent parallel op\n";
+        MDRANGE_DEBUG("WARN: couldn't find permutation for parent parallel op\n");
         return 0;
       }
     }
@@ -1003,55 +1040,51 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
   void runOnOperation() override {
     ModuleOp module = getOperation();
 
-    llvm::outs() << module << "\n";
+    MDRANGE_DEBUG(module << "\n");
 
-    llvm::outs() << "====\ndump_ops\n====\n";
+    MDRANGE_DEBUG("====\ndump_ops\n====\n");
     dump_ops(module);
 
-    llvm::outs() << "====\nbuild_parallel_trip_counts\n====\n";
+    MDRANGE_DEBUG("====\nbuild_parallel_trip_counts\n====\n");
     IterationSpaceExprs tripCounts = build_parallel_trip_counts(module);
 
     for (auto &kv : tripCounts) {
       const std::shared_ptr<Expr> &trip = kv.second;
-      llvm::outs() << "parallel op: ";
-      kv.first.print(llvm::outs());
-      llvm::outs() << " trip: ";
-      trip->dump(llvm::outs());
-      llvm::outs() << "\n";
+      MDRANGE_DEBUG("parallel op: " << kv.first << " trip: " << trip << "\n");
     }
 
-    llvm::outs() << "====\nbuild_cost_table\n====\n";
+    MDRANGE_DEBUG("====\nbuild_cost_table\n====\n");
     MemrefInductionCosts costTable = build_cost_table(module, tripCounts);
 
-    llvm::outs() << "====\nExtract parallel ops\n====\n";
+    MDRANGE_DEBUG("====\nExtract parallel ops\n====\n");
     auto parallelOps = get_parallel_ops(module);
 
-    llvm::outs() << "====\nModel Reordered Induction variables\n====\n";
+    MDRANGE_DEBUG("====\nModel Reordered Induction variables\n====\n");
     size_t minCost = std::numeric_limits<size_t>::max();
     ParallelConfig minCfg;
     walk_configurations(parallelOps, [&](const ParallelConfig &cfg){
-      llvm::outs() << "modeling ParallelConfig:\n";
+      MDRANGE_DEBUG("modeling ParallelConfig:\n");
       for (const auto &kv : cfg.perms_) {
-        kv.first->print(llvm::outs());
-        llvm::outs() << " -> {";
+        MDRANGE_DEBUG(kv.first << " -> {");
         for(const auto &e : kv.second) {
-          llvm::outs() << e << ", ";
+          (void)e;
+          MDRANGE_DEBUG(e << ", ");
         }
-        llvm::outs() << "}\n";
+        MDRANGE_DEBUG("}\n");
       }
 
       size_t cost = model_cost(module, cfg, costTable);
-      llvm::outs() << "cost was " << cost << "\n";
+      MDRANGE_DEBUG("cost was " << cost << "\n");
       if (cost < minCost) {
-        llvm::outs() << "Info: new optimal! cost=" << cost << "\n";
+        MDRANGE_DEBUG("Info: new optimal! cost=" << cost << "\n");
 
         for (const auto &kv : cfg.perms_) {
-          llvm::outs() << kv.first << " with permutation: ";
+          MDRANGE_DEBUG(kv.first << " with permutation: ");
           for (const size_t e : kv.second) {
-            llvm::outs() << e << " ";
+            MDRANGE_DEBUG(e << " ");
             
           } 
-          llvm::outs() << "\n";
+          MDRANGE_DEBUG("\n");
         }
 
         minCost = cost;
@@ -1059,9 +1092,9 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
       }
 
     });
-    llvm::outs() << "min cost: " << minCost << "\n";
+    MDRANGE_DEBUG("min cost: " << minCost << "\n");
 
-    llvm::outs() << "====\nbuild new module\n====\n";
+    MDRANGE_DEBUG("====\nbuild new module\n====\n");
 #if 0
     // clone the existing module
     ModuleOp newModule = module.clone();
@@ -1100,7 +1133,7 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
     // modify the parallel ops in the module
     module.walk([&](scf::ParallelOp parallelOp) {
 
-      llvm::outs() << "modifying " << parallelOp << "\n";
+      MDRANGE_DEBUG("modifying " << parallelOp << "\n");
 
 #if 1
       const Permutation &permutation = minCfg.perms_[parallelOp];
@@ -1111,16 +1144,17 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
       std::iota(permutation.begin(), permutation.end(), 0);
       std::reverse(permutation.begin(), permutation.end());
 #endif
-      llvm::outs() << "applying permutation ";
+      MDRANGE_DEBUG("applying permutation ");
       for (auto i : permutation) {
-        llvm::outs() << i << " ";
+        (void) i;
+        MDRANGE_DEBUG(i << " ");
       }
-      llvm::outs() << "\n";
+      MDRANGE_DEBUG("\n");
 
       permute_parallel_op(parallelOp, permutation);
     });
 #endif
-    llvm::outs() << "====\ndone\n====\n";
+    MDRANGE_DEBUG("====\ndone\n====\n");
   }
 };
 
@@ -1129,3 +1163,4 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
 std::unique_ptr<Pass> mlir::createKokkosMdrangeIterationPass() {
   return std::make_unique<KokkosMdrangeIterationPass>();
 }
+
