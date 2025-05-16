@@ -148,17 +148,16 @@ namespace {
     virtual ~Expr() {}
   };
 
+template <typename OS>
+OS & operator<<(OS &os, const std::shared_ptr<Expr> &e) {
+  e->dump(os);
+  return os;
+}
+
+
 } // namespace
 
-static llvm::raw_fd_ostream & operator<<(llvm::raw_fd_ostream &os, const std::shared_ptr<Expr> &e) {
-  e->dump(os);
-  return os;
-}
 
-static llvm::raw_ostream & operator<<(llvm::raw_ostream &os, const std::shared_ptr<Expr> &e) {
-  e->dump(os);
-  return os;
-}
 
 struct KokkosMdrangeIterationPass
     : public impl::KokkosMdrangeIterationBase<KokkosMdrangeIterationPass> {
@@ -910,7 +909,7 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
     return cost;
   }
 
-  static size_t monte_carlo(const Cost &model, int n = 100, int seed = 31337) {
+  static size_t monte_carlo(const Cost &model, int n = 5, int seed = 31337) {
     std::mt19937 gen(seed);
 
     std::vector<size_t> costs;
@@ -922,8 +921,8 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
       // generate random values for all unknowns in cost model
       Ctx ctx;
       for (auto &name : unknowns) {
-        auto val = log_random_int(gen, 1, 1000000);
-        // llvm::outs() << name << ": " << val << "\n";
+        auto val = log_random_int(gen, 1, 100000);
+        MDRANGE_DEBUG(name << ": " << val << "\n");
         ctx.values[name] = val;
       }
       
@@ -1050,6 +1049,7 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
 
     for (auto &kv : tripCounts) {
       const std::shared_ptr<Expr> &trip = kv.second;
+      (void) trip;
       MDRANGE_DEBUG("parallel op: " << kv.first << " trip: " << trip << "\n");
     }
 
@@ -1081,8 +1081,8 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
         for (const auto &kv : cfg.perms_) {
           MDRANGE_DEBUG(kv.first << " with permutation: ");
           for (const size_t e : kv.second) {
+            (void) e;
             MDRANGE_DEBUG(e << " ");
-            
           } 
           MDRANGE_DEBUG("\n");
         }
