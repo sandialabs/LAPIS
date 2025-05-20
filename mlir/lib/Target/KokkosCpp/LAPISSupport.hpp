@@ -15,6 +15,40 @@ struct StridedMemRefType {
 
 namespace LAPIS
 {
+  // KeepAlive structure keeps a reference to Kokkos::Views which
+  // are returned to Python. Since it's difficult to transfer ownership of a
+  // Kokkos::View's memory to numpy, we just have the Kokkos::View maintain ownership
+  // and return an unmanaged numpy array to Python.
+  //
+  // All these views will be deallocated during lapis_finalize to avoid leaking.
+  // The downside is that if a function is called many times,
+  // all its results are kept in memory at the same time.
+  struct KeepAlive
+  {
+    virtual ~KeepAlive() {}
+  };
+
+  template<typename T>
+  struct KeepAliveT : public KeepAlive
+  {
+    // Make a shallow-copy of val
+    KeepAliveT(const T& val) : p(new T(val)) {}
+    std::unique_ptr<T> p;
+  };
+
+  template<typename T>
+  KeepAlive* keepAlive(const T& val)
+  {
+    return new KeepAliveT(val);
+  }
+
+  template <typename T, int N>
+  struct MemRefType
+  {
+    StridedMemRefType<T,N> smr;
+    KeepAlive* keepAliveHandle;
+  };
+
   using TeamPolicy = Kokkos::TeamPolicy<>;
   using TeamMember = typename TeamPolicy::member_type;
 
@@ -31,6 +65,15 @@ namespace LAPIS
       smr.strides[i] = v.stride(i);
     }
     return smr;
+  }
+
+  template<typename V>
+  MemRefType<typename V::value_type, V::rank> viewToLapisMemref(const V& v, KeepAlive* keepAliveHandle)
+  {
+    MemRefType<typename V::value_type, V::rank> lmr;
+    lmr.smr = viewToStridedMemref(v);
+    lmr.keepAliveHandle = keepAliveHandle;
+    return lmr;
   }
 
   template<typename V>
@@ -90,35 +133,6 @@ namespace LAPIS
     return V(&smr.data[smr.offset], layout);
   }
 
-  // KeepAlive structure keeps a reference to Kokkos::Views which
-  // are returned to Python. Since it's difficult to transfer ownership of a
-  // Kokkos::View's memory to numpy, we just have the Kokkos::View maintain ownership
-  // and return an unmanaged numpy array to Python.
-  //
-  // All these views will be deallocated during lapis_finalize to avoid leaking.
-  // The downside is that if a function is called many times,
-  // all its results are kept in memory at the same time.
-  struct KeepAlive
-  {
-    virtual ~KeepAlive() {}
-  };
-
-  template<typename T>
-  struct KeepAliveT : public KeepAlive
-  {
-    // Make a shallow-copy of val
-    KeepAliveT(const T& val) : p(new T(val)) {}
-    std::unique_ptr<T> p;
-  };
-
-  static std::vector<std::unique_ptr<KeepAlive>> alives;
-
-  template<typename T>
-  void keepAlive(const T& val)
-  {
-    alives.emplace_back(new KeepAliveT(val));
-  }
-
   // DualView design
   // - DualView is a shallow object with a shared_ptr to a DualViewImpl.
   // - DualViewImpl has the actual host and device views as members
@@ -130,18 +144,23 @@ namespace LAPIS
   // - Assume that any DualView's parent is contiguous, and can be deep-copied between h and d
   // - All DualViews with the same parent share the parent's modify flags
   //
-  //  DualViewBase can also "keepAliveHost" to keep its host view alive until lapis_finalize is called.
-  //  This is used to safely return host views to python for numpy arrays to alias.
-
   struct DualViewBase
   {
+    enum AliasStatus
+    {
+        ALIAS_STATUS_UNKNOWN = 0,
+        HOST_IS_ALIAS = 1,
+        DEVICE_IS_ALIAS = 2,
+        NEITHER_IS_ALIAS = 3
+    };
+
     virtual ~DualViewBase() {}
     virtual void syncHost() = 0;
     virtual void syncDevice() = 0;
-    virtual void keepAliveHost() = 0;
     bool modified_host = false;
     bool modified_device = false;
     std::shared_ptr<DualViewBase> parent;
+    AliasStatus alias_status;
 
     void setParent(const std::shared_ptr<DualViewBase>& parent_)
     {
@@ -202,9 +221,11 @@ namespace LAPIS
         modified_device = true;
         if constexpr(deviceAccessesHost) {
           host_view = HostView(v.data(), v.layout());
+          alias_status = AliasStatus::HOST_IS_ALIAS;
         }
         else {
           host_view = HostView(Kokkos::view_alloc(Kokkos::WithoutInitializing, v.label() + "_host"), v.layout());
+          alias_status = AliasStatus::NEITHER_IS_ALIAS;
         }
         device_view = v;
       }
@@ -212,9 +233,11 @@ namespace LAPIS
         modified_host = true;
         if constexpr(deviceAccessesHost) {
           device_view = DeviceView(v.data(), v.layout());
+          alias_status = AliasStatus::DEVICE_IS_ALIAS;
         }
         else {
           device_view = DeviceView(Kokkos::view_alloc(Kokkos::WithoutInitializing, v.label() + "_dev"), v.layout());
+          alias_status = AliasStatus::NEITHER_IS_ALIAS;
         }
         host_view = v;
       }
@@ -281,15 +304,6 @@ namespace LAPIS
       }
     }
 
-    void keepAliveHost() override
-    {
-      // keep the parent's host view alive.
-      // It is assumed to be either managed,
-      // or unmanaged but references memory (e.g. from numpy)
-      // with a longer lifetime that any result from the current LAPIS function.
-      keepAlive(host_view);
-    }
-
     void deallocate() {
       device_view = DeviceView();
       host_view = HostView();
@@ -301,6 +315,14 @@ namespace LAPIS
 
     size_t stride(int dim) {
       return device_view.stride(dim);
+    }
+
+    KeepAlive* keepAliveHost() {
+        if(alias_status != AliasStatus::HOST_IS_ALIAS) {
+          return keepAlive(host_view);
+        }else{
+          return keepAlive(device_view);
+        }
     }
 
     DeviceView device_view;
@@ -415,12 +437,13 @@ namespace LAPIS
       return impl->stride(dim);
     }
 
-    void keepAliveHost() const {
-      impl->parent->keepAliveHost();
-    }
-
     void syncHostOnDestroy() {
       syncHostWhenDestroyed = true;
+    }
+
+    KeepAlive* keepAliveHost()
+    {
+      return impl->keepAliveHost();
     }
   };
 
