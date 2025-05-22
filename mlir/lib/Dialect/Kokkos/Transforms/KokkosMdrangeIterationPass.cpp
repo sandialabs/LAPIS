@@ -163,7 +163,7 @@ OS & operator<<(OS &os, const std::shared_ptr<Expr> &e) {
 struct KokkosMdrangeIterationPass
     : public impl::KokkosMdrangeIterationBase<KokkosMdrangeIterationPass> {
 
-#if 1
+#if 0
 #define MDRANGE_DEBUG(x) \
   llvm::outs() << x;
 #else
@@ -1074,6 +1074,7 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
     MDRANGE_DEBUG(unknowns.size() << " unknowns:\n");
     std::sort(unknowns.begin(), unknowns.end());
     for (const std::string &unk : unknowns) {
+      (void) unk;
       MDRANGE_DEBUG(unk << "\n");
     }
 
