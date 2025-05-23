@@ -50,78 +50,113 @@ scf.parallel (%i, %j) {                             (1)
   }
 }
 
-Presuming that the scf.parallel will actually be implemented in a "layout-right" iteration order, and given that memrefs are layout right, how to do we want to order the scf.parallel induction variables? e.g. for (1), do we want (%i, %j) or (%j, %i)?
+Given
+  * scf.parallel will be convert to a Kokkos MDRange with Iterate::Right for inner and outer iteration orders
+  * memrefs point to LayoutRight allocations
+What is the best order for the scf.parallel induction variables? e.g. for (1), do we want (%i, %j) or (%j, %i)?
 To answer, we build a cost model of each memref load/store, and choose the induction variable ordering for all scf.parallels that minimizes that cost.
-The foundation of the cost model is the reuse distance of the memref, under the theory that accesses with better locality will be faster due to coalescing/caching.
-The stride of the memref depends on whichever induction variable is the "right-most" one in the scf.parallel region, due to our "layout-right" iteration order assumption.
+The cost model of a memref has three parts:
+  * The number of times the memref is executed: a memref that is executed more is more costly
+  * How the memref's access offset changes w.r.t an induction variable: the smaller the offset, the better locality
+  * Whether the memref is a load or a store: stores are expected to be more costly
 
-Some examples:
+=====================================================================
+==== Part 0: Exploring scf.parallel Induction Variable Orderings ====
+=====================================================================
 
-For (2), the reuse distance w.r.t. %i is 4 (sizeof f32), and the reuse distance with respect to %j is 20 * 4 (size of 1st dimension * sizeof f32)
+All possible configurations of induction variable orderings are explored.
+This number is pretty tractable.
 
-For (4), the reuse distance with respect to (%i) is 4 * whatever the 1st memref dimension is.
-The reuse distance w.r.t %j is undefined (address does not change when %j changes).
-The reuse distance w.r.t %k is 4.
-The reuse distance w.r.t %l is undefined.
+Each scf.parallel has N! configurations for N induction variables.
+If they are nested, those values are mulitplied together.<unnamed>
+In practice we're limited to ~trillions of elements, so even a 5- or 6-D loop is quite large (each extent would have to be small)
+Even an 8-D loop is only 40k configurations.
 
-The way to understand this is that if the index variable of the memref is some kind of simple function of the induction variable, we can compute the reuse distance. If it is not a function of the induction variable, or is a function of the induction variable but we don't know the function, we can't compute the reuse distance.
+scf.parallel (%1 %2 %3 %4) { // 4!
+  scf.parallel (%5 %6 %7)    // 4! * 3!
+     
+  }
+}
 
-------
+The cost of consecutive scf.parallel is just the sum of the costs of each of them independently.<unnamed>
 
-So, what kind of simple functions can we compute? This takes the following approach: it tries to compute 
+==========================================================
+==== Part 1: The Number of Times a memref is Executed ====
+==========================================================
+For each memref, we look at all the scf.parallel regions that it's nested inside and multiply their iteration spaces together.
+Limitations:
+  * Ignore conditional execution
 
-d(memref) / d(induction variable), the partial derivative of the accessed offset w.r.t the induction variable. We can ignore the base address, because it's derivative w.r.t all induction variables is 0
+==== Part 2: The Stride of a memref w.r.t an scf.parallel induction variable ===
 
-Via the chain rule;
-d(memref) / d(induction variable) = d(memref)         / d(index variable)     *
-                                    d(index variable) / d(induction variable)
+In general, it's impossible to compute the stride of a memref w.r.t an induction variable.
+Consider the following example pseudocode
 
-Let's take d(index variable) / d(induction variable) first.
+scf.parallel (%i) ... {
+   %j = f(%i)
+   memref.load(%j)
+}
 
-------
+f could do literally anything
 
-d(index variable) / d(induction variable) is computed by recursively following the inputs to the operation and applying differentiation rules.
+However, in practice, it is common for memref indices to be "simple" functions of induction varibles - scalings, offsets, etc.
+So, model this stride as a derivative:
 
-To make this problem tractable, we make two simplifying assumptions:
+  d(memref) / d(induction variable), the partial derivative of the accessed offset w.r.t the induction variable. We can ignore the base address, because it's derivative w.r.t all induction variables is 0
 
-We only care about about results of the form df / dx = a * x
-We only try to differentiate simple arithmetic functions, e.g. if f(x) = g(x) + h(x), df/dx = dg/dx + dh/dx. Similarly for multiply, divide, etc. Any other f we just give up and say who knows.
+Via the chain rule, the sum of various partial derivatives (index variable meaning an argument to the memref)
+d(memref) / d(induction variable) = SUM (
+                                         pd(memref)         / pd(index variable)     *
+                                         pd(index variable) / pd(induction variable)
+                                        )
 
-------
+pd(memref) / pd(index variable) is in principle simple, it's just the product of all strides of right-ward (due to LayoutRight) dimension of the index variable.
+See Part 4 for discussion of runtime extents.
 
-d(memref) / d(index variable) is in principle simple, it's just the product of all strides of lower dimension than the index variable. In practice, however, most strides are unknown at compile time, so we won't be able to get an actual number, we'll just get expressions like
-
-d(memref) / d(index variable) = stride_0 * stride_2 * sizeof(datatype)
-
-if we're lucky, and all dimensions are known or there are no lower dimensions, then we can get an actual number.
-
-------
-
-So in the end, d(memref) / d(induction variable) ends up being something of this form:
-
-stride_0 * stride_2 * sizeof(datatype) * a * x
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-memref / index var component
-                                         ^^^^^
-                                         index var / induction var component
+pd(index variable) / pd(induction variable) is computed by recursively following the inputs to the operation and applying differentiation rules.
+For simplicity, We only try to differentiate simple arithmetic functions, e.g. if f(x) = g(x) + h(x), df/dx = dg/dx + dh/dx. Similarly for multiply, divide, etc. Any other f we just give up and say who knows.
 
 
-the second component might just be ???, and/or the first component might be a known integer number.
+==== Part 3: Memref Load or Store ====
 
-------
+Easily determined. A load has its otherwise-computed cost scaled by 1.0. A store is scaled by 3.0.
 
-In principle, each memref has a different cost for each induction variable ordering.
-In practice, we just consider the induction variable that is incrementing the fastest for each memref - that is, the right-most induction variable for the closest enclosing loop.
+=========================================
+==== Part 4: Handling Runtime Values ====
+=========================================
 
-The reuse distance is just looked up in the previously computed table of d(memref) / d(induction variable)
+Any loop trip counts and memref extents that are not statically known (whether due to insufficient analysis or runtime-derived values) are considered "unknowns".
+The expressions of interest in Parts 1, 2, and 3 are modeled as an expression tree, with symbolic values inserted for these unknowns.
 
-------
+The Monte-Carlo method is used to estimate the cost in the face of these unknowns.
+For each unknown, a value between 1 and 100,000 is selected in a log-uniform way (the range 1-10 is roughly as likely as 10-100, etc.)
+The cost expressions are evaluted in this "context" to arrive at a concrete numerical cost for the memref.
+The median of 500 simulations is chosen as the single final number.
 
-We generate all possible combinations of
-  * choose an induction variable from each parallel region to be the right-most one.
-We compute the cost under each combination.
-  * Since the cost expression will contain many unknowns, we do monte-carlo simulation of the cost model for each induction variable ordering
-We chosoe the induction variable ordering with the lowest cost
+
+=========================================
+==== Part 5: Putting it all Together ====
+=========================================
+
+* For each possible parallel loop induction variable ordering
+  * Model the cost of the program memrefs under that configuration using Monte-Carlo method
+  * Track the best identified ordering so far
+* Apply the selected ordering to each scf.parallel
+
+
+=============================
+==== Part 6: Limitations ====
+=============================
+
+It is easy for the anlysis to lose track of the relationship between an induction variable and an index variable. In that case, the contributed cost is 0.
+
+Being conditionally-executed (inside an `if`) does not effect the cost model. If a memref is present in the code, we consider it unconditionally executed.
+
+The analysis does not attempt to actually model the memory hierarchy:
+  * The cost is proportional to the stride, which is probably not true on any actual computer
+  * Imagine if v(0,9) is next to v(10, 0) in memory. We still count the increment of the left index variable as stride 10, rather than stride 1.
+    * This is semi-defensible because the iteration order in Kokkos is not specified, but we actually know the Kokkos implementation so we could probably do something better here.
+  * We don't model memrefs in the context of previously-executed memrefs. Conescutive accesses to the same address are probably cached, but we ignore that.
 
 */
 
