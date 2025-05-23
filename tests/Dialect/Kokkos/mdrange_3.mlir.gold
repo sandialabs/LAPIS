@@ -1,0 +1,27 @@
+module {
+  func.func @nested_parallel(%arg0: index, %arg1: index, %arg2: index) {
+    %alloc = memref.alloc(%arg0, %arg1) : memref<?x?xf32>
+    %alloc_0 = memref.alloc(%arg1, %arg2) : memref<?x?xf32>
+    %alloc_1 = memref.alloc(%arg0, %arg2) : memref<?x?xf32>
+    %0 = arith.addi %arg0, %arg1 : index
+    %1 = arith.addi %arg1, %arg2 : index
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %c10 = arith.constant 10 : index
+    scf.parallel (%arg3, %arg4) = (%arg0, %arg1) to (%0, %1) step (%arg1, %c2) {
+      scf.parallel (%arg5) = (%c0) to (%c10) step (%c1) {
+        %2 = memref.load %alloc[%arg3, %arg4] : memref<?x?xf32>
+        %3 = memref.load %alloc_0[%arg4, %arg5] : memref<?x?xf32>
+        %4 = arith.addf %2, %3 : f32
+        memref.store %4, %alloc_1[%arg3, %arg5] : memref<?x?xf32>
+        scf.reduce 
+      }
+      scf.reduce 
+    }
+    memref.dealloc %alloc : memref<?x?xf32>
+    memref.dealloc %alloc_0 : memref<?x?xf32>
+    memref.dealloc %alloc_1 : memref<?x?xf32>
+    return
+  }
+}
