@@ -1,3 +1,4 @@
+// RUN: %lapis-opt %s --kokkos-mdrange-iteration | diff %s.gold -
 module {
   func.func @example_function(%arg0: memref<?x?xf32>, %arg1: memref<?x?xf32>, %arg2: index) {
     %c0 = arith.constant 0 : index

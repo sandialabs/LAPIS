@@ -1,3 +1,4 @@
+// RUN: %lapis-opt %s --kokkos-mdrange-iteration | diff %s.gold -
 module {
   func.func @nested_parallel(%arg0: index, %arg1: index, %arg2: index) {
     %0 = memref.alloc(%arg0, %arg1) : memref<?x?xf32>
