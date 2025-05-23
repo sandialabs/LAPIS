@@ -33,6 +33,8 @@ std::unique_ptr<Pass> createKokkosDualViewManagementPass();
 
 std::unique_ptr<Pass> createSparseAssemblerDirectOutPass();
 
+std::unique_ptr<Pass> createKokkosMdrangeIterationPass();
+
 //===----------------------------------------------------------------------===//
 // Registration.
 //===----------------------------------------------------------------------===//
