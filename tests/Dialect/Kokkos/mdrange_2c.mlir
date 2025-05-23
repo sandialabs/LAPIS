@@ -12,8 +12,8 @@ module {
 
       // this loop wants the outer loop indices to be reversed
       scf.parallel (%k) = (%c0) to (%ub_k) step (%c1) {
-        %val = memref.load %arg0[%i, %j] : memref<?x?xf32>
-        memref.store %val, %arg0[%i, %j] : memref<?x?xf32>
+        %val = memref.load %arg0[%j, %i] : memref<?x?xf32>
+        memref.store %val, %arg0[%j, %i] : memref<?x?xf32>
         scf.reduce
       }
 
@@ -21,8 +21,8 @@ module {
       // this loop has double the step -> 1/2 the trip count
       // the other loop should influence the order more strongly
       scf.parallel (%k) = (%c0) to (%ub_k) step (%c2) {
-        %val = memref.load %arg0[%j, %i] : memref<?x?xf32>
-        memref.store %val, %arg0[%j, %i] : memref<?x?xf32>
+        %val = memref.load %arg0[%i, %j] : memref<?x?xf32>
+        memref.store %val, %arg0[%i, %j] : memref<?x?xf32>
         scf.reduce
       }
 

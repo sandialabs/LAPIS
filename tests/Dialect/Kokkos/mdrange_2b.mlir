@@ -11,8 +11,8 @@ module {
 
       // this loop wants the outer loop indices to stay the same
       scf.parallel (%k) = (%c0) to (%ub_k) step (%c1) {
-        %val = memref.load %arg0[%j, %i] : memref<?x?xf32>
-        memref.store %val, %arg0[%j, %i] : memref<?x?xf32>
+        %val = memref.load %arg0[%i, %j] : memref<?x?xf32>
+        memref.store %val, %arg0[%i, %j] : memref<?x?xf32>
         scf.reduce
       }
 

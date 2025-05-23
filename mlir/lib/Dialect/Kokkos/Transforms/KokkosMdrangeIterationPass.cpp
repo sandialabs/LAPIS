@@ -1000,9 +1000,9 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
           if (auto it = cfg.perms_.find(ancestor); it != cfg.perms_.end()) {
             const Permutation &perm = it->second;
 
-            // assume MDRange iteration order is left-to-right
-            mlir::Value leftIndVar = ancestor.getInductionVars()[perm[0]];
-            auto key = std::make_pair(op, leftIndVar);
+            // assume MDRange iteration is inner = right, outer = right
+            mlir::Value rightIndVar = ancestor.getInductionVars()[perm[perm.size() - 1]];
+            auto key = std::make_pair(op, rightIndVar);
             if (auto it = mic.find(key); it != mic.end()) {
               const Cost &model = it->second;
               cost += model.stride_->eval(ctx) * model.count_->eval(ctx) * model.sf_;
