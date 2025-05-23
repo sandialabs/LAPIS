@@ -217,6 +217,14 @@ struct KokkosMdrangeIterationPass
 
     virtual std::vector<std::string> unknowns() const override {
       std::vector<std::string> ret;
+
+      if (!lhs_) {
+        llvm::report_fatal_error("lhs_ is null");
+      }
+      if (!rhs_) {
+        llvm::report_fatal_error("rhs_ is null");
+      }
+
       for (auto &op : {lhs_, rhs_}) {
         for (auto &name : op->unknowns()) {
           ret.push_back(name);
@@ -457,8 +465,8 @@ struct KokkosMdrangeIterationPass
 
     std::vector<std::string> unknowns() const {
       std::vector<std::string> ret;
-      for (auto &u : stride_->unknowns()) ret.push_back(u);
-      for (auto &u : count_->unknowns()) ret.push_back(u);
+      for (const std::string &u : stride_->unknowns()) ret.push_back(u);
+      for (const std::string &u : count_->unknowns()) ret.push_back(u);
       return ret;
     }
 
@@ -471,12 +479,16 @@ struct KokkosMdrangeIterationPass
   };
 
 // partial derivative df/dx
+// FIXME: does this handle block arguments appropriately?
 static std::shared_ptr<Expr> df_dx(Value &f, Value &x) {
   if (f == x) {
     MDRANGE_DEBUG("Info: df_dx of equal values\n");
     return Constant::make(1);
-  } else if (mlir::isa<BlockArgument>(f) && mlir::isa<BlockArgument>(x)) {
-    MDRANGE_DEBUG("Info: df_dx of different block arguments:\n");
+  } else if (mlir::isa<BlockArgument>(f)) {
+    MDRANGE_DEBUG("Info: f is a block argument\n");
+    return Constant::make(0);
+  } else if (mlir::isa<BlockArgument>(x)) {
+    MDRANGE_DEBUG("Info: x is a block argument\n");
     return Constant::make(0);
   } else {
     // FIXME: what other scenarios if there is no defining op.
@@ -485,7 +497,14 @@ static std::shared_ptr<Expr> df_dx(Value &f, Value &x) {
         return df_dx(fOp, xOp);
       }
     }
-    MDRANGE_DEBUG("ERROR: One of the values has no defining operation\n");
+    {
+      std::stringstream ss;
+      ss << "Unexpected lack of defining op for value\n";
+      MDRANGE_DEBUG(f << " <- " << f.getDefiningOp() << "\n");
+      MDRANGE_DEBUG(x << " <- " << x.getDefiningOp() << "\n");
+      llvm::report_fatal_error(ss.str().c_str());
+    }
+    
     return nullptr;
   }
 }
@@ -887,33 +906,75 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
     return ops;
   }
 
-  static ParallelOpVec get_parallel_ops(ModuleOp &mod) {
+
+  // get top-level (not nested) scf::ParallelOp in a block
+  static ParallelOpVec get_parallel_ops(Block &block) {
     ParallelOpVec ret;
-    mod.walk([&](Operation *op) {
+    for (Operation &op : block.getOperations()) {
       if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
         ret.push_back(parallelOp);
+      } else {
+        ParallelOpVec nestedOps = get_parallel_ops(op);
+        for (auto &nestedOp : nestedOps) {
+          ret.push_back(nestedOp);
+        }
       }
-    });
+    }
     return ret;
   }
 
-  // cost of a module with a given parallel configuration
-  static size_t model_cost(ModuleOp &mod, const ParallelConfig &cfg, const MemrefInductionCosts &costTable, const std::vector<std::string> &unknowns) {
-    size_t cost = 0;
-    mod.walk([&](Operation *op) {
-      if (auto memrefOp = dyn_cast<memref::LoadOp>(op)) {
-        cost += model_cost(memrefOp, cfg, costTable, unknowns);
-      } else if (auto memrefOp = dyn_cast<memref::StoreOp>(op)) {
-        cost += model_cost(memrefOp, cfg, costTable, unknowns);
+  // get top-level (not nested) scf::ParallelOp in a region
+  static ParallelOpVec get_parallel_ops(Region &region) {
+    ParallelOpVec ret;
+    for (Block &block : region.getBlocks()) {
+      ParallelOpVec blockOps = get_parallel_ops(block);
+      for (scf::ParallelOp &op : blockOps) {
+        ret.push_back(op);
       }
-    }); // walk
-    return cost;
+    }
+    return ret;
+  }
+
+  // get top-level (not nested) scf::ParallelOp in a module
+  static ParallelOpVec get_parallel_ops(mlir::Operation &op) {
+    ParallelOpVec ret;
+    for (Region &region : op.getRegions()) {
+      ParallelOpVec regionOps = get_parallel_ops(region);
+      for (scf::ParallelOp &op : regionOps) {
+        ret.push_back(op);
+      }
+    }
+    return ret;
+  }
+
+  // get top-level (not nested) scf::ParallelOp in a module
+  static ParallelOpVec get_parallel_ops(mlir::ModuleOp &mod) {
+    ParallelOpVec ret;
+    ParallelOpVec regionOps = get_parallel_ops(mod.getRegion());
+    for (scf::ParallelOp &op : regionOps) {
+      ret.push_back(op);
+    }
+    return ret;
+  }
+
+  // get top-level (not nested) scf::ParallelOp in a ParallelOp
+  static ParallelOpVec get_parallel_ops(scf::ParallelOp &op) {
+    ParallelOpVec ret;
+    ParallelOpVec regionOps = get_parallel_ops(op.getRegion());
+    for (scf::ParallelOp &op : regionOps) {
+      ret.push_back(op);
+    }
+    return ret;
   }
 
   // TODO: unknowns is all unknowns combined from all models
   // this means unkowns is the same for all calls here
   // this is a bit confusing since model also has model.unkowns() which is a subset
-  static size_t monte_carlo(const std::vector<std::string> &unknowns, const Cost &model, int n = 500, int seed = 31337) {
+  static size_t monte_carlo(const std::vector<std::string> &unknowns, 
+                            const MemrefInductionCosts &mic,
+                            const ParallelConfig &cfg,
+                            std::vector<mlir::Operation*> &memrefOps,
+                            int n = 500, int seed = 31337) {
     std::mt19937 gen(seed);
 
     std::vector<size_t> costs;
@@ -930,7 +991,30 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
         ctx.values[unk] = val;
       }
       
-      const size_t cost = model.stride_->eval(ctx) * model.count_->eval(ctx) * model.sf_;
+      size_t cost = 0;
+
+      for (mlir::Operation *op : memrefOps) {
+
+        auto ancestors = enclosing_parallel_ops(op);
+        for (scf::ParallelOp &ancestor : ancestors) {
+          if (auto it = cfg.perms_.find(ancestor); it != cfg.perms_.end()) {
+            const Permutation &perm = it->second;
+
+            // assume MDRange iteration order is left-to-right
+            mlir::Value leftIndVar = ancestor.getInductionVars()[perm[0]];
+            auto key = std::make_pair(op, leftIndVar);
+            if (auto it = mic.find(key); it != mic.end()) {
+              const Cost &model = it->second;
+              cost += model.stride_->eval(ctx) * model.count_->eval(ctx) * model.sf_;
+            } else {
+              llvm::report_fatal_error("couldn't find model for memref / induction variable combo");
+            }
+          } else {
+            llvm::report_fatal_error("couldn't find config for nesting scf.parallel of memref");
+          }
+        }
+      }
+
       // MDRANGE_DEBUG("MC iteration " << i << " cost=" << cost << "\n");
       costs.push_back(cost);
     }
@@ -947,44 +1031,6 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
     std::sort(costs.begin(), costs.end());
     return costs[costs.size() / 2];
   }
-
-  template <typename MemrefOp>
-  static size_t model_cost(MemrefOp &memrefOp, const ParallelConfig &cfg, const MemrefInductionCosts &costTable, const std::vector<std::string> &unknowns) {
-    static_assert(std::is_same_v<MemrefOp, memref::LoadOp> || std::is_same_v<MemrefOp, memref::StoreOp>);
-    MDRANGE_DEBUG("model cost of " << memrefOp << "...\n");
-
-    auto parents = enclosing_parallel_ops(memrefOp);
-
-    MDRANGE_DEBUG("... memref op above has " << parents.size() << " enclosing parallels\n");
-
-    size_t cost = 0;
-    for (scf::ParallelOp &parallelOp : parents) {
-      if (auto it = cfg.perms_.find(parallelOp); it != cfg.perms_.end()) {
-
-        const Permutation &perm = it->second;
-        Value leftMostVar = parallelOp.getInductionVars()[perm[0]];
-
-        MDRANGE_DEBUG("... under permutation, left-most induction var of enclosing parallel is " << leftMostVar << "\n");
-        
-        // FIXME: why does this work? the table should expect key to be pair<Operation*, Value> not pair<Operation, Value>
-        auto costKey = std::make_pair(memrefOp, leftMostVar);
-        if (auto jt = costTable.find(costKey); jt != costTable.end()) {
-          Cost model = jt->second;
-          size_t parallelContrib = monte_carlo(unknowns, model);
-          cost += parallelContrib;
-          MDRANGE_DEBUG("..." << memrefOp << " contributes " << parallelContrib << " (now " << cost << ")\n");
-        } else {
-          MDRANGE_DEBUG("WARN: couldn't find model for memref / induction variable combo\n");
-          return 0;
-        }
-      } else {
-        MDRANGE_DEBUG("WARN: couldn't find permutation for parent parallel op\n");
-        return 0;
-      }
-    }
-    return cost;
-  }
-
 
 
   // modify `parallelOp` so that its induction variables are permuted according to `permutation`
@@ -1014,44 +1060,125 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
     parallelOp.erase();
   }
 
-  template <typename Lambda>
-  void walk_configurations(ParallelOpVec &ops, Lambda &&f) {
-    ParallelConfig cfg;
-    walk_configurations(ops, std::forward<Lambda>(f), cfg);
-  }
 
-// return true if op, or any of its nested children, were scf parallel
-  template <typename Lambda>
-  void walk_configurations(ParallelOpVec &ops, Lambda &&f, const ParallelConfig &cfg) {
-    if (ops.empty()) {
-      f(cfg);
-    } else {
-      scf::ParallelOp &first = ops[0];
-      ParallelOpVec rest;
-      for (size_t oi = 1; oi < ops.size(); ++oi) {
-        rest.push_back(ops[oi]);
+  // returns best config and minimal cost for all scf::ParallelOp in mod
+  std::pair<ParallelConfig, size_t> best_configuration(const std::vector<std::string> &unknowns, const MemrefInductionCosts &costs, ModuleOp &mod) {
+
+    // best configuration for a module is the combination of the best configurations
+    // of the parallel ops in that module
+    // minimal cost is the sum
+
+    ParallelConfig best;
+    size_t cost = 0;
+
+    ParallelOpVec modOps = get_parallel_ops(mod);
+    for (scf::ParallelOp &op : modOps) {
+
+      auto [opCfg, opCost] = best_configuration(unknowns, costs, best, op);
+
+      for (auto &kv : opCfg.perms_) {
+        best.perms_[kv.first] = kv.second;
       }
-      Permutation perm(get_num_induction_vars(first));
-      std::iota(perm.begin(), perm.end(), 0);
-
-      do {
-        ParallelConfig newCfg = cfg;
-        newCfg.perms_[first] = perm;
-        walk_configurations(rest, std::forward<Lambda>(f), newCfg);
-      } while (std::next_permutation(perm.begin(), perm.end()));
+      cost += opCost;
     }
+
+    return std::make_pair(best, cost);
   }
+
+  // returns the best configuration and minimal cost for all configurations of `op` given configuration `cfg` for parent ParallelOps
+  std::pair<ParallelConfig, size_t> best_configuration(const std::vector<std::string> &unknowns, const MemrefInductionCosts &costs, ParallelConfig &cfg, scf::ParallelOp &op) {
+
+    // find parallel nested operations and cache
+    ParallelOpVec nestedOps = get_parallel_ops(op);
+
+
+    // best configuration among all permutations of this parallel op
+    ParallelConfig bestCfg;
+    size_t bestCost = std::numeric_limits<size_t>::max();
+
+
+    // generate all possible parallel configurations of this operation
+    Permutation perm(get_num_induction_vars(op));
+    std::iota(perm.begin(), perm.end(), 0);
+
+    do {
+
+      MDRANGE_DEBUG("Modeling permutation {");
+      for (int i : perm) {
+        (void) i;
+        MDRANGE_DEBUG(i << ", ");
+      }
+      MDRANGE_DEBUG("} ...\n");
+
+      ParallelConfig newCfg = cfg;
+      newCfg.perms_[op] = perm;
+
+      // get all top-level memrefs in this parallel region
+      std::vector<Operation *> memrefOps;
+      for (Block &block : op.getRegion().getBlocks()) {
+        for (Operation &child : block.getOperations())
+          if (auto memrefOp = dyn_cast<memref::LoadOp>(child)) {
+            memrefOps.push_back(memrefOp);
+          } else if (auto memrefOp = dyn_cast<memref::StoreOp>(child)) {
+            memrefOps.push_back(memrefOp);
+          }
+        }
+
+      
+
+
+      size_t memrefCost = 0;
+      if (memrefOps.empty()) {
+        MDRANGE_DEBUG("scf.parallel has no memrefs\n");
+      } else {
+
+        // model the cost of the memrefs under this loop configuration
+        // here we use Monte Carlo method
+        memrefCost = monte_carlo(unknowns, costs, newCfg, memrefOps);
+        MDRANGE_DEBUG("... under permutation, memref cost is " << memrefCost << "\n");
+      }
+
+      // total cost is the cost of the top-level memrefs + the cost of any nested parallel ops under this configuration
+      size_t nestedCost = 0;
+
+      for (scf::ParallelOp &nestedOp : nestedOps) {
+        auto [parOpCfg, parOpCost] = best_configuration(unknowns, costs, newCfg, nestedOp);
+
+        // augment our configuration with the best discovered nested ones
+        // FIXME: this overwrites nesting k-v pairs but I think it's okay
+        for (auto &kv : parOpCfg.perms_) {
+          newCfg.perms_[kv.first] = kv.second;
+        }
+        nestedCost += parOpCost;
+      }
+
+      const size_t permCost = nestedCost + memrefCost;
+
+      // check if this permutation is the best cost so far
+      if (permCost < bestCost) {
+        bestCfg = newCfg;
+        bestCost = permCost;
+      }
+
+    } while (std::next_permutation(perm.begin(), perm.end()));
+
+
+    return std::make_pair(bestCfg, bestCost);
+  }
+
 
   void runOnOperation() override {
-    ModuleOp module = getOperation();
+    ModuleOp mod = getOperation();
 
-    MDRANGE_DEBUG(module << "\n");
+    MDRANGE_DEBUG("====\nprint module\n====\n");
+    MDRANGE_DEBUG(mod << "\n");
+
 
     MDRANGE_DEBUG("====\ndump_ops\n====\n");
-    dump_ops(module);
+    dump_ops(mod);
 
     MDRANGE_DEBUG("====\nbuild_parallel_trip_counts\n====\n");
-    IterationSpaceExprs tripCounts = build_parallel_trip_counts(module);
+    IterationSpaceExprs tripCounts = build_parallel_trip_counts(mod);
 
     for (auto &kv : tripCounts) {
       const std::shared_ptr<Expr> &trip = kv.second;
@@ -1060,9 +1187,9 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
     }
 
     MDRANGE_DEBUG("====\nbuild_cost_table\n====\n");
-    MemrefInductionCosts costTable = build_cost_table(module, tripCounts);
+    MemrefInductionCosts costTable = build_cost_table(mod, tripCounts);
 
-    MDRANGE_DEBUG("====\nunknowns:\n====\n");
+    MDRANGE_DEBUG("====\nunknowns\n====\n");
     std::vector<std::string> unknowns;
     for (const auto &kv : costTable) {
       for (const std::string &unk : kv.second.unknowns()) {
@@ -1078,104 +1205,30 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
       MDRANGE_DEBUG(unk << "\n");
     }
 
-    MDRANGE_DEBUG("====\nExtract parallel ops\n====\n");
-    auto parallelOps = get_parallel_ops(module);
+    MDRANGE_DEBUG("====\nModel Reordered Induction variables\n====\n");  
+    // ParallelConfig, size_t
+    auto [bestCfg, bestCost] = best_configuration(unknowns, costTable, mod);
+    
 
-    MDRANGE_DEBUG("====\nModel Reordered Induction variables\n====\n");
-    size_t minCost = std::numeric_limits<size_t>::max();
-    ParallelConfig minCfg;
-    walk_configurations(parallelOps, [&](const ParallelConfig &cfg){
-      MDRANGE_DEBUG("modeling ParallelConfig:\n");
-      for (const auto &kv : cfg.perms_) {
-        MDRANGE_DEBUG(kv.first << " -> {");
-        for(const auto &e : kv.second) {
-          (void)e;
-          MDRANGE_DEBUG(e << ", ");
-        }
-        MDRANGE_DEBUG("}\n");
-      }
-
-      size_t cost = model_cost(module, cfg, costTable, unknowns);
-      MDRANGE_DEBUG("cost was " << cost << "\n");
-      if (cost < minCost) {
-        MDRANGE_DEBUG("Info: new optimal! cost=" << cost << "\n");
-
-        for (const auto &kv : cfg.perms_) {
-          MDRANGE_DEBUG(kv.first << " with permutation: ");
-          for (const size_t e : kv.second) {
-            (void) e;
-            MDRANGE_DEBUG(e << " ");
-          } 
-          MDRANGE_DEBUG("\n");
-        }
-
-        minCost = cost;
-        minCfg = cfg;
-      }
-
-    });
-    MDRANGE_DEBUG("min cost: " << minCost << "\n");
+    MDRANGE_DEBUG("min cost: " << bestCost << "\n");
 
     MDRANGE_DEBUG("====\nbuild new module\n====\n");
-#if 0
-    // clone the existing module
-    ModuleOp newModule = module.clone();
-
-    // TODO: modify the parallel ops in the new module
-    newModule.walk([&](scf::ParallelOp parallelOp) {
-
-      llvm::outs() << "modifying " << parallelOp << "\n";
-
-
-      // TODO: replace this placeholder permutation with the computed one
-      // fake permutation that just reverses stuff
-      Permutation permutation(parallelOp.getInductionVars().size());
-      std::iota(permutation.begin(), permutation.end(), 0);
-      std::reverse(permutation.begin(), permutation.end());
-
-      llvm::outs() << "applying permutation ";
-      for (auto i : permutation) {
-        llvm::outs() << i << " ";
-      }
-      llvm::outs() << "\n";
-
-      permute_parallel_op(parallelOp, permutation);
-    });
-
-
-    // FIXME: this seems like it might introduce an extra scf.reduce at the end
-    // of the parallel region, probably because it clones one and then one gets inserted
-    // --mlir-print-ir-after-failure
-    // overwrite the module with the new module
-    // Replace the original module with the new module.
-    module.getBody()->getOperations().clear();
-    module.getBody()->getOperations().splice(module.getBody()->begin(),
-                                             newModule.getBody()->getOperations());
-#else
     // modify the parallel ops in the module
-    module.walk([&](scf::ParallelOp parallelOp) {
-
+    mod.walk([&](scf::ParallelOp parallelOp) {
       MDRANGE_DEBUG("modifying " << parallelOp << "\n");
-
-#if 1
-      const Permutation &permutation = minCfg.perms_[parallelOp];
-#else
-      // TODO: replace this placeholder permutation with the computed one
-      // fake permutation that just reverses stuff
-      Permutation permutation(parallelOp.getInductionVars().size());
-      std::iota(permutation.begin(), permutation.end(), 0);
-      std::reverse(permutation.begin(), permutation.end());
-#endif
-      MDRANGE_DEBUG("applying permutation ");
-      for (auto i : permutation) {
-        (void) i;
-        MDRANGE_DEBUG(i << " ");
+      if (auto it = bestCfg.perms_.find(parallelOp); it != bestCfg.perms_.end()) {
+        const Permutation &permutation = it->second;
+        MDRANGE_DEBUG("applying permutation ");
+        for (auto i : permutation) {
+          (void) i;
+          MDRANGE_DEBUG(i << " ");
+        }
+        MDRANGE_DEBUG("\n");
+        permute_parallel_op(parallelOp, permutation);
+      } else {
+        llvm::report_fatal_error("no configuration for scf.parallel in configuration");
       }
-      MDRANGE_DEBUG("\n");
-
-      permute_parallel_op(parallelOp, permutation);
     });
-#endif
     MDRANGE_DEBUG("====\ndone\n====\n");
   }
 };
