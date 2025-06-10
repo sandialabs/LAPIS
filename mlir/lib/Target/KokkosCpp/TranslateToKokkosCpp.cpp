@@ -1347,6 +1347,9 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::ForOp forOp)
 }
 
 static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::WhileOp whileOp) {
+  auto condOp = whileOp.getConditionOp();
+  auto yieldOp = whileOp.getYieldOp();
+
   //Declare the before args, after args, and results.
   for (auto pair : llvm::zip(whileOp.getBeforeArguments(), whileOp.getInits())) {
   //for (OpResult beforeArg : whileOp.getBeforeArguments()) {
@@ -1369,31 +1372,51 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::WhileOp whil
 
   emitter << "while(true) {\n";
   emitter.indent();
-
-  //Emit the "before" block(s)
-  for (auto& beforeOp : whileOp.getBefore().getOps()) {
-    if (failed(emitter.emitOperation(beforeOp, /*trailingSemicolon=*/true)))
-      return failure();
+  //Emit the "before" block ops, except the scf.condition terminator
+  for (auto& beforeOp : *whileOp.getBeforeBody()) {
+    if (!isa<scf::ConditionOp>(beforeOp)) {
+      if (failed(emitter.emitOperation(beforeOp, /*trailingSemicolon=*/true)))
+        return failure();
+    }
   }
 
+  // condition op has a bool condition operand.
+  // If true, forward remaining arguments to after block and continue.
+  // If false, forward to results and break.
+  emitter << "if(";
+  if(failed(emitter.emitValue(condOp.getCondition())))
+    return failure();
+  emitter << ") {\n";
+  emitter.indent();
   for (auto pair : llvm::zip(whileOp.getAfterArguments(), whileOp.getConditionOp().getArgs())) {
     // After args are initialized to the args passed by ConditionOp 
-    if(failed(emitter.emitType(whileOp.getLoc(), std::get<0>(pair).getType())))
-      return failure();
-    emitter << ' ' << emitter.getOrCreateName(std::get<0>(pair)) << " = ";
+    emitter << emitter.getOrCreateName(std::get<0>(pair)) << " = ";
     if(failed(emitter.emitValue(std::get<1>(pair))))
       return failure();
     emitter << ";\n";
   }
-
-  //Emit the "after" block(s)
-  for (auto& afterOp : whileOp.getAfter().getOps()) {
-    if (failed(emitter.emitOperation(afterOp, /*trailingSemicolon=*/true)))
+  emitter.unindent();
+  emitter << "}\n";
+  emitter << "else {\n";
+  emitter.indent();
+  for (auto pair : llvm::zip(whileOp.getResults(), whileOp.getConditionOp().getArgs())) {
+    emitter << emitter.getOrCreateName(std::get<0>(pair)) << " = ";
+    if(failed(emitter.emitValue(std::get<1>(pair))))
       return failure();
+    emitter << ";\n";
   }
-
+  emitter << "break;\n";
+  emitter.unindent();
+  emitter << "}";
+  //Emit the "after" block ops, except the scf.yield terminator
+  for (auto& afterOp : *whileOp.getAfterBody()) {
+    if (!isa<scf::YieldOp>(afterOp)) {
+      if (failed(emitter.emitOperation(afterOp, /*trailingSemicolon=*/true)))
+        return failure();
+    }
+  }
   // Copy yield operands into before block args at the end of a loop iteration.
-  for (auto pair : llvm::zip(whileOp.getBeforeArguments(), whileOp.getYieldOp()->getOperands())) {
+  for (auto pair : llvm::zip(whileOp.getBeforeArguments(), yieldOp.getOperands())) {
     BlockArgument iterArg = std::get<0>(pair);
     Value operand = std::get<1>(pair);
     emitter << emitter.getOrCreateName(iterArg) << " = ";
@@ -1401,22 +1424,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::WhileOp whil
       return failure();
     emitter << ";\n";
   }
-
   emitter.unindent();
-  emitter << "}\n";
-  return success();
-}
-
-static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::ConditionOp condOp) {
-  //The condition value should already be in scope. Just break out of loop if it's falsey.
-  emitter << "if(";
-  if(failed(emitter.emitValue(condOp.getCondition())))
-    return failure();
-  emitter << ") {\n";
-  emitter << "}\n";
-  emitter << "else {\n";
-  //Condition false: breaking out of loop
-  emitter << "break;\n";
   emitter << "}\n";
   return success();
 }
@@ -3589,7 +3597,7 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
           .Case<func::CallOp, func::ConstantOp, func::ReturnOp>(
               [&](auto op) { return printOperation(*this, op); })
           // SCF ops.
-          .Case<scf::ForOp, scf::WhileOp, scf::IfOp, scf::YieldOp, scf::ConditionOp>(
+          .Case<scf::ForOp, scf::WhileOp, scf::IfOp, scf::YieldOp>(
               [&](auto op) { return printOperation(*this, op); })
           // Arithmetic ops: general
           .Case<arith::ConstantOp, arith::FPToUIOp, arith::NegFOp, arith::CmpFOp, arith::CmpIOp, arith::SelectOp, arith::IndexCastOp, arith::SIToFPOp, arith::MinNumFOp, arith::MaxNumFOp>(
