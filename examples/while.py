@@ -28,7 +28,7 @@ module {
 }"""
 
 def main():
-    backend = KokkosBackend.KokkosBackend(dump_mlir=True)
+    backend = KokkosBackend.KokkosBackend()
     module_kokkos = backend.compile(moduleText)
 
     result = module_kokkos.while_test(1.5, 130.0)
