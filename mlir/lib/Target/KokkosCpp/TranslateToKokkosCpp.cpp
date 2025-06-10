@@ -1429,17 +1429,6 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::WhileOp whil
   return success();
 }
 
-/*
-static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::ConditionOp condOp) {
-  //The condition value should already be in scope. Just break out of loop if it's falsey.
-  emitter << "if(!(";
-  if(failed(emitter.emitValue(condOp.getCondition())))
-    return failure();
-  emitter << ")) break";
-  return success();
-}
-*/
-
 // If the join represented by op is a built-in reducer in Kokkos, return true and set reduction to its
 // name in C++ (e.g. "Kokkos:Min"). Otherwise return false.
 static bool isBuiltinReduction(std::string& reduction, kokkos::UpdateReductionOp op) {
