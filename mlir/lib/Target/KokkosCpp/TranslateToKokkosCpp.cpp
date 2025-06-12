@@ -1347,6 +1347,9 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::ForOp forOp)
 }
 
 static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::WhileOp whileOp) {
+  auto condOp = whileOp.getConditionOp();
+  auto yieldOp = whileOp.getYieldOp();
+
   //Declare the before args, after args, and results.
   for (auto pair : llvm::zip(whileOp.getBeforeArguments(), whileOp.getInits())) {
   //for (OpResult beforeArg : whileOp.getBeforeArguments()) {
@@ -1369,31 +1372,51 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::WhileOp whil
 
   emitter << "while(true) {\n";
   emitter.indent();
-
-  //Emit the "before" block(s)
-  for (auto& beforeOp : whileOp.getBefore().getOps()) {
-    if (failed(emitter.emitOperation(beforeOp, /*trailingSemicolon=*/true)))
-      return failure();
+  //Emit the "before" block ops, except the scf.condition terminator
+  for (auto& beforeOp : *whileOp.getBeforeBody()) {
+    if (!isa<scf::ConditionOp>(beforeOp)) {
+      if (failed(emitter.emitOperation(beforeOp, /*trailingSemicolon=*/true)))
+        return failure();
+    }
   }
 
+  // condition op has a bool condition operand.
+  // If true, forward remaining arguments to after block and continue.
+  // If false, forward to results and break.
+  emitter << "if(";
+  if(failed(emitter.emitValue(condOp.getCondition())))
+    return failure();
+  emitter << ") {\n";
+  emitter.indent();
   for (auto pair : llvm::zip(whileOp.getAfterArguments(), whileOp.getConditionOp().getArgs())) {
     // After args are initialized to the args passed by ConditionOp 
-    if(failed(emitter.emitType(whileOp.getLoc(), std::get<0>(pair).getType())))
-      return failure();
-    emitter << ' ' << emitter.getOrCreateName(std::get<0>(pair)) << " = ";
+    emitter << emitter.getOrCreateName(std::get<0>(pair)) << " = ";
     if(failed(emitter.emitValue(std::get<1>(pair))))
       return failure();
     emitter << ";\n";
   }
-
-  //Emit the "after" block(s)
-  for (auto& afterOp : whileOp.getAfter().getOps()) {
-    if (failed(emitter.emitOperation(afterOp, /*trailingSemicolon=*/true)))
+  emitter.unindent();
+  emitter << "}\n";
+  emitter << "else {\n";
+  emitter.indent();
+  for (auto pair : llvm::zip(whileOp.getResults(), whileOp.getConditionOp().getArgs())) {
+    emitter << emitter.getOrCreateName(std::get<0>(pair)) << " = ";
+    if(failed(emitter.emitValue(std::get<1>(pair))))
       return failure();
+    emitter << ";\n";
   }
-
+  emitter << "break;\n";
+  emitter.unindent();
+  emitter << "}";
+  //Emit the "after" block ops, except the scf.yield terminator
+  for (auto& afterOp : *whileOp.getAfterBody()) {
+    if (!isa<scf::YieldOp>(afterOp)) {
+      if (failed(emitter.emitOperation(afterOp, /*trailingSemicolon=*/true)))
+        return failure();
+    }
+  }
   // Copy yield operands into before block args at the end of a loop iteration.
-  for (auto pair : llvm::zip(whileOp.getBeforeArguments(), whileOp.getYieldOp()->getOperands())) {
+  for (auto pair : llvm::zip(whileOp.getBeforeArguments(), yieldOp.getOperands())) {
     BlockArgument iterArg = std::get<0>(pair);
     Value operand = std::get<1>(pair);
     emitter << emitter.getOrCreateName(iterArg) << " = ";
@@ -1401,22 +1424,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::WhileOp whil
       return failure();
     emitter << ";\n";
   }
-
   emitter.unindent();
-  emitter << "}\n";
-  return success();
-}
-
-static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::ConditionOp condOp) {
-  //The condition value should already be in scope. Just break out of loop if it's falsey.
-  emitter << "if(";
-  if(failed(emitter.emitValue(condOp.getCondition())))
-    return failure();
-  emitter << ") {\n";
-  emitter << "}\n";
-  emitter << "else {\n";
-  //Condition false: breaking out of loop
-  emitter << "break;\n";
   emitter << "}\n";
   return success();
 }
@@ -2414,6 +2422,8 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
     if(t.isIndex())
       return "numpy.uint64";
     //Note: treating MLIR "signless" integer types as equivalent to unsigned NumPy integers.
+    if(t.isSignlessInteger(1) || t.isUnsignedInteger(1))
+      return "numpy.bool";
     if(t.isSignlessInteger(8) || t.isUnsignedInteger(8))
       return "numpy.uint8";
     if(t.isSignlessInteger(16) || t.isUnsignedInteger(16))
@@ -2443,6 +2453,8 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
     if(t.isIndex())
       return "ctypes.c_ulong";
     //Note: treating MLIR "signless" integer types as equivalent to unsigned NumPy integers.
+    if(t.isSignlessInteger(1) || t.isUnsignedInteger(1))
+      return "ctypes.c_bool";
     if(t.isSignlessInteger(8) || t.isUnsignedInteger(8))
       return "ctypes.c_ubyte";
     if(t.isSignlessInteger(16) || t.isUnsignedInteger(16))
@@ -2570,12 +2582,11 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
         py_os << "param" << i << " = param_flat" << i << "\n";
       }
       else {
-        //Wrap scalar primitives in 1D NumPy array.
-        //This gives it the correct type, and lets us use the same ndarray CTypes API as memrefs.
-        std::string numpyDType = getNumpyType(paramType);
-        if(!numpyDType.size())
-          return functionOp.emitError("Could not determine corresponding numpy type for scalar type");
-        py_os << "param" << i << " = numpy.array(param" << i << ", dtype=" << numpyDType << ", ndmin=1)\n";
+        // Ensure scalars have the correct type.
+        std::string ctypesType = getCtypesType(paramType);
+        if(!ctypesType.size())
+          return functionOp.emitError("Could not determine corresponding ctypes type for scalar");
+        py_os << "param" << i << " = " << ctypesType << "(param" << i << ")\n";
       }
     }
   }
@@ -2652,10 +2663,14 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, func::FuncOp func
       //Numpy array (or a scalar from a numpy array)
       py_os << "ctypes.pointer(rt.get_ranked_memref_descriptor(param" << i << "))";
     }
-    else
+    else if(isa<LLVM::LLVMStructType>(paramType))
     {
-      //Numpy array (or a scalar from a numpy array)
+      //Structs are flattened to 1D Numpy arrays
       py_os << "param" << i << ".ctypes.data_as(ctypes.c_void_p)";
+    }
+    else {
+      //Scalar
+      py_os << "param" << i;
     }
   }
   py_os << ")\n";
@@ -3582,7 +3597,7 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
           .Case<func::CallOp, func::ConstantOp, func::ReturnOp>(
               [&](auto op) { return printOperation(*this, op); })
           // SCF ops.
-          .Case<scf::ForOp, scf::WhileOp, scf::IfOp, scf::YieldOp, scf::ConditionOp>(
+          .Case<scf::ForOp, scf::WhileOp, scf::IfOp, scf::YieldOp>(
               [&](auto op) { return printOperation(*this, op); })
           // Arithmetic ops: general
           .Case<arith::ConstantOp, arith::FPToUIOp, arith::NegFOp, arith::CmpFOp, arith::CmpIOp, arith::SelectOp, arith::IndexCastOp, arith::SIToFPOp, arith::MinNumFOp, arith::MaxNumFOp>(

@@ -7,9 +7,11 @@ moduleText = """
 module {
   func.func @plus_norm(%x: tensor<?xf64>, %y: tensor<?xf64>) -> (tensor<?xf64>, f64) {
     %c0 = arith.constant 0 : index
-    %x_plus_y = linalg.add ins(%x, %y : tensor<?xf64>, tensor<?xf64>) outs(%y: tensor<?xf64>) -> tensor<?xf64>
-    %temp = bufferization.alloc_tensor() : tensor<f64>
-    %sumTensor = linalg.dot ins(%x_plus_y, %x_plus_y : tensor<?xf64>, tensor<?xf64>) outs(%temp: tensor<f64>) -> tensor<f64>
+    %n = tensor.dim %y, %c0 : tensor<?xf64>
+    %alloc1 = tensor.empty (%n) : tensor<?xf64>
+    %x_plus_y = linalg.add ins(%x, %y : tensor<?xf64>, tensor<?xf64>) outs(%alloc1: tensor<?xf64>) -> tensor<?xf64>
+    %alloc2 = tensor.empty () : tensor<f64>
+    %sumTensor = linalg.dot ins(%x_plus_y, %x_plus_y : tensor<?xf64>, tensor<?xf64>) outs(%alloc2: tensor<f64>) -> tensor<f64>
     %sum = tensor.extract %sumTensor[] : tensor<f64>
     %norm = math.sqrt %sum : f64
     return %x_plus_y, %norm : tensor<?xf64>, f64
@@ -26,7 +28,11 @@ def main():
     backend = KokkosBackend.KokkosBackend(decompose_tensors=True)
     module_kokkos = backend.compile(moduleText)
 
+    print("x:", x)
+    print("y:", y)
+
     (x_plus_y, norm) = module_kokkos.plus_norm(x, y)
+
     print("x + y:", x_plus_y)
     print("norm(x+y):", norm)
     correct = x + y
