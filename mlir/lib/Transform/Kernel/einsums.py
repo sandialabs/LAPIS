@@ -30,9 +30,17 @@ def main(input_filename=None,
         spec, *list(inputs_to_shapes.values()), optimize=opt)
 
     new_specs = ""
+    contract_path = []
     for contraction in opt_expression.contraction_list[:-1]:
-        new_specs += (contraction[2] + "\n")
+        spec = contraction[2]
+        order = contraction[0].__str__()
+        new_specs += ("einsum(" + spec + ")" + " order" + order + "\n")
+        contract_path.append(contraction[0])
     new_specs += opt_expression.contraction_list[-1][2]
+    new_specs += " "
+    new_specs += opt_expression.contraction_list[-1][0].__str__()
+
+    print(new_specs)
 
     if os.path.exists(output_filename) and not overwrite:
         raise ValueError(

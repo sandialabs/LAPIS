@@ -20,23 +20,24 @@ namespace kernel {
 struct KernelFusionDriver : impl::KernelFusionDriverBase<KernelFusionDriver> {
   using KernelFusionDriverBase::KernelFusionDriverBase;
 
-  void getOptimalContractionOrder(func::FuncOp func) {
+  EinsumSequence 
+  getOptimalContractionOrder(func::FuncOp func) {
     std::vector<EinsumSpecification> einsums;
     for (linalg::LinalgOp laOp : func.getOps<linalg::LinalgOp>())
       einsums.push_back(genericToEinsumSpec(laOp));
 
     FusedEinsum fused = fuseEinsums(einsums);
-    PythonOptimizer opt(fused);
-    opt.optimize();
+    BruteForceOptimizer optimizer(fused);
+    optimizer.optimize();
+
+    return optimizer.optimizedEinsumSequence;
   }
 
   // TODO:
   void reorderGenerics(func::FuncOp func) {
-    // dump einsum order to a file
-    getOptimalContractionOrder(func);
-
-    // use dumped einsum order to reconstruct generics
-    // maybe compare to old einsum to see if anything changed?
+    EinsumSequence optimalOrder =
+        getOptimalContractionOrder(func);
+    buildGenericsFromEinsums(func, optimalOrder);
   }
 
   void runOnOperation() override {
@@ -54,9 +55,13 @@ struct KernelFusionDriver : impl::KernelFusionDriverBase<KernelFusionDriver> {
       return signalPassFailure();
 
     // reorder linalg.generics in each fused kernel
-    for (func::FuncOp f : module.getOps<func::FuncOp>()) {
-      if (f.getSymName() == "main") continue;
+    for (func::FuncOp f :
+         llvm::make_early_inc_range(module.getOps<func::FuncOp>())) {
+      if (f.getSymName() == "main")
+        continue;
       reorderGenerics(f);
+
+      f.erase();
     }
   }
 };
