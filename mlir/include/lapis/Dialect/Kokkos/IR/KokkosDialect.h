@@ -55,7 +55,7 @@ MemorySpace getMemSpace(Value v);
 // for the global view.
 MemorySpace getMemSpace(memref::GlobalOp global);
 
-// Is the global memref used
+// Is the global memref used by at least one op?
 bool isGlobalUsed(memref::GlobalOp global);
 
 // Get the parallel nesting depth of the given Op
@@ -89,6 +89,18 @@ Type getStructElementType(LLVM::LLVMStructType st);
 // If the above function returns true, count the total number of elements in the struct:
 // sizeof(structType) / sizeof(elemType)
 int getStructElementCount(LLVM::LLVMStructType st);
+
+// Get the size in bytes to represent a built-in (primitive) type t.
+// This includes integers and floats but also (TODO: check) structs and complex types.
+// Returns 0 if a size is variable or otherwise not known.
+size_t getBuiltinTypeSize(Type t, Operation* op);
+
+// Returns true if the non-padded size in bytes for this memref
+// type is known statically. Will return false if mrt has dynamic dimensions, or uses
+// platform-specific vector types.
+// 
+// If true, also sets size to this size.
+bool memrefSizeInBytesKnown(MemRefType mrt, size_t& size, Operation* op);
 
 } // namespace kokkos
 } // namespace mlir

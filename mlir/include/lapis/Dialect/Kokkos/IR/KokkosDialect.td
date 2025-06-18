@@ -35,7 +35,8 @@ def Kokkos_MemorySpace : I64EnumAttr<
     [
       I64EnumAttrCase<"Host", 0, "host">,
       I64EnumAttrCase<"Device", 1, "device">,
-      I64EnumAttrCase<"DualView", 2, "dualview">
+      I64EnumAttrCase<"DualView", 2, "dualview">,
+      I64EnumAttrCase<"Scratch", 3, "scratch">
     ]> {
   let cppNamespace = "::mlir::kokkos";
 }
@@ -313,6 +314,34 @@ def YieldOp : Kokkos_Op<"yield", [Pure, ReturnLike, Terminator,
   
   let assemblyFormat = 
       [{  attr-dict ($results^ `:` type($results))? }];
+}
+
+def AllocScratchOp : Kokkos_Op<"alloc_scratch">
+{
+  let summary = "Allocate Kokkos team-level scratch view";
+  let description = [{ 
+    "kokkos.alloc_scratch" allocates a statically-sized scratch view.
+    Each scratch view is aligned to the size of its elements.
+  }];
+  // note: type and shape information is all in memref's type
+  let arguments = (ins IndexAttr:$offset);
+  let results = (outs AnyMemRef:$memref);
+  let extraClassDeclaration = [{
+    uint64_t getScratchBegin();
+    uint64_t getScratchEnd();
+    MemRefType getType() { return ::llvm::cast<MemRefType>(getResult().getType()); }
+  }];
+
+  let hasVerifier = 1;
+}
+
+def DeallocScratchOp : Kokkos_Op<"dealloc_scratch">
+{
+  let summary = "Deallocate Kokkos team-level scratch view";
+  let description = [{ 
+    "kokkos.dealloc_scratch" releases a scratch view that was previously allocated by "kokkos.alloc_scratch". 
+  }];
+  let arguments = (ins AnyMemRef:$memref);
 }
 
 #endif

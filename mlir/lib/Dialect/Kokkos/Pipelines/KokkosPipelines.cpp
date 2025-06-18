@@ -127,9 +127,6 @@ void mlir::kokkos::buildSparseKokkosCompiler(
 
   pm.addNestedPass<func::FuncOp>(createConvertLinalgToParallelLoopsPass());
 
-// Not needed anymore?
-//  pm.addNestedPass<func::FuncOp>(createConvertVectorToSCFPass());
-
   pm.addNestedPass<func::FuncOp>(arith::createArithExpandOpsPass());
   pm.addPass(memref::createExpandStridedMetadataPass());
   pm.addPass(createLowerAffinePass());
@@ -143,7 +140,60 @@ void mlir::kokkos::buildSparseKokkosCompiler(
   pm.addPass(createKokkosLoopMappingPass());
   //pm.addPass(createKokkosMemorySpaceAssignmentPass());
   pm.addPass(createKokkosDualViewManagementPass());
+}
 
+void mlir::kokkos::buildTeamLevelKokkosCompiler(OpPassManager &pm, const TeamLevelCompilerOptions& /*options*/) {
+  pm.addPass(createInlinerPass());
+
+  // Rewrite named linalg ops into generic ops and apply fusion.
+  pm.addNestedPass<func::FuncOp>(createLinalgGeneralizeNamedOpsPass());
+
+  pm.addPass(createConvertShapeToStandardPass());
+
+  // Storage specifier lowering and bufferization wrap-up.
+  pm.addPass(createStorageSpecifierToLLVMPass());
+
+  pm.addNestedPass<func::FuncOp>(memref::createExpandReallocPass());
+
+#ifdef LAPIS_HAS_TORCH_MLIR
+  pm.addNestedPass<func::FuncOp>(torch::RefBackend::createGeneralizeTensorPadPass());
+  pm.addNestedPass<func::FuncOp>(torch::RefBackend::createGeneralizeTensorConcatPass());
+  pm.addNestedPass<func::FuncOp>(torch::TMTensor::createTMTensorBufferizePass());
+#endif
+
+  // All one-shot bufferization options are copied from the TM linalg-on-tensors pipeline
+  bufferization::OneShotBufferizationOptions oneShotBuffOptions;
+  oneShotBuffOptions.copyBeforeWrite = true;
+  oneShotBuffOptions.bufferizeFunctionBoundaries = true;
+  oneShotBuffOptions.setFunctionBoundaryTypeConversion(bufferization::LayoutMapOption::IdentityLayoutMap);
+  pm.addPass(createOneShotBufferizePass(oneShotBuffOptions));
+
+#ifdef LAPIS_HAS_TORCH_MLIR
+  pm.addPass(torch::RefBackend::createMLProgramBufferizePass());
+#endif
+
+  pm.addNestedPass<func::FuncOp>(bufferization::createFinalizingBufferizePass());
+  //pm.addNestedPass<func::FuncOp>(bufferization::createBufferDeallocationPass());
+
+#ifdef LAPIS_HAS_TORCH_MLIR
+  pm.addNestedPass<func::FuncOp>(torch::TMTensor::createTMTensorToLoopsPass());
+#endif
+
+  pm.addNestedPass<func::FuncOp>(createConvertLinalgToParallelLoopsPass());
+
+  pm.addNestedPass<func::FuncOp>(arith::createArithExpandOpsPass());
+  pm.addPass(memref::createExpandStridedMetadataPass());
+  pm.addPass(createLowerAffinePass());
+
+  pm.addNestedPass<func::FuncOp>(createConvertComplexToStandardPass());
+  // Ensure all casts are realized.
+  pm.addPass(createReconcileUnrealizedCastsPass());
+
+  // Finally, lower scf/memref to kokkos
+  pm.addNestedPass<func::FuncOp>(createMemrefResultsToParamsPass());
+  pm.addNestedPass<func::FuncOp>(createMemrefToKokkosScratchPass());
+  pm.addPass(createParallelUnitStepPass());
+  pm.addPass(createKokkosLoopMappingPass(true));
 }
 
 //===----------------------------------------------------------------------===//
@@ -156,5 +206,10 @@ void mlir::kokkos::registerKokkosPipelines() {
       "The standard pipeline for taking sparsity-agnostic IR using the"
       " sparse-tensor type, and lowering it to dialects compatible with the Kokkos emitter",
       buildSparseKokkosCompiler);
+
+  PassPipelineRegistration<TeamLevelCompilerOptions>(
+      "team-compiler-kokkos",
+      "The pipeline for compiling dense models to team-level functions",
+      buildTeamLevelKokkosCompiler);
 }
 

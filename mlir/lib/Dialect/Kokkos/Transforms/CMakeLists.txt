@@ -1,5 +1,8 @@
 add_mlir_dialect_library(MLIRKokkosTransforms
   KokkosPasses.cpp
+
+  MemrefResultsToParams.cpp
+  MemrefToKokkosScratch.cpp
   ParallelUnitStep.cpp
   KokkosLoopMapping.cpp
   KokkosMemorySpaceAssignment.cpp

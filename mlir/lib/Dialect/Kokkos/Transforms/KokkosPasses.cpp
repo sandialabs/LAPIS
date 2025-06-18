@@ -17,10 +17,11 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 namespace mlir {
+#define GEN_PASS_DEF_MEMREFRESULTSTOPARAMS
+#define GEN_PASS_DEF_MEMREFTOKOKKOSSCRATCH
 #define GEN_PASS_DEF_PARALLELUNITSTEP
 #define GEN_PASS_DEF_KOKKOSLOOPMAPPING
 #define GEN_PASS_DEF_KOKKOSMEMORYSPACEASSIGNMENT
-#define GEN_PASS_DEF_SPARSEASSEMBLERDIRECTOUT
 
 #include "lapis/Dialect/Kokkos/Transforms/Passes.h.inc"
 } // namespace mlir
@@ -29,6 +30,34 @@ using namespace mlir;
 using namespace mlir::kokkos;
 
 namespace {
+
+struct MemrefResultsToParamsPass
+    : public impl::MemrefResultsToParamsBase<MemrefResultsToParamsPass> {
+
+  MemrefResultsToParamsPass() = default;
+  MemrefResultsToParamsPass(const MemrefResultsToParamsPass& pass) = default;
+
+  void runOnOperation() override {
+    auto *ctx = &getContext();
+    RewritePatternSet patterns(ctx);
+    populateMemrefResultsToParamsPatterns(patterns);
+    (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+  }
+};
+
+struct MemrefToKokkosScratchPass 
+    : public impl::MemrefToKokkosScratchBase<MemrefToKokkosScratchPass> {
+
+  MemrefToKokkosScratchPass() = default;
+  MemrefToKokkosScratchPass(const MemrefToKokkosScratchPass& pass) = default;
+
+  void runOnOperation() override {
+    auto *ctx = &getContext();
+    RewritePatternSet patterns(ctx);
+    populateMemrefToKokkosScratchPatterns(patterns);
+    (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+  }
+};
 
 struct ParallelUnitStepPass
     : public impl::ParallelUnitStepBase<ParallelUnitStepPass> {
@@ -49,11 +78,12 @@ struct KokkosLoopMappingPass
 
   KokkosLoopMappingPass() = default;
   KokkosLoopMappingPass(const KokkosLoopMappingPass& pass) = default;
+  KokkosLoopMappingPass(const KokkosLoopMappingOptions& options) : impl::KokkosLoopMappingBase<KokkosLoopMappingPass>(options) {}
 
   void runOnOperation() override {
     auto *ctx = &getContext();
     RewritePatternSet patterns(ctx);
-    populateKokkosLoopMappingPatterns(patterns);
+    populateKokkosLoopMappingPatterns(patterns, this->teamLevel);
     (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
   }
 };
@@ -71,20 +101,16 @@ struct KokkosMemorySpaceAssignmentPass
     (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
   }
 };
+}
 
-struct SparseAssemblerDirectOutPass
-    : public impl::SparseAssemblerDirectOutBase<SparseAssemblerDirectOutPass> {
+std::unique_ptr<Pass> mlir::createMemrefResultsToParamsPass()
+{
+  return std::make_unique<MemrefResultsToParamsPass>();
+}
 
-  SparseAssemblerDirectOutPass() = default;
-  SparseAssemblerDirectOutPass(const SparseAssemblerDirectOutPass& pass) = default;
-
-  void runOnOperation() override {
-    auto *ctx = &getContext();
-    RewritePatternSet patterns(ctx);
-    populateSparseAssembler(patterns, /* directOut */ true);
-    (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
-  }
-};
+std::unique_ptr<Pass> mlir::createMemrefToKokkosScratchPass()
+{
+  return std::make_unique<MemrefToKokkosScratchPass>();
 }
 
 std::unique_ptr<Pass> mlir::createParallelUnitStepPass()
@@ -92,18 +118,15 @@ std::unique_ptr<Pass> mlir::createParallelUnitStepPass()
   return std::make_unique<ParallelUnitStepPass>();
 }
 
-std::unique_ptr<Pass> mlir::createKokkosLoopMappingPass()
+std::unique_ptr<Pass> mlir::createKokkosLoopMappingPass(bool teamLevel)
 {
-  return std::make_unique<KokkosLoopMappingPass>();
+  KokkosLoopMappingOptions klmo;
+  klmo.teamLevel = teamLevel;
+  return std::make_unique<KokkosLoopMappingPass>(klmo);
 }
 
 std::unique_ptr<Pass> mlir::createKokkosMemorySpaceAssignmentPass()
 {
   return std::make_unique<KokkosMemorySpaceAssignmentPass>();
-}
-
-std::unique_ptr<Pass> mlir::createSparseAssemblerDirectOutPass()
-{
-  return std::make_unique<SparseAssemblerDirectOutPass>();
 }
 

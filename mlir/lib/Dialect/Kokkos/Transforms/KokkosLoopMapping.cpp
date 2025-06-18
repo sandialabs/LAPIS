@@ -791,9 +791,13 @@ static LogicalResult mapTeamNestedLoops(RewriterBase &rewriter,
 }
 
 struct KokkosLoopRewriter : public OpRewritePattern<scf::ParallelOp> {
+private:
+  bool teamLevel;
+public:
+
   using OpRewritePattern<scf::ParallelOp>::OpRewritePattern;
 
-  KokkosLoopRewriter(MLIRContext *context) : OpRewritePattern(context) {}
+  KokkosLoopRewriter(MLIRContext *context, bool teamLevel_) : OpRewritePattern(context), teamLevel(teamLevel_) {}
 
   LogicalResult matchAndRewrite(scf::ParallelOp op,
                                 PatternRewriter &rewriter) const override {
@@ -936,6 +940,6 @@ struct KokkosLoopRewriter : public OpRewritePattern<scf::ParallelOp> {
 
 } // namespace
 
-void mlir::populateKokkosLoopMappingPatterns(RewritePatternSet &patterns) {
-  patterns.add<KokkosLoopRewriter>(patterns.getContext());
+void mlir::populateKokkosLoopMappingPatterns(RewritePatternSet &patterns, bool teamLevel) {
+  patterns.add<KokkosLoopRewriter>(patterns.getContext(), teamLevel);
 }
