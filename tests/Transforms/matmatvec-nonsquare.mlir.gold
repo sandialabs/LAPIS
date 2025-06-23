@@ -1,0 +1,32 @@
+#map = affine_map<(d0, d1) -> (d1, d0)>
+#map1 = affine_map<(d0, d1) -> (d0)>
+#map2 = affine_map<(d0, d1) -> (d1)>
+#map3 = affine_map<(d0, d1) -> (d0, d1)>
+module {
+  func.func @mmv_reordered(%arg0: tensor<10x10xf64>, %arg1: tensor<10x4096xf64>, %arg2: tensor<4096xf64>, %arg3: tensor<10xf64>) -> tensor<10xf64> {
+    %0 = tensor.empty() : tensor<10xf64>
+    %1 = linalg.generic {indexing_maps = [#map, #map1, #map2], iterator_types = ["reduction", "parallel"]} ins(%arg1, %arg2 : tensor<10x4096xf64>, tensor<4096xf64>) outs(%0 : tensor<10xf64>) {
+    ^bb0(%in: f64, %in_0: f64, %out: f64):
+      %4 = arith.mulf %in, %in_0 : f64
+      %5 = arith.addf %out, %4 : f64
+      linalg.yield %5 : f64
+    } -> tensor<10xf64>
+    %2 = tensor.empty() : tensor<10xf64>
+    %3 = linalg.generic {indexing_maps = [#map3, #map2, #map1], iterator_types = ["parallel", "reduction"]} ins(%arg0, %1 : tensor<10x10xf64>, tensor<10xf64>) outs(%2 : tensor<10xf64>) {
+    ^bb0(%in: f64, %in_0: f64, %out: f64):
+      %4 = arith.mulf %in, %in_0 : f64
+      %5 = arith.addf %out, %4 : f64
+      linalg.yield %5 : f64
+    } -> tensor<10xf64>
+    return %3 : tensor<10xf64>
+  }
+  func.func @main() -> tensor<10xf64> {
+    %0 = tensor.empty() : tensor<10x10xf64>
+    %1 = tensor.empty() : tensor<10x4096xf64>
+    %2 = tensor.empty() : tensor<4096xf64>
+    %3 = tensor.empty() : tensor<10xf64>
+    %4 = call @mmv_reordered(%0, %1, %2, %3) : (tensor<10x10xf64>, tensor<10x4096xf64>, tensor<4096xf64>, tensor<10xf64>) -> tensor<10xf64>
+    return %4 : tensor<10xf64>
+  }
+}
+
