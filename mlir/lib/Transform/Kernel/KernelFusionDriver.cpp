@@ -33,11 +33,10 @@ struct KernelFusionDriver : impl::KernelFusionDriverBase<KernelFusionDriver> {
     return optimizer.optimizedEinsumSequence;
   }
 
-  // TODO:
-  void reorderGenerics(func::FuncOp func) {
+  bool reorderGenerics(func::FuncOp func) {
     EinsumSequence optimalOrder =
         getOptimalContractionOrder(func);
-    buildGenericsFromEinsums(func, optimalOrder);
+    return buildGenericsFromEinsums(func, optimalOrder);
   }
 
   void runOnOperation() override {
@@ -57,11 +56,8 @@ struct KernelFusionDriver : impl::KernelFusionDriverBase<KernelFusionDriver> {
     // reorder linalg.generics in each fused kernel
     for (func::FuncOp f :
          llvm::make_early_inc_range(module.getOps<func::FuncOp>())) {
-      if (f.getSymName() == "main")
-        continue;
-      reorderGenerics(f);
-
-      f.erase();
+      if (reorderGenerics(f))
+        f.erase();
     }
   }
 };

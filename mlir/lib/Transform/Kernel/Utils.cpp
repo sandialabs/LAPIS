@@ -14,14 +14,9 @@
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace mlir;
-
-//===----------------------------------------------------------------------===//
-// Linalg -> einsum helpers
-//===----------------------------------------------------------------------===//
 
 // {{{ generic -> einsum
 
@@ -70,9 +65,6 @@ typedef struct EinsumSpecification {
   void print(llvm::raw_ostream &stream);
   void print();
 
-  void dumpToFile(std::string filename);
-  void dumpToFile();
-
   void setDimTypes();
 
   linalg::LinalgOp getDefiningOp() { return definingOp; }
@@ -99,18 +91,6 @@ void EinsumSpecification::print(llvm::raw_ostream &stream) {
 
 void EinsumSpecification::print() { print(llvm::errs()); }
 
-void EinsumSpecification::dumpToFile(std::string filename) {
-  std::error_code EC;
-  llvm::raw_fd_ostream fstream(filename, EC,
-                               llvm::sys::fs::OpenFlags::OF_Delete);
-  fstream << this->stringify() << "\n";
-  for (auto arg : inputs)
-  fstream << arg.stringify() << "\n";
-  fstream << output.stringify() << "\n";
-}
-
-void EinsumSpecification::dumpToFile() { dumpToFile("./unoptimized.einsum"); }
-
 typedef struct FusedEinsum {
   std::vector<EinsumSpecification> containedEinsums;
   std::vector<std::tuple<int>> contractPath;
@@ -122,8 +102,6 @@ typedef struct FusedEinsum {
   void print() { print(llvm::errs()); }
   void print(llvm::raw_fd_ostream &stream) { einsum.print(stream); }
 
-  void dumpToFile() { dumpToFile("unoptimizedFused.einsum"); }
-  void dumpToFile(std::string filename) { einsum.dumpToFile(filename); }
 } FusedEinsum;
 
 void printGenericAsEinsum(linalg::LinalgOp generic, llvm::raw_ostream &stream) {
@@ -348,8 +326,6 @@ FusedEinsum fuseEinsums(std::vector<EinsumSpecification> einsums) {
           fusedSpec.inputs = newInputs;
           fusedSpec.output = outer->output;
 
-          fusedSpec.dumpToFile();
-
           fusedEinsum.einsum = fusedSpec;
         }
       }
@@ -370,7 +346,9 @@ typedef struct EinsumSequence {
 
 // {{{ einsum -> generic
 
-void buildGenericsFromEinsums(func::FuncOp func, EinsumSequence optimalOrder) {
+bool buildGenericsFromEinsums(func::FuncOp func, EinsumSequence optimalOrder) {
+  if (llvm::range_size(func.getOps<linalg::GenericOp>()) == 0) return false;
+
   OpBuilder builder(func);
   builder.setInsertionPoint(func);
 
@@ -379,8 +357,9 @@ void buildGenericsFromEinsums(func::FuncOp func, EinsumSequence optimalOrder) {
   FunctionType funcType = func.getFunctionType();
 
   if (funcType.getNumResults() > 1) {
-    llvm::errs() << "Only a single return value is supported at this time\n";
-    return;
+    llvm::errs() << "Only a single return value is supported at this time. ";
+    llvm::errs() << "Generics will not be reordered.\n";
+    return false;
   }
 
   func::FuncOp newFunc = builder.create<func::FuncOp>(
@@ -395,7 +374,7 @@ void buildGenericsFromEinsums(func::FuncOp func, EinsumSequence optimalOrder) {
 
   SmallVector<Value> argList;
   for (BlockArgument arg : newFunc.getBody().getArguments())
-    argList.push_back(Value(arg));
+  argList.push_back(Value(arg));
 
   size_t einsumCounter = 0;
   for (EinsumSpecification einsum : optimalOrder.sequence) {
@@ -410,12 +389,12 @@ void buildGenericsFromEinsums(func::FuncOp func, EinsumSequence optimalOrder) {
     // get inputs and outputs
     SmallVector<Value> inputs;
     for (int idx : optimalOrder.contractPath[einsumCounter])
-      inputs.push_back(argList[idx]);
+    inputs.push_back(argList[idx]);
 
     SmallVector<Value> outputs;
     builder.setInsertionPointToEnd(&newFunc.getBody().front());
     outputs.push_back(builder.create<tensor::EmptyOp>(
-        newFunc.getLoc(), outputShape, elementType));
+      newFunc.getLoc(), outputShape, elementType));
 
     // get indexing maps
     std::map<char, AffineExpr> allAffineDims;
@@ -428,7 +407,7 @@ void buildGenericsFromEinsums(func::FuncOp func, EinsumSequence optimalOrder) {
     for (EinsumArg input : einsum.inputs) {
       std::vector<AffineExpr> indexingMapOutputDims;
       for (char dim : input.spec)
-        indexingMapOutputDims.push_back(allAffineDims[dim]);
+      indexingMapOutputDims.push_back(allAffineDims[dim]);
 
       indexingMaps.push_back(
         AffineMap::get(einsum.allDims.size(), 0, indexingMapOutputDims, ctx));
@@ -436,9 +415,9 @@ void buildGenericsFromEinsums(func::FuncOp func, EinsumSequence optimalOrder) {
 
     std::vector<AffineExpr> indexingMapOutputDims;
     for (char dim : einsum.output.spec)
-      indexingMapOutputDims.push_back(allAffineDims[dim]);
+    indexingMapOutputDims.push_back(allAffineDims[dim]);
     indexingMaps.push_back(
-        AffineMap::get(einsum.allDims.size(), 0, indexingMapOutputDims, ctx));
+      AffineMap::get(einsum.allDims.size(), 0, indexingMapOutputDims, ctx));
 
     // get iterator types
     SmallVector<utils::IteratorType> iteratorTypes;
@@ -473,8 +452,8 @@ void buildGenericsFromEinsums(func::FuncOp func, EinsumSequence optimalOrder) {
 
     Value result = generic.getResult(0);
     int resultStoreIndex =
-        *std::min_element(optimalOrder.contractPath[einsumCounter].begin(),
-                          optimalOrder.contractPath[einsumCounter].end());
+      *std::min_element(optimalOrder.contractPath[einsumCounter].begin(),
+                        optimalOrder.contractPath[einsumCounter].end());
 
     for (int argIdx : optimalOrder.contractPath[einsumCounter]) {
       argList.erase(std::find(argList.begin(), argList.end(), argList[argIdx])); 
@@ -499,51 +478,13 @@ void buildGenericsFromEinsums(func::FuncOp func, EinsumSequence optimalOrder) {
       }
     }
   });
+
+  return true;
 }
 
 // }}}
 
 // {{{ optimizers
-
-typedef struct PythonOptimizer {
-  FusedEinsum unoptimizedEinsum;
-  std::string optimizer;
-  std::string input_filename;
-  std::string output_filename;
-
-  PythonOptimizer(FusedEinsum einsum, std::string opt, std::string in_file,
-                  std::string out_file)
-    : unoptimizedEinsum(einsum), optimizer(opt), input_filename(in_file),
-    output_filename(out_file) {}
-
-  PythonOptimizer(FusedEinsum einsum, std::string opt, std::string in_file)
-    : unoptimizedEinsum(einsum), optimizer(opt), input_filename(in_file),
-    output_filename("optimized.einsum") {}
-
-  PythonOptimizer(FusedEinsum einsum)
-    : unoptimizedEinsum(einsum), optimizer("opt_einsum"),
-    input_filename("unoptimized.einsum"),
-    output_filename("optimized.einsum") {}
-
-  void optimize();
-
-} PythonOptimizer;
-
-void PythonOptimizer::optimize() {
-  std::string cmd = "";
-  std::string lapis_src = getenv("LAPIS_SRC");
-  cmd += "python3 " + lapis_src + "/mlir/lib/Transform/Kernel/einsums.py ";
-  cmd += "-i " + input_filename + " ";
-  cmd += "-o " + output_filename + " ";
-  cmd += "-f ";
-  cmd += (optimizer == "cotengra") ? "-c" : "";
-
-  int ret = system(cmd.c_str());
-  if (ret) {
-    llvm::errs() << "ERROR: Python script was unable to execute. Return code: ";
-    llvm::errs() << ret << "\n";
-  }
-}
 
 typedef struct BruteForceOptimizer {
   FusedEinsum unoptimizedEinsum;
@@ -561,26 +502,36 @@ std::vector<char> getSharedIndices(EinsumArg iarg, EinsumArg jarg) {
   std::set<char> jindices(jarg.spec.begin(), jarg.spec.end());
 
   std::vector<char> sharedIndices;
-  std::set_intersection(iindices.begin(), iindices.end(), jindices.begin(),
-                        jindices.end(), std::back_inserter(sharedIndices));
+  std::set_intersection(
+    iindices.begin(), iindices.end(), 
+    jindices.begin(), jindices.end(), 
+    std::back_inserter(sharedIndices)
+  );
 
   return sharedIndices;
 }
 
 double estimateCost(EinsumArg iarg, EinsumArg jarg,
                     std::vector<char> sharedIndices) {
-
   double cost = 1.0;
-  for (char sharedIdx : sharedIndices) {
+  for (char sharedIdx : sharedIndices)
     cost *= iarg.shape[iarg.spec.find(sharedIdx)];
-  }
 
-  for (char idx : iarg.spec) {
-    auto findResult =
-      std::find(sharedIndices.begin(), sharedIndices.end(), idx);
-    if (findResult == sharedIndices.end()) {
+  std::set<char> allIndices(iarg.spec.begin(), iarg.spec.end());
+  allIndices.insert(jarg.spec.begin(), jarg.spec.end());
+
+  std::vector<char> disjointIndices;
+  std::set_difference(
+    allIndices.begin(), allIndices.end(), 
+    sharedIndices.begin(), sharedIndices.end(),
+    std::back_inserter(disjointIndices)
+  );
+
+  for (char idx : disjointIndices) {
+    if (iarg.spec.find(idx) != std::string::npos)
       cost *= iarg.shape[iarg.spec.find(idx)];
-    }
+    else if (jarg.spec.find(idx) != std::string::npos)
+      cost *= jarg.shape[jarg.spec.find(idx)];
   }
 
   return cost;
@@ -589,7 +540,6 @@ double estimateCost(EinsumArg iarg, EinsumArg jarg,
 SmallVector<int> getResultShape(EinsumArg iarg, EinsumArg jarg,
                                 std::string resultIndices) {
   SmallVector<int> shape;
-
   for (char resultIdx : resultIndices) {
     auto ipos = iarg.spec.find(resultIdx);
     if (ipos != std::string::npos) {
@@ -626,6 +576,33 @@ std::string getResultIndices(EinsumArg iarg, EinsumArg jarg,
   return spec;
 }
 
+bool checkLegalContraction(EinsumArg iarg, EinsumArg jarg,
+                           std::vector<char> sharedIndices,
+                           std::vector<char> reductionDims) {
+
+  std::vector<char> reducedIndices;
+  std::set_intersection(
+    sharedIndices.begin(), sharedIndices.end(),
+    reductionDims.begin(), reductionDims.end(),
+    std::back_inserter(reducedIndices)
+  );
+
+  if (reducedIndices.size() == 0) return false;
+
+  for (char idx : reducedIndices) {
+    auto ipos = iarg.spec.find(idx);
+    auto jpos = jarg.spec.find(idx);
+
+    if ((ipos != std::string::npos) && (jpos != std::string::npos)) {
+      if (iarg.shape[ipos] != jarg.shape[jpos]) return false;
+    }
+    if ((ipos != std::string::npos && jpos == std::string::npos)) return false;
+    if ((ipos == std::string::npos && jpos != std::string::npos)) return false;
+  }
+
+  return true;
+}
+
 void BruteForceOptimizer::optimize() {
   EinsumSpecification einsum = unoptimizedEinsum.einsum;
   SmallVector<EinsumArg> inputs = einsum.inputs;
@@ -637,13 +614,16 @@ void BruteForceOptimizer::optimize() {
 
     int imin = -1;
     int jmin = -1;
-
     for (size_t i = 0; i < inputs.size(); ++i) {
       for (size_t j = i + 1; j < inputs.size(); ++j) {
         EinsumArg iarg = inputs[i];
         EinsumArg jarg = inputs[j];
 
         std::vector<char> sharedIndices = getSharedIndices(iarg, jarg);
+
+        if (!checkLegalContraction(iarg, jarg, sharedIndices,
+                                   einsum.reductionDims))
+          continue;
 
         std::string resultIndices =
           getResultIndices(iarg, jarg, sharedIndices, einsum.reductionDims);
@@ -668,9 +648,10 @@ void BruteForceOptimizer::optimize() {
     einsumPart.inputs.push_back(inputs[jmin]);
 
     SmallVector<int> path;
-    for (EinsumArg input : einsumPart.inputs)
-    if (input.argIndex != -1)
-      path.push_back(input.argIndex);
+    for (EinsumArg input : einsumPart.inputs) {
+      if (input.argIndex != -1)
+        path.push_back(input.argIndex);
+    }
 
     optimizedEinsumSequence.contractPath.push_back(path);
     smallestTemporary.argIndex = *std::min_element(path.begin(), path.end());

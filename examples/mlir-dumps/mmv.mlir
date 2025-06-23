@@ -1,3 +1,5 @@
+// RUN: %lapis-opt %s --drive-kernel-fusion | diff %s.gold -
+
 #map = affine_map<(i, j, k) -> (i, k)>
 #map1 = affine_map<(i, j, k) -> (k, j)>
 #map2 = affine_map<(i, j, k) -> (i, j)>
@@ -41,14 +43,19 @@ module {
     return %y : tensor<4096xf64>
   }
 
-  func.func @main() -> tensor<4096xf64> {
-    %a = tensor.empty() : tensor<4096x4096xf64>
-    %b = tensor.empty() : tensor<4096x4096xf64>
-    %x = tensor.empty() : tensor<4096xf64>
-    %y = tensor.empty() : tensor<4096xf64>
+  func.func @main(
+    %a: tensor<4096x4096xf64>,
+    %b: tensor<4096x4096xf64>,
+    %x: tensor<4096xf64>,
+    %y: tensor<4096xf64>
+  ) -> tensor<4096xf64> {
 
-    %y_out = call @mmv(%a, %b, %x, %y) : (tensor<4096x4096xf64>, tensor<4096x4096xf64>,
-    tensor<4096xf64>, tensor<4096xf64>) -> tensor<4096xf64>
+    %y_out = call @mmv(%a, %b, %x, %y) : (
+      tensor<4096x4096xf64>, 
+      tensor<4096x4096xf64>,
+      tensor<4096xf64>, 
+      tensor<4096xf64>
+    ) -> tensor<4096xf64>
 
     return %y_out : tensor<4096xf64>
   }
