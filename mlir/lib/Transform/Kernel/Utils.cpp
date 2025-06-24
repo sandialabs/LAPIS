@@ -127,6 +127,49 @@ void printGenericAsEinsum(linalg::LinalgOp generic) {
   printGenericAsEinsum(generic, llvm::errs());
 }
 
+bool isConvertibleToEinsum(linalg::GenericOp generic) {
+
+  // 1. must have a single result
+  if (llvm::range_size(generic.getResults()) > 1) return false;
+
+  // 2. must only contain additions or multiplications
+  auto &block = generic.getRegion().front();
+  for (auto &op : block) {
+    if (
+      !isa<arith::AddFOp>(op) && 
+      !isa<arith::MulFOp>(op) &&
+      !isa<linalg::YieldOp>(op)
+    ) {
+      op.dump();
+      return false;
+    }
+  }
+
+  // 3. must only contain a single addition and single multiplication
+  auto addOps = block.getOps<arith::AddFOp>();
+  auto mulOps = block.getOps<arith::MulFOp>();
+  if (llvm::range_size(addOps) != 1) return false;
+  if (llvm::range_size(mulOps) != 1) return false;
+
+  // 4. accumulation must happen via addition in final block arg
+  arith::AddFOp addition = *addOps.begin();
+  auto accCheck = llvm::find(
+    addition.getOperands(),
+    block.getArguments().back()
+  );
+  if (accCheck == addition.getOperands().end()) return false;
+
+  // 5. final block arg cannot be present in multiplication
+  arith::MulFOp mul = *mulOps.begin();
+  auto mulCheck = llvm::find(
+    mul.getOperands(),
+    block.getArguments().back()
+  );
+  if (mulCheck != mul.getOperands().end()) return false;
+
+  return true;
+}
+
 SmallVector<EinsumArg> generateEinsumArgsFromGeneric(linalg::LinalgOp generic) {
   DenseMap<AffineExpr, char> affineToIndex;
   std::string chars = "zyxwvutsrqponmlkjihgfedcba";

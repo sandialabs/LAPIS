@@ -34,6 +34,10 @@ struct KernelFusionDriver : impl::KernelFusionDriverBase<KernelFusionDriver> {
   }
 
   bool reorderGenerics(func::FuncOp func) {
+    for (linalg::GenericOp generic : func.getOps<linalg::GenericOp>()) {
+      if (!isConvertibleToEinsum(generic)) return false;
+    }
+
     EinsumSequence optimalOrder =
         getOptimalContractionOrder(func);
     return buildGenericsFromEinsums(func, optimalOrder);

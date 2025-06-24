@@ -1,3 +1,5 @@
+// RUN: %lapis-opt %s --drive-kernel-fusion | diff %s.gold -
+
 #map = affine_map<(i, j, k) -> (i, k)>
 #map1 = affine_map<(i, j, k) -> (k, j)>
 #map2 = affine_map<(i, j, k) -> (i, j)>

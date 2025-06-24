@@ -72,14 +72,6 @@ CallMap getCallMap(FuncOp mainFuncOp) {
   return callMap;
 }
 
-void reduceIntermediateSizes(FuncOp main, DenseMap<CallOp, int> callsToCosts) {
-  /* use asymptotic cost analysis to reorder arguments such that the size of the
-   * intermediate variables is minimized and the program remains legal. */
-
-}
-
-// NOTE: we are fusing kernel calls using kernel definitions, use operand/result
-// definitions in the call to map them to the operations in the kernel
 bool parallelIterationSpacesMatch(ModuleOp module, CallOp firstCall,
                                   CallOp secondCall) {
   // get the FuncOps
@@ -166,9 +158,8 @@ FusionSetVector createFusionSets(mlir::ModuleOp module, FuncOp mainFuncOp,
   FusionSetVector fusionSets; // sets of kernels to be fused
   for (auto call : mainFuncOp.getOps<CallOp>()) {
     // attempt to find the call in the kernelSet
-    if (kernelSet.find(call) != kernelSet.end()) {
+    if (kernelSet.find(call) != kernelSet.end())
       continue;
-    }
     kernelSet.insert(call);
     kernelsToFuse.push_back(call); // preserve call order within blocks
   }
@@ -181,9 +172,8 @@ FusionSetVector createFusionSets(mlir::ModuleOp module, FuncOp mainFuncOp,
 
     // if the kernel has already been fused, then don't fuse again
     auto kernelCheck = kernelSet.find(kernelToFuse);
-    if (kernelCheck == kernelSet.end()) {
+    if (kernelCheck == kernelSet.end())
       continue;
-    }
 
     // add to the current fusion set, remove from kernelSet
     kernelSet.extract(kernelToFuse);
@@ -194,7 +184,7 @@ FusionSetVector createFusionSets(mlir::ModuleOp module, FuncOp mainFuncOp,
     fusionSets[fusionSetIndex].push_back(kernelToFuse);
 
     // process edges in the graph
-    bool fusionLegal = true; // FIXME: this is not properly checked right now
+    bool fusionLegal = false;
     for (auto val : callMap[kernelToFuse]) {
       // fusion legal -> update everything
       fusionLegal = parallelIterationSpacesMatch(module, kernelToFuse, val);
