@@ -1,5 +1,23 @@
+#include <algorithm>
+#include <csignal>
+#include <iterator>
+#include <stdlib.h>
+
+#include "mlir-c/IR.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Utils/StructuredOpsUtils.h"
+#include "mlir/IR/AffineExpr.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Value.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/raw_ostream.h"
+
 #include "Transform/Kernel/KernelPasses.h"
-#include "Utils.cpp"
 
 namespace mlir {
 namespace kernel {
