@@ -3,6 +3,7 @@ add_mlir_library(MLIRKernelPasses
     KernelFusionDriver.cpp
     KernelDomainFusion.cpp
     FusedKernelInliningPass.cpp
+    LinalgGenericReordering.cpp
     Utils.cpp
 
     ADDITIONAL_HEADER_DIRS

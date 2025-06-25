@@ -20,6 +20,20 @@ def KernelFusionPass: Pass<"kernel-fusion-pass"> {
   }];
 }
 
+def KernelFusionDriver: Pass<"drive-kernel-fusion"> {
+  let summary = "Drive a kernel fusion pass from unfused to optimized";
+  let description = [{
+    Runs all relevant passes to fuse, lower, and run a default optimization pass
+    over a program containing computational kernels.
+  }];
+  let dependentDialects = [
+    "arith::ArithDialect",
+    "LLVM::LLVMDialect",
+    "sparse_tensor::SparseTensorDialect",
+    "bufferization::BufferizationDialect"
+  ];
+}
+
 def FusedKernelInliningPass: Pass<"fused-kernel-inlining-pass"> {
   let summary = "Run a custom inlining pass over fused kernels";
   let constructor = "createFusedKernelInliningPass()";
@@ -45,17 +59,19 @@ def KernelDomainFusion: Pass<"fused-kernel-domain-fusion-pass"> {
   }];
 }
 
-def KernelFusionDriver: Pass<"drive-kernel-fusion"> {
-  let summary = "Drive a kernel fusion pass from unfused to optimized";
+def LinalgGenericReorderingPass: Pass<"reorder-linalg-generics"> {
+  let summary = "Use the Einstein summation convention to minimize cost";
+  let constructor = "createLinalgGenericReorderingPass()";
   let description = [{
-    Runs all relevant passes to fuse, lower, and run a default optimization pass
-    over a program containing computational kernels.
+    Interprets appropriate linalg.GenericOps as einsums, determines a
+    minimum-cost contraction order of operands, and creates new
+    linalg.GenericOps based on that minimum-cost contraction order. Requires
+    that bodies of all linalg.GenericOps contain only a single multiplication
+    over parallel axes, and a single addition over reduction axes with a single
+    return value.
   }];
   let dependentDialects = [
-    "arith::ArithDialect",
-    "LLVM::LLVMDialect",
-    "sparse_tensor::SparseTensorDialect",
-    "bufferization::BufferizationDialect"
+    "arith::ArithDialect"
   ];
 }
 

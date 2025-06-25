@@ -97,6 +97,7 @@ int main(int argc, char **argv) {
   vector::registerBufferizableOpInterfaceExternalModels(registry);
 
   kernel::registerKernelFusionDriver();
+  kernel::registerLinalgGenericReorderingPass();
 
   LLVM::registerInlinerInterface(registry);
   func::registerAllExtensions(registry);

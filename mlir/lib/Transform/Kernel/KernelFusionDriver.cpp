@@ -3,7 +3,6 @@
  */
 
 #include "Transform/Kernel/KernelPasses.h"
-#include "Utils.cpp"
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -20,29 +19,6 @@ namespace kernel {
 struct KernelFusionDriver : impl::KernelFusionDriverBase<KernelFusionDriver> {
   using KernelFusionDriverBase::KernelFusionDriverBase;
 
-  EinsumSequence 
-  getOptimalContractionOrder(func::FuncOp func) {
-    std::vector<EinsumSpecification> einsums;
-    for (linalg::LinalgOp laOp : func.getOps<linalg::LinalgOp>())
-      einsums.push_back(genericToEinsumSpec(laOp));
-
-    FusedEinsum fused = fuseEinsums(einsums);
-    BruteForceOptimizer optimizer(fused);
-    optimizer.optimize();
-
-    return optimizer.optimizedEinsumSequence;
-  }
-
-  bool reorderGenerics(func::FuncOp func) {
-    for (linalg::GenericOp generic : func.getOps<linalg::GenericOp>()) {
-      if (!isConvertibleToEinsum(generic)) return false;
-    }
-
-    EinsumSequence optimalOrder =
-        getOptimalContractionOrder(func);
-    return buildGenericsFromEinsums(func, optimalOrder);
-  }
-
   void runOnOperation() override {
     mlir::ModuleOp module = dyn_cast<ModuleOp>(getOperation());
     OpPassManager driveKernelFusionPass;
@@ -53,16 +29,13 @@ struct KernelFusionDriver : impl::KernelFusionDriverBase<KernelFusionDriver> {
     // inline the calls using a custom inlining pass
     driveKernelFusionPass.addPass(createFusedKernelInliningPass());
 
+    // reorder linalg generics to minimize temp size/computational cost
+    driveKernelFusionPass.addPass(createLinalgGenericReorderingPass());
+
     // run the pipeline
     if (failed(runPipeline(driveKernelFusionPass, module)))
       return signalPassFailure();
 
-    // reorder linalg.generics in each fused kernel
-    for (func::FuncOp f :
-         llvm::make_early_inc_range(module.getOps<func::FuncOp>())) {
-      if (reorderGenerics(f))
-        f.erase();
-    }
   }
 };
 } // namespace kernel

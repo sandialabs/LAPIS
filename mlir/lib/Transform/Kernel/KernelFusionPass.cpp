@@ -120,9 +120,8 @@ bool parallelIterationSpacesMatch(ModuleOp module, CallOp firstCall,
 
 bool markedForFusion(CallOp keyKernel, CallOp valKernel) {
   // FIXME: segfault if one of the kernels does not have this attribute
-  if (!keyKernel->hasAttr("fuse_with") || !valKernel->hasAttr("fuse_with")) {
+  if (!keyKernel->hasAttr("fuse_with") || !valKernel->hasAttr("fuse_with"))
     return false;
-  }
 
   SmallVector<StringRef> keyKernelFuseWithStrings;
   SmallVector<StringRef> valKernelFuseWithStrings;
