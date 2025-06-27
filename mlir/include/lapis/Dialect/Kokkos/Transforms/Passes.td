@@ -64,7 +64,7 @@ def KokkosLoopMapping : Pass<"kokkos-loop-mapping"> {
   ];
 }
 
-def KokkosDualViewManagement : Pass<"kokkos-dualview-management"> {
+def KokkosDualViewManagement : Pass<"kokkos-dualview-management", "func::FuncOp"> {
   let summary = "Insert sync and modify operations for DualView-typed memrefs";
   let description = [{
   }];

@@ -73,14 +73,15 @@ static LogicalResult insertSyncModifyChild(Region* region, const DenseSet<Value>
   return success();
 }
 
-namespace {
+struct KokkosDualViewManagementPass
+    : public impl::KokkosDualViewManagementBase<KokkosDualViewManagementPass> {
 
-struct DualViewMgmtPattern : public OpRewritePattern<func::FuncOp> {
-  using OpRewritePattern<func::FuncOp>::OpRewritePattern;
+  KokkosDualViewManagementPass() = default;
+  KokkosDualViewManagementPass(const KokkosDualViewManagementPass& pass) = default;
 
-  DualViewMgmtPattern(MLIRContext *context) : OpRewritePattern(context) {}
-
-  LogicalResult matchAndRewrite(func::FuncOp func, PatternRewriter &rewriter) const override {
+  void runOnOperation() override
+  {
+    OpBuilder builder(&getContext());
     // For each top-level op:
     // - List the memrefs that it reads and writes (including in subregions) separately on host and device
     // - Ignore any memrefs not implemented using DualView.
@@ -89,9 +90,10 @@ struct DualViewMgmtPattern : public OpRewritePattern<func::FuncOp> {
     //   insert appropriate sync and modify calls before the op.
     // - Put all other memrefs (either used in both spaces, or belonging to a child region) into a list
     //   (memrefsForChildren) and recursively insert DualView handling before ops in child regions.
+    func::FuncOp func = getOperation();
     for(Region& reg : func->getRegions()) {
       for(Operation& op : reg.getOps()) {
-        rewriter.setInsertionPoint(&op);
+        builder.setInsertionPoint(&op);
         DenseSet<Value> deviceReads = kokkos::getMemrefsRead(&op, kokkos::ExecutionSpace::Device);
         DenseSet<Value> hostReads = kokkos::getMemrefsRead(&op, kokkos::ExecutionSpace::Host);
         DenseSet<Value> deviceWrites = kokkos::getMemrefsWritten(&op, kokkos::ExecutionSpace::Device);
@@ -118,10 +120,10 @@ struct DualViewMgmtPattern : public OpRewritePattern<func::FuncOp> {
             // Then we can insert sync and/or modify calls before op.
             // Modifies must go after syncs, otherwise the sync would
             // immediately trigger a copy.
-            if(dr) rewriter.create<kokkos::SyncOp>(op.getLoc(), v, kokkos::MemorySpace::Device);
-            if(hr) rewriter.create<kokkos::SyncOp>(op.getLoc(), v, kokkos::MemorySpace::Host);
-            if(dw) rewriter.create<kokkos::ModifyOp>(op.getLoc(), v, kokkos::MemorySpace::Device);
-            if(hw) rewriter.create<kokkos::ModifyOp>(op.getLoc(), v, kokkos::MemorySpace::Host);
+            if(dr) builder.create<kokkos::SyncOp>(op.getLoc(), v, kokkos::MemorySpace::Device);
+            if(hr) builder.create<kokkos::SyncOp>(op.getLoc(), v, kokkos::MemorySpace::Host);
+            if(dw) builder.create<kokkos::ModifyOp>(op.getLoc(), v, kokkos::MemorySpace::Device);
+            if(hw) builder.create<kokkos::ModifyOp>(op.getLoc(), v, kokkos::MemorySpace::Host);
           }
           else {
             // Need to handle this memref inside subregions of op.
@@ -131,29 +133,13 @@ struct DualViewMgmtPattern : public OpRewritePattern<func::FuncOp> {
         // Recurse into subregions and insert the sync/modify that we couldn't before.
         if(memrefsForChildren.size()) {
           for(Region& subregion : op.getRegions()) {
-            if(failed(insertSyncModifyChild(&subregion, memrefsForChildren, rewriter)))
-              return op.emitError("Failed to insert sync/modify calls for DualViews");
+            if(failed(insertSyncModifyChild(&subregion, memrefsForChildren, builder)))
+              signalPassFailure();
+              //op.emitError("Failed to insert sync/modify calls for DualViews");
           }
         }
       }
     }
-    return success();
-  }
-};
-}
-
-struct KokkosDualViewManagementPass
-    : public impl::KokkosDualViewManagementBase<KokkosDualViewManagementPass> {
-
-  KokkosDualViewManagementPass() = default;
-  KokkosDualViewManagementPass(const KokkosDualViewManagementPass& pass) = default;
-
-  void runOnOperation() override
-  {
-    auto *ctx = &getContext();
-    RewritePatternSet patterns(ctx);
-    patterns.add<DualViewMgmtPattern>(patterns.getContext());
-    (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
   }
 };
 } // namespace
