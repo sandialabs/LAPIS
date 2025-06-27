@@ -7,6 +7,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_MEMREFTOKOKKOSSCRATCH
@@ -29,10 +30,6 @@ struct MemrefToKokkosScratchRewriter : public OpRewritePattern<func::FuncOp> {
 
 }
 
-void mlir::populateMemrefToKokkosScratchPatterns(RewritePatternSet &patterns) {
-  patterns.add<MemrefToKokkosScratchRewriter>(patterns.getContext());
-}
-
 struct MemrefToKokkosScratchPass 
     : public impl::MemrefToKokkosScratchBase<MemrefToKokkosScratchPass> {
 
@@ -42,7 +39,7 @@ struct MemrefToKokkosScratchPass
   void runOnOperation() override {
     auto *ctx = &getContext();
     RewritePatternSet patterns(ctx);
-    populateMemrefToKokkosScratchPatterns(patterns);
+    patterns.add<MemrefToKokkosScratchRewriter>(patterns.getContext());
     (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
   }
 };

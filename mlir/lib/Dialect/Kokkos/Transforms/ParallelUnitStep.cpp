@@ -8,6 +8,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_PARALLELUNITSTEP
@@ -121,10 +122,6 @@ struct ParallelUnitStepRewriter : public OpRewritePattern<scf::ParallelOp> {
 
 } // namespace
 
-static void mlir::populateParallelUnitStepPatterns(RewritePatternSet &patterns) {
-  patterns.add<ParallelUnitStepRewriter>(patterns.getContext());
-}
-
 struct ParallelUnitStepPass
     : public impl::ParallelUnitStepBase<ParallelUnitStepPass> {
 
@@ -134,7 +131,7 @@ struct ParallelUnitStepPass
   void runOnOperation() override {
     auto *ctx = &getContext();
     RewritePatternSet patterns(ctx);
-    populateParallelUnitStepPatterns(patterns);
+    patterns.add<ParallelUnitStepRewriter>(patterns.getContext());
     (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
   }
 };

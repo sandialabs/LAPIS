@@ -8,6 +8,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_MEMREFRESULTSTOPARAMS
@@ -31,10 +32,6 @@ struct MemrefResultsToParamsRewriter : public OpRewritePattern<func::FuncOp> {
 
 }
 
-void mlir::populateMemrefResultsToParamsPatterns(RewritePatternSet &patterns) {
-  patterns.add<MemrefResultsToParamsRewriter>(patterns.getContext());
-}
-
 struct MemrefResultsToParamsPass
     : public impl::MemrefResultsToParamsBase<MemrefResultsToParamsPass> {
 
@@ -44,7 +41,7 @@ struct MemrefResultsToParamsPass
   void runOnOperation() override {
     auto *ctx = &getContext();
     RewritePatternSet patterns(ctx);
-    populateMemrefResultsToParamsPatterns(patterns);
+    patterns.add<MemrefResultsToParamsRewriter>(patterns.getContext());
     (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
   }
 };
