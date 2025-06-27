@@ -72,64 +72,73 @@ static LogicalResult insertSyncModifyChild(Region* region, const DenseSet<Value>
   return success();
 }
 
-static LogicalResult processFunction(func::FuncOp func, OpBuilder& builder) {
-  // For each top-level op:
-  // - List the memrefs that it reads and writes (including in subregions) separately on host and device
-  // - Ignore any memrefs not implemented using DualView.
-  // - Then separate out the memrefs whose region scope is not an ancestor of op's scope.
-  // - For each memref that is either used in only one space, or read in both spaces,
-  //   insert appropriate sync and modify calls before the op.
-  // - Put all other memrefs (either used in both spaces, or belonging to a child region) into a list
-  //   (memrefsForChildren) and recursively insert DualView handling before ops in child regions.
-  for(Region& reg : func->getRegions()) {
-    for(Operation& op : reg.getOps()) {
-      builder.setInsertionPoint(&op);
-      DenseSet<Value> deviceReads = kokkos::getMemrefsRead(&op, kokkos::ExecutionSpace::Device);
-      DenseSet<Value> hostReads = kokkos::getMemrefsRead(&op, kokkos::ExecutionSpace::Host);
-      DenseSet<Value> deviceWrites = kokkos::getMemrefsWritten(&op, kokkos::ExecutionSpace::Device);
-      DenseSet<Value> hostWrites = kokkos::getMemrefsWritten(&op, kokkos::ExecutionSpace::Host);
-      DenseSet<Value> allMemrefs;
-      allMemrefs.insert(deviceReads.begin(), deviceReads.end());
-      allMemrefs.insert(hostReads.begin(), hostReads.end());
-      allMemrefs.insert(deviceWrites.begin(), deviceWrites.end());
-      allMemrefs.insert(hostWrites.begin(), hostWrites.end());
-      DenseSet<Value> memrefsForChildren;
-      for(Value v : allMemrefs) {
-        // Only proceed if v is a DualView
-        if(kokkos::getMemSpace(v) != kokkos::MemorySpace::DualView)
-          continue;
-        // Check conditions for inserting sync/modify before op
-        bool dr = deviceReads.contains(v);
-        bool dw = deviceWrites.contains(v);
-        bool hr = hostReads.contains(v);
-        bool hw = hostWrites.contains(v);
-        bool inScope = valueInScope(v, &reg);
-        bool usedInOneSpace = !((dr || dw) && (hr || hw));
-        bool readOnly = !dw && !hw;
-        if(inScope && (usedInOneSpace || readOnly)) {
-          // Then we can insert sync and/or modify calls before op.
-          // Modifies must go after syncs, otherwise the sync would
-          // immediately trigger a copy.
-          if(dr) builder.create<kokkos::SyncOp>(op.getLoc(), v, kokkos::MemorySpace::Device);
-          if(hr) builder.create<kokkos::SyncOp>(op.getLoc(), v, kokkos::MemorySpace::Host);
-          if(dw) builder.create<kokkos::ModifyOp>(op.getLoc(), v, kokkos::MemorySpace::Device);
-          if(hw) builder.create<kokkos::ModifyOp>(op.getLoc(), v, kokkos::MemorySpace::Host);
+namespace {
+
+struct DualViewMgmtPattern : public OpRewritePattern<func::FuncOp> {
+  using OpRewritePattern<func::FuncOp>::OpRewritePattern;
+
+  DualViewMgmtPattern(MLIRContext *context) : OpRewritePattern(context) {}
+
+  LogicalResult matchAndRewrite(func::FuncOp op, PatternRewriter &rewriter) const override {
+    // For each top-level op:
+    // - List the memrefs that it reads and writes (including in subregions) separately on host and device
+    // - Ignore any memrefs not implemented using DualView.
+    // - Then separate out the memrefs whose region scope is not an ancestor of op's scope.
+    // - For each memref that is either used in only one space, or read in both spaces,
+    //   insert appropriate sync and modify calls before the op.
+    // - Put all other memrefs (either used in both spaces, or belonging to a child region) into a list
+    //   (memrefsForChildren) and recursively insert DualView handling before ops in child regions.
+    for(Region& reg : func->getRegions()) {
+      for(Operation& op : reg.getOps()) {
+        builder.setInsertionPoint(&op);
+        DenseSet<Value> deviceReads = kokkos::getMemrefsRead(&op, kokkos::ExecutionSpace::Device);
+        DenseSet<Value> hostReads = kokkos::getMemrefsRead(&op, kokkos::ExecutionSpace::Host);
+        DenseSet<Value> deviceWrites = kokkos::getMemrefsWritten(&op, kokkos::ExecutionSpace::Device);
+        DenseSet<Value> hostWrites = kokkos::getMemrefsWritten(&op, kokkos::ExecutionSpace::Host);
+        DenseSet<Value> allMemrefs;
+        allMemrefs.insert(deviceReads.begin(), deviceReads.end());
+        allMemrefs.insert(hostReads.begin(), hostReads.end());
+        allMemrefs.insert(deviceWrites.begin(), deviceWrites.end());
+        allMemrefs.insert(hostWrites.begin(), hostWrites.end());
+        DenseSet<Value> memrefsForChildren;
+        for(Value v : allMemrefs) {
+          // Only proceed if v is a DualView
+          if(kokkos::getMemSpace(v) != kokkos::MemorySpace::DualView)
+            continue;
+          // Check conditions for inserting sync/modify before op
+          bool dr = deviceReads.contains(v);
+          bool dw = deviceWrites.contains(v);
+          bool hr = hostReads.contains(v);
+          bool hw = hostWrites.contains(v);
+          bool inScope = valueInScope(v, &reg);
+          bool usedInOneSpace = !((dr || dw) && (hr || hw));
+          bool readOnly = !dw && !hw;
+          if(inScope && (usedInOneSpace || readOnly)) {
+            // Then we can insert sync and/or modify calls before op.
+            // Modifies must go after syncs, otherwise the sync would
+            // immediately trigger a copy.
+            if(dr) builder.create<kokkos::SyncOp>(op.getLoc(), v, kokkos::MemorySpace::Device);
+            if(hr) builder.create<kokkos::SyncOp>(op.getLoc(), v, kokkos::MemorySpace::Host);
+            if(dw) builder.create<kokkos::ModifyOp>(op.getLoc(), v, kokkos::MemorySpace::Device);
+            if(hw) builder.create<kokkos::ModifyOp>(op.getLoc(), v, kokkos::MemorySpace::Host);
+          }
+          else {
+            // Need to handle this memref inside subregions of op.
+            memrefsForChildren.insert(v);
+          }
         }
-        else {
-          // Need to handle this memref inside subregions of op.
-          memrefsForChildren.insert(v);
-        }
-      }
-      // Recurse into subregions and insert the sync/modify that we couldn't before.
-      if(memrefsForChildren.size()) {
-        for(Region& subregion : op.getRegions()) {
-          if(failed(insertSyncModifyChild(&subregion, memrefsForChildren, builder)))
-            return failure();
+        // Recurse into subregions and insert the sync/modify that we couldn't before.
+        if(memrefsForChildren.size()) {
+          for(Region& subregion : op.getRegions()) {
+            if(failed(insertSyncModifyChild(&subregion, memrefsForChildren, builder)))
+              return op.emitError("Failed to insert sync/modify calls for DualViews");
+          }
         }
       }
     }
+    return success();
   }
-  return success();
+};
 }
 
 struct KokkosDualViewManagementPass
@@ -140,12 +149,10 @@ struct KokkosDualViewManagementPass
 
   void runOnOperation() override
   {
-    MLIRContext &ctx = getContext();
-    OpBuilder builder(&ctx);
-    for (auto func : getOperation().getOps<func::FuncOp>()) {
-      if(failed(processFunction(func, builder)))
-        signalPassFailure();
-    }
+    auto *ctx = &getContext();
+    RewritePatternSet patterns(ctx);
+    patterns.add<DualViewMgmtPattern>(patterns.getContext());
+    (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
   }
 };
 } // namespace

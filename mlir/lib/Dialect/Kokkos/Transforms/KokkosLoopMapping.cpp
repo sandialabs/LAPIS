@@ -8,6 +8,11 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 
+namespace mlir {
+#define GEN_PASS_DEF_KOKKOSLOOPMAPPING
+#include "lapis/Dialect/Kokkos/Transforms/Passes.h.inc"
+}
+
 using namespace mlir;
 
 namespace {
@@ -942,17 +947,15 @@ struct KokkosLoopRewriter : public OpRewritePattern<scf::ParallelOp> {
   }
 };
 
-struct KokkosTeamLevelLoopRewriter : public OpRewritePattern<scf::ParallelOp> {
-  using OpRewritePattern<scf::ParallelOp>::OpRewritePattern;
+struct KokkosTeamLevelLoopRewriter : public OpRewritePattern<func::FuncOp> {
+  using OpRewritePattern<func::FuncOp>::OpRewritePattern;
 
   KokkosTeamLevelLoopRewriter(MLIRContext *context) : OpRewritePattern(context) {}
 
-  LogicalResult matchAndRewrite(scf::ParallelOp op,
+  LogicalResult matchAndRewrite(func::FuncOp op,
                                 PatternRewriter &rewriter) const override {
-    // Only match with top-level ParallelOps (meaning op is not enclosed in
-    // another ParallelOp)
-    if (op->getParentOfType<scf::ParallelOp>())
-      return failure();
+    // Iterate over top-level 
+
     // Determine the maximum depth of parallel nesting (a simple RangePolicy is
     // 1, etc.)
     int nestingLevel = getParallelNumLevels(op);
@@ -998,10 +1001,32 @@ struct KokkosTeamLevelLoopRewriter : public OpRewritePattern<scf::ParallelOp> {
 
 } // namespace
 
-void mlir::populateKokkosLoopMappingPatterns(RewritePatternSet &patterns, bool teamLevel) {
+static void mlir::populateKokkosLoopMappingPatterns(RewritePatternSet &patterns, bool teamLevel) {
   if(teamLevel)
     patterns.add<KokkosTeamLevelLoopRewriter>(patterns.getContext());
   else
     patterns.add<KokkosLoopRewriter>(patterns.getContext());
+}
+
+struct KokkosLoopMappingPass
+    : public impl::KokkosLoopMappingBase<KokkosLoopMappingPass> {
+
+  KokkosLoopMappingPass() = default;
+  KokkosLoopMappingPass(const KokkosLoopMappingPass& pass) = default;
+  KokkosLoopMappingPass(const KokkosLoopMappingOptions& options) : impl::KokkosLoopMappingBase<KokkosLoopMappingPass>(options) {}
+
+  void runOnOperation() override {
+    auto *ctx = &getContext();
+    RewritePatternSet patterns(ctx);
+    populateKokkosLoopMappingPatterns(patterns, this->teamLevel);
+    (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+  }
+};
+
+std::unique_ptr<Pass> mlir::createKokkosLoopMappingPass(bool teamLevel)
+{
+  KokkosLoopMappingOptions klmo;
+  klmo.teamLevel = teamLevel;
+  return std::make_unique<KokkosLoopMappingPass>(klmo);
 }
 

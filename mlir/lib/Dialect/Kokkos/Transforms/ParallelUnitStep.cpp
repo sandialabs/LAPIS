@@ -9,6 +9,11 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 
+namespace mlir {
+#define GEN_PASS_DEF_PARALLELUNITSTEP
+#include "lapis/Dialect/Kokkos/Transforms/Passes.h.inc"
+}
+
 using namespace mlir;
 
 namespace {
@@ -116,6 +121,26 @@ struct ParallelUnitStepRewriter : public OpRewritePattern<scf::ParallelOp> {
 
 } // namespace
 
-void mlir::populateParallelUnitStepPatterns(RewritePatternSet &patterns) {
+static void mlir::populateParallelUnitStepPatterns(RewritePatternSet &patterns) {
   patterns.add<ParallelUnitStepRewriter>(patterns.getContext());
 }
+
+struct ParallelUnitStepPass
+    : public impl::ParallelUnitStepBase<ParallelUnitStepPass> {
+
+  ParallelUnitStepPass() = default;
+  ParallelUnitStepPass(const ParallelUnitStepPass& pass) = default;
+
+  void runOnOperation() override {
+    auto *ctx = &getContext();
+    RewritePatternSet patterns(ctx);
+    populateParallelUnitStepPatterns(patterns);
+    (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+  }
+};
+
+std::unique_ptr<Pass> mlir::createParallelUnitStepPass()
+{
+  return std::make_unique<ParallelUnitStepPass>();
+}
+

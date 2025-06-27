@@ -15,7 +15,8 @@ def MemrefResultsToParams : Pass<"memref-results-to-params"> {
   }];
   let constructor = "mlir::createMemrefResultsToParamsPass()";
   let dependentDialects = [
-    "memref::MemRefDialect"
+    "memref::MemRefDialect",
+    "func::FuncDialect"
   ];
 }
 
@@ -30,6 +31,7 @@ def MemrefToKokkosScratch : Pass<"memref-to-kokkos-scratch"> {
   let constructor = "mlir::createMemrefToKokkosScratchPass()";
   let dependentDialects = [
     "memref::MemRefDialect",
+    "func::FuncDialect",
     "kokkos::KokkosDialect"
   ];
 }
@@ -56,25 +58,13 @@ def KokkosLoopMapping : Pass<"kokkos-loop-mapping"> {
   let dependentDialects = [
     "arith::ArithDialect",
     "kokkos::KokkosDialect",
+    "func::FuncDialect",
     "memref::MemRefDialect",
     "scf::SCFDialect"
   ];
 }
 
-def KokkosMemorySpaceAssignment : Pass<"kokkos-assign-memory-spaces"> {
-  let summary = "Determines the MemorySpace attributes for each memref value";
-  let description = [{
-  }];
-  let constructor = "mlir::createKokkosMemorySpaceAssignmentPass()";
-  let dependentDialects = [
-    "arith::ArithDialect",
-    "kokkos::KokkosDialect",
-    "memref::MemRefDialect",
-    "scf::SCFDialect"
-  ];
-}
-
-def KokkosDualViewManagement : Pass<"kokkos-dualview-management", "ModuleOp"> {
+def KokkosDualViewManagement : Pass<"kokkos-dualview-management"> {
   let summary = "Insert sync and modify operations for DualView-typed memrefs";
   let description = [{
   }];

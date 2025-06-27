@@ -8,6 +8,11 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 
+namespace mlir {
+#define GEN_PASS_DEF_MEMREFTOKOKKOSSCRATCH
+#include "lapis/Dialect/Kokkos/Transforms/Passes.h.inc"
+}
+
 using namespace mlir;
 
 namespace {
@@ -26,5 +31,24 @@ struct MemrefToKokkosScratchRewriter : public OpRewritePattern<func::FuncOp> {
 
 void mlir::populateMemrefToKokkosScratchPatterns(RewritePatternSet &patterns) {
   patterns.add<MemrefToKokkosScratchRewriter>(patterns.getContext());
+}
+
+struct MemrefToKokkosScratchPass 
+    : public impl::MemrefToKokkosScratchBase<MemrefToKokkosScratchPass> {
+
+  MemrefToKokkosScratchPass() = default;
+  MemrefToKokkosScratchPass(const MemrefToKokkosScratchPass& pass) = default;
+
+  void runOnOperation() override {
+    auto *ctx = &getContext();
+    RewritePatternSet patterns(ctx);
+    populateMemrefToKokkosScratchPatterns(patterns);
+    (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+  }
+};
+
+std::unique_ptr<Pass> mlir::createMemrefToKokkosScratchPass()
+{
+  return std::make_unique<MemrefToKokkosScratchPass>();
 }
 

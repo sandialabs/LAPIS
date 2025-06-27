@@ -190,8 +190,8 @@ void mlir::kokkos::buildTeamLevelKokkosCompiler(OpPassManager &pm, const TeamLev
   pm.addPass(createReconcileUnrealizedCastsPass());
 
   // Finally, lower scf/memref to kokkos
-  pm.addNestedPass<func::FuncOp>(createMemrefResultsToParamsPass());
-  pm.addNestedPass<func::FuncOp>(createMemrefToKokkosScratchPass());
+  pm.addPass(createMemrefResultsToParamsPass());
+  pm.addPass(createMemrefToKokkosScratchPass());
   pm.addPass(createParallelUnitStepPass());
   pm.addPass(createKokkosLoopMappingPass(true));
 }
