@@ -23,10 +23,7 @@ struct MemrefResultsToParamsPass
   MemrefResultsToParamsPass() = default;
   MemrefResultsToParamsPass(const MemrefResultsToParamsPass& pass) = default;
 
-  void runOnOperation() override {
-    MLIRContext* ctx = &getContext();
-    IRRewriter rewriter(ctx);
-    func::FuncOp oldFunc = getOperation();
+  void rewriteFunction(IRRewriter& rewriter, MLIRContext* ctx, func::FuncOp oldFunc) {
     // Can't run on extern functions
     if(oldFunc.isExternal())
       return;
@@ -51,13 +48,16 @@ struct MemrefResultsToParamsPass
     // then just error out (rewriting in this case would be more complicated)
     SmallVector<int> returnsToMakeParams;
     SmallVector<int> returnsToDelete;
+    // List of allocs to delete, and the corresponding new parameter to replace its result with
+    DenseMap<memref::AllocOp, int> allocsToDelete;
     {
       int i = 0;
       for(auto rv : ret->getOperands()) {
         if(isa<MemRefType>(rv.getType())) {
           Value rvParent = kokkos::getParentMemref(rv);
-          if(isa<memref::AllocOp>(rvParent.getDefiningOp())) {
+          if(auto alloc = dyn_cast<memref::AllocOp>(rvParent.getDefiningOp())) {
             // OK, rv's memory allocated inside function.
+            allocsToDelete[alloc] = returnsToMakeParams.size();
             returnsToMakeParams.push_back(i);
             if(rv == rvParent) {
               // Also delete the return value.
@@ -133,9 +133,19 @@ struct MemrefResultsToParamsPass
         }
         // and then remove the skipped return values
         for(int i = returnsToDelete.size() - 1; i >= 0; i--) {
-          newRetTypes.erase(newRetTypes.begin() + returnsToDelete[i]);
+          newReturns.erase(newReturns.begin() + returnsToDelete[i]);
         }
         rewriter.create<func::ReturnOp>(ret->getLoc(), newReturns);
+      }
+      else if(auto alloc = dyn_cast<memref::AllocOp>(&op)) {
+        if(allocsToDelete.find(alloc) == allocsToDelete.end()) {
+          // Don't delete this alloc
+          rewriter.clone(op, irMap);
+        }
+        else {
+          // Delete this alloc, and replace its result with a new param
+          irMap.map(alloc.getResult(), newParams[allocsToDelete[alloc]]);
+        }
       }
       else {
         rewriter.clone(op, irMap);
@@ -143,6 +153,15 @@ struct MemrefResultsToParamsPass
     }
     //finally, delete the original function
     rewriter.eraseOp(oldFunc);
+  }
+
+  void runOnOperation() override {
+    MLIRContext* ctx = &getContext();
+    IRRewriter rewriter(ctx);
+    ModuleOp m = getOperation();
+    m.walk<WalkOrder::PostOrder>([&](func::FuncOp oldFunc) {
+      rewriteFunction(rewriter, ctx, oldFunc);
+    });
   }
 };
 
