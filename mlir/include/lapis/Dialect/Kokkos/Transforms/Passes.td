@@ -5,7 +5,7 @@
 
 include "mlir/Pass/PassBase.td"
 
-def MemrefResultsToParams : Pass<"memref-results-to-params"> {
+def MemrefResultsToParams : Pass<"memref-results-to-params", "func::FuncOp"> {
   let summary = "Moves memref-type return values to be function parameters instead";
   let description = [{
     For each non-private function with at least one memref-typed return value, remove the return value and add
