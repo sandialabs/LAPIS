@@ -16,20 +16,6 @@ namespace mlir {
 
 using namespace mlir;
 
-namespace {
-
-struct MemrefToKokkosScratchRewriter : public OpRewritePattern<func::FuncOp> {
-  using OpRewritePattern<func::FuncOp>::OpRewritePattern;
-
-  MemrefToKokkosScratchRewriter(MLIRContext *context) : OpRewritePattern(context) {}
-
-  LogicalResult matchAndRewrite(func::FuncOp op, PatternRewriter &rewriter) const override {
-    return failure();
-  }
-};
-
-}
-
 struct MemrefToKokkosScratchPass 
     : public impl::MemrefToKokkosScratchBase<MemrefToKokkosScratchPass> {
 
@@ -37,10 +23,9 @@ struct MemrefToKokkosScratchPass
   MemrefToKokkosScratchPass(const MemrefToKokkosScratchPass& pass) = default;
 
   void runOnOperation() override {
-    auto *ctx = &getContext();
-    RewritePatternSet patterns(ctx);
-    patterns.add<MemrefToKokkosScratchRewriter>(patterns.getContext());
-    (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+    MLIRContext* ctx = &getContext();
+    IRRewriter rewriter(ctx);
+    func::FuncOp func = getOperation();
   }
 };
 

@@ -335,13 +335,4 @@ def AllocScratchOp : Kokkos_Op<"alloc_scratch">
   let hasVerifier = 1;
 }
 
-def DeallocScratchOp : Kokkos_Op<"dealloc_scratch">
-{
-  let summary = "Deallocate Kokkos team-level scratch view";
-  let description = [{ 
-    "kokkos.dealloc_scratch" releases a scratch view that was previously allocated by "kokkos.alloc_scratch". 
-  }];
-  let arguments = (ins AnyMemRef:$memref);
-}
-
 #endif
