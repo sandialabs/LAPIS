@@ -970,6 +970,15 @@ struct KokkosTeamLevelLoopRewriter : public OpRewritePattern<func::FuncOp> {
 
   LogicalResult matchAndRewrite(func::FuncOp op,
                                 PatternRewriter &rewriter) const override {
+    // Check if the function contains any scf.parallel ops
+    {
+      bool earlyExit = true;
+      op->walk([&](scf::ParallelOp parOp) {
+        earlyExit = false;
+      });
+      if(earlyExit)
+        return failure(); // nothing to do
+    }
     LogicalResult result = success();
     // Iterate over top-level parallel ops inside the func
     op->walk<WalkOrder::PostOrder>([&](scf::ParallelOp parOp) {

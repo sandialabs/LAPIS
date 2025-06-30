@@ -205,12 +205,12 @@ def ThreadParallelOp : Kokkos_Op<"thread_parallel",
   let hasVerifier = 0;
 }
 
-def TeamBarrierOp : Kokkos_Op<"team_barrier", [HasParent<"TeamParallelOp">]> {
+def TeamBarrierOp : Kokkos_Op<"team_barrier"> {
   let summary = "Synchronize all threads in a team. In C++, t.team_barrier()";
   let description = [{
-    Kokkos team barrier, to be called within a TeamPolicy context. All threads in
-    the team must reach the barrier together to avoid deadlock, but this is enforced by the
-    fact that TeamParallelOp must be the parent.
+    Kokkos team barrier, to be called within a TeamPolicy context (either ``kokkos.team_parallel``,
+    or a team-level function). All threads in
+    the team must reach the barrier together to avoid deadlock.
     ```
     kokkos.team_barrier
     ```
