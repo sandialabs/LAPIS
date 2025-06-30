@@ -35,7 +35,7 @@ struct UndirectedGraph
       data[j * n + i] = true;
   }
 
-  bool get(int i, int j) {
+  bool get(int i, int j) const {
     if(i < j)
       return data[i * n + j];
     else if(j < i)
@@ -43,7 +43,7 @@ struct UndirectedGraph
     return true; // assume self-loops exist (should never affect conflict analysis)
   }
 
-  SmallVector<int> adj(int i) {
+  SmallVector<int> adj(int i) const {
     SmallVector<int> adj;
     for(int j = 0; j < n; j++) {
       if(get(i, j))
@@ -52,7 +52,7 @@ struct UndirectedGraph
     return adj;
   }
 
-  void print() {
+  void print() const {
     llvm::outs() << " ";
     // header row to help readability
     for(int i = 0; i < n; i++)
@@ -86,6 +86,66 @@ static void findAliasingMemrefs(Value v, SmallVector<Value>& aliasing) {
     }
   }
 }
+
+struct Allocation
+{
+  int id;
+  size_t addr;
+  size_t size;
+};
+
+static bool intersect(size_t begin1, size_t end1, size_t begin2, size_t end2) {
+  return begin1 < end2 && begin2 < end1;
+}
+
+struct AllocationSet
+{
+  SmallVector<Allocation> allocs;
+
+  // Greedily find non-conflicting location for a new allocation and add it to list
+  void place(const UndirectedGraph& conflicts, int id, size_t size, size_t alignment)
+  {
+    size_t begin = 0;
+    while(true) {
+      // Ensure alignment is correct
+      if(begin % alignment)
+        begin += (alignment - begin % alignment);
+      // Does placement at addr cause a conflict, and if so where does
+      // the largest conflicting allocation end?
+      bool conf = false;
+      size_t confEnd = 0;
+      size_t end = begin + size;
+      for(auto& alloc : allocs) {
+        if(!conflicts.get(id, alloc.id))
+          continue;
+        size_t allocBegin = alloc.addr;
+        size_t allocEnd = alloc.addr + alloc.size;
+        if(intersect(begin, end, allocBegin, allocEnd)) {
+          conf = true;
+          if(allocEnd > confEnd)
+            confEnd = allocEnd;
+        }
+      }
+      if(conf) {
+        begin = confEnd;
+      }
+      else {
+        allocs.push_back({id, begin, size});
+        break;
+      }
+    }
+  }
+
+  size_t totalScratchUsed() const {
+    size_t max = 0;
+    for(auto& a : allocs) {
+      size_t end = a.addr + a.size;
+      if(end > max)
+        max = end;
+    }
+    return max;
+  }
+};
 
 struct MemrefToKokkosScratchPass 
     : public impl::MemrefToKokkosScratchBase<MemrefToKokkosScratchPass> {
@@ -182,6 +242,51 @@ struct MemrefToKokkosScratchPass
     });
     llvm::outs() << "Computed conflict graph:\n";
     conflictGraph.print();
+    llvm::outs() << "Size (bytes) for each alloc:\n";
+    for(int i = 0; i < allocCounter; i++) {
+      size_t size;
+      Value a = allocations[i];
+      (void) kokkos::memrefSizeInBytesKnown(cast<MemRefType>(a.getType()), size, a.getDefiningOp());
+      llvm::outs() << "#" << i << ": " << size << " bytes\n";
+    }
+    llvm::outs() << "Alignment (bytes) for each alloc:\n";
+    for(int i = 0; i < allocCounter; i++) {
+      MemRefType mrt = cast<MemRefType>(allocations[i].getType());
+      llvm::outs() << "#" << i << ": " << kokkos::getBuiltinTypeSize(mrt.getElementType(), allocations[i].getDefiningOp()) << " bytes\n";
+    }
+    // Now decide where to place each allocation using a greedy strategy
+    // Initially, memory is empty. Until all allocations are placed:
+    // - pick smallest allocation. In case of tie, pick earliest allocation (aka smallest allocNumber)
+    // - put it in the lowest non-conflicting address which satisfies alignment
+    // For MALA snap model, this strategy gives the optimal placement.
+    // TODO: if the number of allocations is small (say, 8 or fewer) then do an exhaustive search on the order in which to place,
+    // and pick the one with the lowest total scratch usage
+    //
+    // Sort the allocations into placement order
+    SmallVector<Allocation> allocsToPlace;
+    for(int i = 0; i < allocCounter; i++) {
+      Value a = allocations[i];
+      size_t size;
+      (void) kokkos::memrefSizeInBytesKnown(cast<MemRefType>(a.getType()), size, a.getDefiningOp());
+      allocsToPlace.push_back({i, 0, size});
+    }
+    std::stable_sort(allocsToPlace.begin(), allocsToPlace.end(),
+      [](const Allocation& a1, const Allocation& a2) -> bool {
+        if(a1.size < a2.size)
+          return true;
+        else
+          return false;
+      });
+    AllocationSet allocSet;
+    for(Allocation& a : allocsToPlace) {
+      MemRefType mrt = cast<MemRefType>(allocations[a.id].getType());
+      int alignment = kokkos::getBuiltinTypeSize(mrt.getElementType(), func);
+      allocSet.place(conflictGraph, a.id, a.size, alignment);
+    }
+    llvm::outs() << "Placed all allocations greedily:\n";
+    for(auto& alloc : allocSet.allocs) {
+      llvm::outs() << "#" << alloc.id << ": [" << alloc.addr << "..." << alloc.addr + alloc.size << ")\n";
+    }
   }
 };
 
