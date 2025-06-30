@@ -27,6 +27,10 @@
 namespace mlir {
 namespace kokkos {
 
+// Is op a memref/view alias?
+// For example, shallow-copy, subview and cast ops
+bool isViewAliasingOp(Operation* op);
+
 // Given a CallOp, find the FuncOp corresponding to the callee.
 // Since CallOp can only do direct calls, this should always succeed.
 func::FuncOp getCalledFunction(func::CallOp callOp);

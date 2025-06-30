@@ -512,7 +512,7 @@ uint64_t AllocScratchOp::getScratchEnd() {
 
 namespace mlir::kokkos {
 
-static bool isViewAliasingOp(Operation* op) {
+bool isViewAliasingOp(Operation* op) {
   // This is not a complete list, but should be kept up to date with what the emitter supports
   return isa<
     memref::SubViewOp, memref::CollapseShapeOp,
