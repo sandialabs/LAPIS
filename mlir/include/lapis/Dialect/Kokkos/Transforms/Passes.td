@@ -9,10 +9,12 @@ def MemrefResultsToParams : Pass<"memref-results-to-params", "ModuleOp"> {
   let summary = "Moves memref-type return values to be function parameters instead";
   let description = [{
     For each non-private function with at least one memref-typed return value, remove the return value and add
-    a parameter with the same type. Each return value of the original function must be the result of a memref.alloc operation.
+    a parameter with the same type. Each return value of the original function must be the result of a memref.alloc operation,
+    or an alias of an allocation.
     Replace all usages of this allocation with the new parameter, and delete the allocation.
+    Also remove any return values which are equivalent to a newly added parameter.
     The user/caller is then responsible for passing in a view with the correct size.
-    This is similar but not equivalent to the built-in pass ``--buffer-results-to-out-params``.
+    This is similar but not equivalent to the built-in passes ``--buffer-results-to-out-params --drop-equivalent-buffer-results``.
 
     That pass updates call sites for the new interface, but does not eliminate memref allocations for
     results (the whole point of this pass) and deep-copies from the allocated buffer to the argument.
@@ -27,7 +29,7 @@ def MemrefResultsToParams : Pass<"memref-results-to-params", "ModuleOp"> {
   ];
 }
 
-def MemrefToKokkosScratch : Pass<"memref-to-kokkos-scratch"> {
+def MemrefToKokkosScratch : Pass<"memref-to-kokkos-scratch", "func::FuncOp"> {
   let summary = "Replaces memref-type return values to be function parameters instead";
   let description = [{
     Replace each memref.alloc op with kokkos.alloc_scratch. This analyzes lifetimes of each
