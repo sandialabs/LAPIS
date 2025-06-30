@@ -287,6 +287,15 @@ struct MemrefToKokkosScratchPass
     for(auto& alloc : allocSet.allocs) {
       llvm::outs() << "#" << alloc.id << ": [" << alloc.addr << "..." << alloc.addr + alloc.size << ")\n";
     }
+    llvm::outs() << "Total scratch requirement: " << allocSet.totalScratchUsed() << '\n';
+    // Now that all allocations have been placed, replace each memref.alloc with kokkos.alloc_scratch
+    for(Allocation& alloc : allocSet.allocs) {
+      memref::AllocOp oldOp = cast<memref::AllocOp>(allocations[alloc.id].getDefiningOp());
+      MemRefType mrt = cast<MemRefType>(oldOp.getResult().getType());
+      rewriter.setInsertionPoint(oldOp);
+      auto newOp = rewriter.create<kokkos::AllocScratchOp>(oldOp->getLoc(), mrt, rewriter.getIndexAttr(alloc.addr));
+      rewriter.replaceOp(oldOp, newOp);
+    }
   }
 };
 
