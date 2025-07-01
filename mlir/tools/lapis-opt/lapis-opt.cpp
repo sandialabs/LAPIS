@@ -98,6 +98,7 @@ int main(int argc, char **argv) {
 
   kernel::registerKernelFusionDriver();
   kernel::registerLinalgGenericReorderingPass();
+  kernel::registerKernelDomainFusionPass();
 
   LLVM::registerInlinerInterface(registry);
   func::registerAllExtensions(registry);

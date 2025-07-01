@@ -94,24 +94,18 @@ bool parallelIterationSpacesMatch(ModuleOp module, CallOp firstCall,
 
   // no built-in support for shape analysis => do some digging
   for (LinalgOp firstLAOp : firstLAOps) {
-    SmallVector<OpOperand *> fOperands =
-        firstLAOp.getOpOperandsMatchingBBargs();
-
+    SmallVector<unsigned int> firstParDims;
+    firstLAOp.getParallelDims(firstParDims);
     for (LinalgOp secondLAOp : secondLAOps) {
-      SmallVector<OpOperand *> sOperands =
-          secondLAOp.getOpOperandsMatchingBBargs();
+      SmallVector<unsigned int> secondParDims;
+      secondLAOp.getParallelDims(secondParDims);
+      
+      bool firstIncludesSecond = std::includes(
+        firstParDims.begin(), firstParDims.end(),
+        secondParDims.begin(), secondParDims.end()
+      );
 
-      // if we can't figure out loop bounds, look at axes of matching operands
-      for (OpOperand *fOp : fOperands) {
-        Value fArg = firstCalleeToCall.lookupOrNull(fOp->get());
-        for (OpOperand *sOp : sOperands) {
-          Value sArg = secondCalleeToCall.lookupOrNull(sOp->get());
-
-          // check that axes match
-          if (fArg == sArg && isa<TensorType>(fArg.getType())) {
-          }
-        }
-      }
+      if (!firstIncludesSecond) return false;
     }
   }
 
@@ -119,7 +113,6 @@ bool parallelIterationSpacesMatch(ModuleOp module, CallOp firstCall,
 }
 
 bool markedForFusion(CallOp keyKernel, CallOp valKernel) {
-  // FIXME: segfault if one of the kernels does not have this attribute
   if (!keyKernel->hasAttr("fuse_with") || !valKernel->hasAttr("fuse_with"))
     return false;
 
