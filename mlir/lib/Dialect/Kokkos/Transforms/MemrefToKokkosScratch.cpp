@@ -20,7 +20,7 @@ namespace mlir {
 using namespace mlir;
 
 // Uncomment to print out detailed debug info about allocation scheduling
-// #define SCRATCH_ALLOCATION_DEBUG
+#define SCRATCH_ALLOCATION_DEBUG
 
 struct UndirectedGraph
 {
@@ -148,7 +148,87 @@ struct AllocationSet
     }
     return max;
   }
+
+  double packingCost() const {
+    // We don't know how big level 0 scratch will be,
+    // but generally, packing the most memory into the lowest possible addresses helps more
+    // scratch views fit in level 0.
+    double cost = 0;
+    for(auto& a : alloc) {
+      cost += (double) a.addr * a.addr;
+    }
+    return cost;
+  }
 };
+
+AllocationSet packGreedy(const UndirectedGraph& conflicts, const SmallVector<Allocation>& allocsToPlace) {
+  // Initially, scratch is empty. Until all allocations are placed:
+  // - take smallest allocation. In case of tie, pick earliest allocation (aka smallest allocNumber)
+  // - put it in the lowest non-conflicting address which satisfies alignment
+  std::stable_sort(allocsToPlace.begin(), allocsToPlace.end(),
+    [](const Allocation& a1, const Allocation& a2) -> bool {
+      if(a1.size < a2.size)
+        return true;
+      else
+        return false;
+    });
+  AllocationSet allocSet;
+  for(Allocation& a : allocsToPlace) {
+    MemRefType mrt = cast<MemRefType>(allocations[a.id].getType());
+    int alignment = kokkos::getBuiltinTypeSize(mrt.getElementType(), func);
+    allocSet.place(conflictGraph, a.id, a.size, alignment);
+  }
+  return allocSet;
+}
+
+AllocationSet packExhaustive(const UndirectedGraph& conflicts, const SmallVector<Allocation>& allocsToPlace, const SmallVector<int> alignments) {
+  // Exhaustively try greedy packing strategy on all possible permutations of packing order
+  // This finds the optimal packing, under the assumption that each element is accessed equally often (which is not really true)
+  size_t n = allocsToPlace.size();
+  size_t orders = 1;
+  for(size_t i = 2; i <= n; i++)
+    orders *= i;
+  // Iterate over possible permutations of all
+  AllocationSet best;
+  // Minimize total size first, and cost second
+  size_t bestSize;
+  double bestCost;
+  for(size_t i = 0; i < orders; i++) {
+    // Try this placement order
+    AllocationSet attempt;
+    for(Allocation& a : allocsToPlace) {
+      attempt.place(conflicts, a.id, a.size, alignments[a.id]);
+    }
+    if(i == 0) {
+      best = attempt;
+      bestSize = attempt.totalScratchUsed();
+      bestCost = attempt.packingCost();
+    }
+    else {
+      // Evaluate whether this version is better than 'best'
+      size_t thisSize = attempt.totalScratchUsed();
+      if(thisSize < bestSize) {
+        best = attempt;
+        bestSize = thisSize;
+        bestCost = attempt.packingCost();
+      }
+      else if(thisSize == bestSize) {
+        double thisCost = attempt.packingCost();
+        if(thisCost < bestCost) {
+          best = attempt;
+          bestSize = thisSize;
+          bestCost = thisCost;
+        }
+      }
+    }
+    // Cycle elements to next permutation according to id
+    std::next_permutation(allocsToPlace.begin(), allocsToPlace.end(),
+        [](const Allocation& a1, const Allocation& a2) -> bool {
+          return a1.id < a2.id;
+        });
+  }
+  return best;
+}
 
 struct MemrefToKokkosScratchPass 
     : public impl::MemrefToKokkosScratchBase<MemrefToKokkosScratchPass> {
@@ -263,13 +343,11 @@ struct MemrefToKokkosScratchPass
       llvm::outs() << "#" << i << ": " << kokkos::getBuiltinTypeSize(mrt.getElementType(), allocations[i].getDefiningOp()) << " bytes\n";
     }
 #endif
-    // Now decide where to place each allocation using a greedy strategy
-    // Initially, memory is empty. Until all allocations are placed:
-    // - pick smallest allocation. In case of tie, pick earliest allocation (aka smallest allocNumber)
-    // - put it in the lowest non-conflicting address which satisfies alignment
+    // Now decide where to place each allocation.
+    // Exhaustive strategy is very expensive (N! * N^2) so only do it if the total number
+    // of allocations is small
+    constexpr exhaustiveMax = 6;
     // For MALA snap model, this strategy gives the optimal placement.
-    // TODO: if the number of allocations is small (say, 8 or fewer) then do an exhaustive search on the order in which to place,
-    // and pick the one with the lowest total scratch usage
     //
     // Sort the allocations into placement order
     SmallVector<Allocation> allocsToPlace;
@@ -279,21 +357,22 @@ struct MemrefToKokkosScratchPass
       (void) kokkos::memrefSizeInBytesKnown(cast<MemRefType>(a.getType()), size, a.getDefiningOp());
       allocsToPlace.push_back({i, 0, size});
     }
-    std::stable_sort(allocsToPlace.begin(), allocsToPlace.end(),
-      [](const Allocation& a1, const Allocation& a2) -> bool {
-        if(a1.size < a2.size)
-          return true;
-        else
-          return false;
-      });
     AllocationSet allocSet;
-    for(Allocation& a : allocsToPlace) {
-      MemRefType mrt = cast<MemRefType>(allocations[a.id].getType());
-      int alignment = kokkos::getBuiltinTypeSize(mrt.getElementType(), func);
-      allocSet.place(conflictGraph, a.id, a.size, alignment);
+    bool useExhaustive = allocCounter <= exhaustiveMax;
+    if(useExhaustive) {
+      // Precompute alignments
+      SmallVector<int> alignments;
+      for(Allocation& a : allocsToPlace) {
+        MemRefType mrt = cast<MemRefType>(allocations[a.id].getType());
+        alignments.push_back(kokkos::getBuiltinTypeSize(mrt.getElementType(), func));
+      }
+      allocSet = packExhaustive(conflictGraph, allocsToPlace, alignments);
+    }
+    else {
+      allocSet = packGreedy(conflictGraph, allocsToPlace);
     }
 #ifdef SCRATCH_ALLOCATION_DEBUG
-    llvm::outs() << "Placed all allocations greedily:\n";
+    llvm::outs() << "Placed all allocations using " << (useExhaustive ? "exhaustive" : "greedy") << " strategy:\n";
     for(auto& alloc : allocSet.allocs) {
       llvm::outs() << "#" << alloc.id << ": [" << alloc.addr << "..." << alloc.addr + alloc.size << ")\n";
     }
