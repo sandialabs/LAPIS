@@ -50,8 +50,12 @@ int main(int argc, char **argv) {
       llvm::cl::init("-"));
 
   static llvm::cl::opt<std::string> cxxFilename(
-      "o", llvm::cl::desc("C++ output filename"), llvm::cl::value_desc("C++ filename"),
+      "o", llvm::cl::desc("C++ output filename"), llvm::cl::value_desc("C++ (.cpp) filename"),
       llvm::cl::init("-"));
+
+  static llvm::cl::opt<std::string> cxxHeaderFilename(
+      "hpp", llvm::cl::desc("C++ header output filename", llvm::cl::value_desc("C++ header filename"),
+      llvm::cl::init(""));
 
   static llvm::cl::opt<std::string> pythonFilename(
       "py", llvm::cl::desc("Python output filename (optional)"), llvm::cl::value_desc("Python filename"),
@@ -59,6 +63,10 @@ int main(int argc, char **argv) {
 
   static llvm::cl::opt<bool> isLastKernel(
       "finalize", llvm::cl::desc("Whether this module's Python destructor should finalize Kokkos"), llvm::cl::value_desc("finalize"),
+      llvm::cl::init(false));
+
+  static llvm::cl::opt<bool> emitTeamLevel(
+      "team-level", llvm::cl::desc("Whether this module should be emitted as team-level code"), llvm::cl::value_desc("team-level"),
       llvm::cl::init(false));
 
   // For backward compatiblity, allow the --mlir-to-kokkos flag to be passed (but the value is ignored;
@@ -69,10 +77,12 @@ int main(int argc, char **argv) {
 
   llvm::InitLLVM y(argc, argv);
 
-  //registerAsmPrinterCLOptions();
-  //registerMLIRContextCLOptions();
-  //registerTranslationCLOptions();
   llvm::cl::ParseCommandLineOptions(argc, argv, "lapis-translate");
+
+  if(pythonFilename.size() && emitTeamLevel) {
+    llvm::errs() << "Cannot emit python wrapper when emitting team-level kernels\n";
+    return 1;
+  }
 
   std::string errorMessage;
   std::unique_ptr<llvm::MemoryBuffer> input = openInputFile(inputFilename, &errorMessage);
@@ -91,6 +101,16 @@ int main(int argc, char **argv) {
   if(pythonFilename.length()) {
     pythonOutput = openOutputFile(pythonFilename, &errorMessage);
     if (!pythonOutput) {
+      llvm::errs() << errorMessage << "\n";
+      return 1;
+    }
+  }
+
+  // Header output path (optional)
+  std::unique_ptr<llvm::ToolOutputFile> cxxHeaderOutput = nullptr;
+  if(cxxHeaderFilename.length()) {
+    cxxHeaderOutput = openOutputFile(cxxHeaderFilename, &errorMessage);
+    if (!ccxxHeaderOutput) {
       llvm::errs() << errorMessage << "\n";
       return 1;
     }
@@ -124,17 +144,25 @@ int main(int argc, char **argv) {
     llvm::errs() << "Failed to parse input module\n";
     return 1;
   }
-  if(pythonOutput) {
-   if(failed(kokkos::translateToKokkosCpp(*op, cxxOutput->os(), pythonOutput->os(), isLastKernel)))
-     return 1;
+  if(emitTeamLevel) {
+    if(failed(kokkos::translateToKokkosCppTeamLevel(*op, &cxxOutput->os(), &cxxHeaderOutput->os(), cxxHeaderFilename)))
+      return 1;
   }
   else {
-   if(failed(kokkos::translateToKokkosCpp(*op, cxxOutput->os())))
-     return 1;
+    if(pythonOutput) {
+     if(failed(kokkos::translateToKokkosCpp(*op, &cxxOutput->os(), &cxxHeaderOutput->os(), cxxHeaderFilename, &pythonOutput->os(), isLastKernel)))
+       return 1;
+    }
+    else {
+     if(failed(kokkos::translateToKokkosCpp(*op, &cxxOutput->os(), &cxxHeaderOutput->os(), cxxHeaderFilename)))
+       return 1;
+    }
   }
 
   // Everything succeeded; don't delete the output files 
   cxxOutput->keep();
+  if(cxxHeaderOutput)
+    cxxHeaderOutput->keep();
   if(pythonOutput)
     pythonOutput->keep();
 
