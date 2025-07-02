@@ -154,14 +154,14 @@ struct AllocationSet
     // but generally, packing the most memory into the lowest possible addresses helps more
     // scratch views fit in level 0.
     double cost = 0;
-    for(auto& a : alloc) {
+    for(const Allocation& a : allocs) {
       cost += (double) a.addr * a.addr;
     }
     return cost;
   }
 };
 
-AllocationSet packGreedy(const UndirectedGraph& conflicts, const SmallVector<Allocation>& allocsToPlace) {
+AllocationSet packGreedy(const UndirectedGraph& conflicts, SmallVector<Allocation>& allocsToPlace, const SmallVector<int> alignments) {
   // Initially, scratch is empty. Until all allocations are placed:
   // - take smallest allocation. In case of tie, pick earliest allocation (aka smallest allocNumber)
   // - put it in the lowest non-conflicting address which satisfies alignment
@@ -173,17 +173,14 @@ AllocationSet packGreedy(const UndirectedGraph& conflicts, const SmallVector<All
         return false;
     });
   AllocationSet allocSet;
-  for(Allocation& a : allocsToPlace) {
-    MemRefType mrt = cast<MemRefType>(allocations[a.id].getType());
-    int alignment = kokkos::getBuiltinTypeSize(mrt.getElementType(), func);
-    allocSet.place(conflictGraph, a.id, a.size, alignment);
+  for(const Allocation& a : allocsToPlace) {
+    allocSet.place(conflicts, a.id, a.size, alignments[a.id]);
   }
   return allocSet;
 }
 
-AllocationSet packExhaustive(const UndirectedGraph& conflicts, const SmallVector<Allocation>& allocsToPlace, const SmallVector<int> alignments) {
-  // Exhaustively try greedy packing strategy on all possible permutations of packing order
-  // This finds the optimal packing, under the assumption that each element is accessed equally often (which is not really true)
+AllocationSet packExhaustive(const UndirectedGraph& conflicts, SmallVector<Allocation>& allocsToPlace, const SmallVector<int> alignments) {
+  // Try greedy packing strategy on all n! permutations of packing order
   size_t n = allocsToPlace.size();
   size_t orders = 1;
   for(size_t i = 2; i <= n; i++)
@@ -196,7 +193,7 @@ AllocationSet packExhaustive(const UndirectedGraph& conflicts, const SmallVector
   for(size_t i = 0; i < orders; i++) {
     // Try this placement order
     AllocationSet attempt;
-    for(Allocation& a : allocsToPlace) {
+    for(const Allocation& a : allocsToPlace) {
       attempt.place(conflicts, a.id, a.size, alignments[a.id]);
     }
     if(i == 0) {
@@ -346,7 +343,7 @@ struct MemrefToKokkosScratchPass
     // Now decide where to place each allocation.
     // Exhaustive strategy is very expensive (N! * N^2) so only do it if the total number
     // of allocations is small
-    constexpr exhaustiveMax = 6;
+    constexpr int exhaustiveMax = 6;
     // For MALA snap model, this strategy gives the optimal placement.
     //
     // Sort the allocations into placement order
@@ -358,18 +355,18 @@ struct MemrefToKokkosScratchPass
       allocsToPlace.push_back({i, 0, size});
     }
     AllocationSet allocSet;
+    // Precompute alignments
+    SmallVector<int> alignments;
+    for(Allocation& a : allocsToPlace) {
+      MemRefType mrt = cast<MemRefType>(allocations[a.id].getType());
+      alignments.push_back(kokkos::getBuiltinTypeSize(mrt.getElementType(), func));
+    }
     bool useExhaustive = allocCounter <= exhaustiveMax;
     if(useExhaustive) {
-      // Precompute alignments
-      SmallVector<int> alignments;
-      for(Allocation& a : allocsToPlace) {
-        MemRefType mrt = cast<MemRefType>(allocations[a.id].getType());
-        alignments.push_back(kokkos::getBuiltinTypeSize(mrt.getElementType(), func));
-      }
       allocSet = packExhaustive(conflictGraph, allocsToPlace, alignments);
     }
     else {
-      allocSet = packGreedy(conflictGraph, allocsToPlace);
+      allocSet = packGreedy(conflictGraph, allocsToPlace, alignments);
     }
 #ifdef SCRATCH_ALLOCATION_DEBUG
     llvm::outs() << "Placed all allocations using " << (useExhaustive ? "exhaustive" : "greedy") << " strategy:\n";
