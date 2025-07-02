@@ -4259,7 +4259,7 @@ LogicalResult KokkosCppEmitter::emitFuncResultTypes(Location loc, ArrayRef<Type>
   }
   if(types.size() > 1)
     *this << "std::tuple<";
-  if (failed(interleaveCommaWithError(types, os, emitOneType)))
+  if (failed(interleaveCommaWithError(types, ostream(), emitOneType)))
     return failure();
   if(types.size() > 1)
     *this << ">";
