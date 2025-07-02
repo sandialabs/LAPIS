@@ -54,11 +54,11 @@ int main(int argc, char **argv) {
       llvm::cl::init("-"));
 
   static llvm::cl::opt<std::string> cxxHeaderFilename(
-      "hpp", llvm::cl::desc("C++ header output filename"), llvm::cl::value_desc("C++ header filename"),
+      "hpp", llvm::cl::desc("C++ header output filename (optional)"), llvm::cl::value_desc("C++ header filename (optional)"),
       llvm::cl::init(""));
 
   static llvm::cl::opt<std::string> pythonFilename(
-      "py", llvm::cl::desc("Python output filename (optional)"), llvm::cl::value_desc("Python filename"),
+      "py", llvm::cl::desc("Python output filename (optional)"), llvm::cl::value_desc("Python filename (optional)"),
       llvm::cl::init(""));
 
   static llvm::cl::opt<bool> isLastKernel(
@@ -144,18 +144,21 @@ int main(int argc, char **argv) {
     llvm::errs() << "Failed to parse input module\n";
     return 1;
   }
+  raw_ostream* cxxHeaderStream = nullptr;
+  if(cxxHeaderOutput)
+    cxxHeaderStream = &cxxHeaderOutput->os();
   if(emitTeamLevel) {
-    if(failed(kokkos::translateToKokkosCppTeamLevel(*op, &cxxOutput->os(), &cxxHeaderOutput->os(), cxxHeaderFilename)))
+    if(failed(kokkos::translateToKokkosCppTeamLevel(*op, &cxxOutput->os(), cxxHeaderStream, cxxHeaderFilename)))
       return 1;
   }
   else {
     if(pythonOutput) {
-     if(failed(kokkos::translateToKokkosCpp(*op, &cxxOutput->os(), &cxxHeaderOutput->os(), cxxHeaderFilename, &pythonOutput->os(), isLastKernel)))
-       return 1;
+      if(failed(kokkos::translateToKokkosCpp(*op, &cxxOutput->os(), cxxHeaderStream, cxxHeaderFilename, &pythonOutput->os(), isLastKernel)))
+        return 1;
     }
     else {
-     if(failed(kokkos::translateToKokkosCpp(*op, &cxxOutput->os(), &cxxHeaderOutput->os(), cxxHeaderFilename)))
-       return 1;
+      if(failed(kokkos::translateToKokkosCpp(*op, &cxxOutput->os(), cxxHeaderStream, cxxHeaderFilename)))
+        return 1;
     }
   }
 
