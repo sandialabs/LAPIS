@@ -2259,7 +2259,13 @@ static LogicalResult printFunctionDeviceLevel(KokkosCppEmitter &emitter, func::F
   }
   if(!isSupportFunc) {
     // Function definition with body.
-    // Create a declaration in the decl file first.
+    // Create a declaration in the decl file.
+    // First, make sure all result and parameter types are declared (e.g. structs)
+    for(Type t : func.getFunctionType().getResults())
+      emitter.ensureTypeDeclared(func.getLoc(), t);
+    for(auto arg : func.getArguments()) {
+      emitter.ensureTypeDeclared(func.getLoc(), arg.getType());
+    }
     emitter.selectDeclCppStream();
     if (failed(emitter.emitFuncResultTypes(loc, func.getFunctionType().getResults())))
       return failure();
