@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
       llvm::cl::init("-"));
 
   static llvm::cl::opt<std::string> cxxHeaderFilename(
-      "hpp", llvm::cl::desc("C++ header output filename", llvm::cl::value_desc("C++ header filename"),
+      "hpp", llvm::cl::desc("C++ header output filename"), llvm::cl::value_desc("C++ header filename"),
       llvm::cl::init(""));
 
   static llvm::cl::opt<std::string> pythonFilename(
@@ -110,7 +110,7 @@ int main(int argc, char **argv) {
   std::unique_ptr<llvm::ToolOutputFile> cxxHeaderOutput = nullptr;
   if(cxxHeaderFilename.length()) {
     cxxHeaderOutput = openOutputFile(cxxHeaderFilename, &errorMessage);
-    if (!ccxxHeaderOutput) {
+    if (!cxxHeaderOutput) {
       llvm::errs() << errorMessage << "\n";
       return 1;
     }

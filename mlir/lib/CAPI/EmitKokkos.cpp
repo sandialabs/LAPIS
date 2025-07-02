@@ -113,7 +113,7 @@ MlirLogicalResult lapisLowerAndEmitKokkos(const char *moduleText,
   llvm::raw_fd_ostream cxxFileHandle(StringRef(cxxSourceFile), ec);
   llvm::raw_fd_ostream pyFileHandle(StringRef(pySourceFile), ec);
   LogicalResult result = kokkos::translateToKokkosCpp(
-      *module, cxxFileHandle, pyFileHandle, isLastKernel);
+      *module, &cxxFileHandle, nullptr, "", &pyFileHandle, isLastKernel);
   pyFileHandle.close();
   cxxFileHandle.close();
   return wrap(result);
@@ -126,7 +126,7 @@ MlirLogicalResult lapisEmitKokkos(MlirModule module, const char *cxxSourceFile,
   llvm::raw_fd_ostream cxxFileHandle(StringRef(cxxSourceFile), ec);
   llvm::raw_fd_ostream pyFileHandle(StringRef(pySourceFile), ec);
   LogicalResult result = kokkos::translateToKokkosCpp(
-      op, cxxFileHandle, pyFileHandle, isLastKernel);
+      op, &cxxFileHandle, nullptr, "", &pyFileHandle, isLastKernel);
   pyFileHandle.close();
   cxxFileHandle.close();
   return wrap(result);
