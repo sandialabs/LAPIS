@@ -107,9 +107,14 @@ struct KokkosCppEmitter {
   /// If !forSparseRuntime, then memrefs are represented as host Kokkos::Views.
   LogicalResult emitType(Location loc, Type type, bool forSparseRuntime = false);
 
-  // Emit a memref type as a Kokkos::View, with the given memory space.
+  // Emit a memref type as a Kokkos::View, with the given memory space (host, device, or DualView)
   LogicalResult emitMemrefType(Location loc, MemRefType type, kokkos::MemorySpace space);
   LogicalResult emitMemrefType(Location loc, UnrankedMemRefType type, kokkos::MemorySpace space);
+
+  // Emit a Kokkos::View type for a scratch view. This will be in AnonymousSpace, be unmanaged,
+  // be LayoutRight, and always have static shape. A View of this type can be constructed with just
+  // a pointer to the first element.
+  LogicalResult emitScratchMemrefType(Location loc, MemRefType type);
 
   LogicalResult emitStridedMemrefType(Location loc, MemRefType type, kokkos::MemorySpace space);
 
@@ -2013,9 +2018,28 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::YieldOp o
 }
 
 static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::AllocScratchOp op) {
-  // Get the constant address of this scratch view
-  size_t addr = op.getScratchBegin();
-  // Declare an unmanaged scratch view given the two 
+  // Get the constant address range of this scratch view
+  size_t addrBegin = op.getScratchBegin();
+  size_t addrEnd = op.getScratchEnd();
+  // 2 constexpr values are defined in every team-level function:
+  // - LO_scratch_max
+  // - l1_cutoff
+  // and two pointers are scratch0 and scratch1.
+  // Use L0 scratch max to decide which level to allocate this view, and
+  // l1_cutoff to shift the address for views in L1.
+  MemRefType mrt = op.getType();
+  Type elem = mrt.getElementType();
+  auto name = emitter.getOrCreateName(op.getResult());
+  emitter << "constexpr bool " << name << "_spill = " << addrEnd << " > LO_scratch_max;\n";
+  // All scratch allocations are contiguous and have a layout we control
+  // (for now, always LayoutRight). Also AnonymousSpace and Unmanaged.
+  if(failed(emitter.emitScratchMemrefType(op.getLoc(), mrt)))
+    return failure();
+  emitter << " ";
+  emitter << name << "((";
+  if(failed(emitter.emitType(op.getLoc(), elem)))
+    return failure();
+  emitter << "*) (" << name << "_spill ? (scratch1 + " << addrBegin << " - l1_cutoff) : (scratch0 + " << addrBegin << ")));\n";
   return success();
 }
 
@@ -2757,7 +2781,7 @@ static LogicalResult createScratchHelpers(KokkosCppEmitter &emitter, StringRef f
   int totalScratchUsed = 0;
   // Make a list of all the scratch allocations in the function
   SmallVector<kokkos::AllocScratchOp> allocs;
-  func->walk([&](memref::AllocOp alloc) {
+  func->walk([&](kokkos::AllocScratchOp alloc) {
     allocs.push_back(alloc);
     int addrEnd = alloc.getScratchEnd();
     if(addrEnd > totalScratchUsed)
@@ -2840,7 +2864,7 @@ static LogicalResult printFunctionTeamLevel(KokkosCppEmitter &emitter, func::Fun
         "Failed to generate kokkos scratch helper functions");
   }
   KokkosCppEmitter::Scope scope(emitter);
-  emitter << "template<int L0_scratch_max";
+  emitter << "template<typename ExecSpace, int L0_scratch_max";
   for(size_t i = 0; i < memrefParams.size(); i++) {
     emitter << ", typename ViewArg" << i;
   }
@@ -2849,7 +2873,7 @@ static LogicalResult printFunctionTeamLevel(KokkosCppEmitter &emitter, func::Fun
   if (failed(emitter.emitFuncResultTypes(loc, func.getFunctionType().getResults())))
     return failure();
   emitter << ' ' << funcName;
-  emitter << "(";
+  emitter << "(typename Kokkos::TeamPolicy<ExecSpace>::member_type& team, ";
   // Make a list of the memref parameters.
   // Their types will be template parameters since we don't want to enforce a certain layout on them.
   {
@@ -2871,7 +2895,7 @@ static LogicalResult printFunctionTeamLevel(KokkosCppEmitter &emitter, func::Fun
   }
   if(func.getArguments().size())
     emitter << ", ";
-  emitter << "void* scratch0, void* scratch1";
+  emitter << "char* scratch0, char* scratch1";
   emitter << ") {\n";
   emitter.indent();
   emitter << "constexpr int l1_cutoff = " << funcName << "_L1_shift(L0_scratch_max);\n";
@@ -4236,8 +4260,10 @@ LogicalResult KokkosCppEmitter::emitMemrefType(Location loc, MemRefType type, ko
     *this << ", Kokkos::LayoutRight, ";
     if(space == kokkos::MemorySpace::Device)
       *this << "Kokkos::DefaultExecutionSpace";
-    else
+    else if(space == kokkos::MemorySpace::Host)
       *this << "Kokkos::DefaultHostExecutionSpace";
+    else
+      return failure();
     *this << ">";
   }
   return success();
@@ -4262,6 +4288,23 @@ LogicalResult KokkosCppEmitter::emitMemrefType(Location loc, UnrankedMemRefType 
       *this << "Kokkos::DefaultHostExecutionSpace";
     *this << ">";
   }
+  return success();
+}
+
+LogicalResult KokkosCppEmitter::emitScratchMemrefType(Location loc, MemRefType type)
+{
+  if(!type.hasStaticShape()) {
+    // This invariant is already enforced by the memref-to-kokkos-scratch pass,
+    // but check here just to be safe
+    llvm::errs() << "Cannot emit memref type as scratch space View since it does not have static shape.\n";
+    return failure();
+  }
+  *this << "Kokkos::View<";
+  if (failed(emitType(loc, type.getElementType())))
+    return failure();
+  for(auto extent : type.getShape())
+    *this << '[' << extent << ']';
+  *this << ", Kokkos::LayoutRight, Kokkos::AnonymousSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>";
   return success();
 }
 
