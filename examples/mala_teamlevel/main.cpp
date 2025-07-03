@@ -52,7 +52,7 @@ int main()
     Kokkos::View<float**, Kokkos::DefaultExecutionSpace> predictions("predictions", num_descriptors, out_dimension);
     // Construct inputs
     {
-      std::ifstream f("snap_descriptors.txt");
+      std::ifstream f("../data/snap_descriptors.txt");
       if(!f.good())
         throw std::runtime_error("Failed to open descriptor file");
       for(int i = 0; i < 8748; i++) {
@@ -67,7 +67,7 @@ int main()
     auto predictions_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), predictions);
     std::cout << "Checking results...\n";
     Kokkos::View<float[8748][11], Kokkos::HostSpace> goldResults("goldResults");
-    std::ifstream f("snap_predictions.txt");
+    std::ifstream f("../data/snap_predictions.txt");
     if(!f.good())
       throw std::runtime_error("Failed to open predictions file");
     for(int i = 0; i < 8748; i++) {
@@ -90,7 +90,7 @@ int main()
   lapis_finalize();
   Kokkos::finalize();
   if(passed)
-    std::cout << "** Sucess**\n";
+    std::cout << "** Success **\n";
   else
     std::cout << "** Failure **\n";
   return passed ? 0 : 1;

@@ -9,7 +9,7 @@ lapis-translate forward_snap_lowered.mlir --team-level -o forward_snap.cpp --hpp
 
 mkdir -p build
 cd build
-cmake -DCMAKE_BUILD_TYPE=Debug ..
+cmake -DCMAKE_BUILD_TYPE=Release ..
 echo "Building executable..."
 make -j2
 cd ..
