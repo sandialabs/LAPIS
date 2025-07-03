@@ -422,7 +422,10 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
 static LogicalResult printOperation(KokkosCppEmitter &emitter,
                                     memref::GetGlobalOp op) {
   // Shallow copy in local scope. Can't reference host global in device code
-  emitter << "auto " << emitter.getOrCreateName(op.getResult()) << " = " << op.getName() << ";\n";
+  if(emitter.emittingTeamLevel())
+    emitter << "const auto& " << emitter.getOrCreateName(op.getResult()) << " = globals.m_" << op.getName() << ";\n";
+  else
+    emitter << "const auto& " << emitter.getOrCreateName(op.getResult()) << " = " << op.getName() << ";\n";
   return success();
 }
 
@@ -728,7 +731,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
 static LogicalResult printOperation(KokkosCppEmitter &emitter,
                                     memref::StoreOp op) {
   emitter << emitter.getOrCreateName(op.getMemref());
-  if(kokkos::getMemSpace(op.getMemref()) == kokkos::MemorySpace::DualView) {
+  if(!emitter.emittingTeamLevel() && kokkos::getMemSpace(op.getMemref()) == kokkos::MemorySpace::DualView) {
     // Which view to access depends if we are in host or device context
     if(kokkos::getOpExecutionSpace(op) == kokkos::ExecutionSpace::Device)
       emitter << "_d";
@@ -757,7 +760,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   emitter << ' ' << emitter.getOrCreateName(op.getResult()) << " = ";
   if(failed(emitter.emitValue(op.getMemRef())))
     return op.emitError("Failed to emit the LoadOp's memref value");
-  if(kokkos::getMemSpace(op.getMemref()) == kokkos::MemorySpace::DualView) {
+  if(!emitter.emittingTeamLevel() && kokkos::getMemSpace(op.getMemref()) == kokkos::MemorySpace::DualView) {
     // Which view to access depends if we are in host or device context
     if(kokkos::getOpExecutionSpace(op) == kokkos::ExecutionSpace::Device)
       emitter << "_d";
@@ -2022,7 +2025,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::AllocScra
   size_t addrBegin = op.getScratchBegin();
   size_t addrEnd = op.getScratchEnd();
   // 2 constexpr values are defined in every team-level function:
-  // - LO_scratch_max
+  // - L0_scratch_max
   // - l1_cutoff
   // and two pointers are scratch0 and scratch1.
   // Use L0 scratch max to decide which level to allocate this view, and
@@ -2030,7 +2033,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::AllocScra
   MemRefType mrt = op.getType();
   Type elem = mrt.getElementType();
   auto name = emitter.getOrCreateName(op.getResult());
-  emitter << "constexpr bool " << name << "_spill = " << addrEnd << " > LO_scratch_max;\n";
+  emitter << "constexpr bool " << name << "_spill = " << addrEnd << " > L0_scratch_max;\n";
   // All scratch allocations are contiguous and have a layout we control
   // (for now, always LayoutRight). Also AnonymousSpace and Unmanaged.
   if(failed(emitter.emitScratchMemrefType(op.getLoc(), mrt)))
@@ -2814,6 +2817,52 @@ static LogicalResult printFunctionDeviceLevel(KokkosCppEmitter &emitter, func::F
   return success();
 }
 
+// Check if the given function uses global memrefs, and set "created" if yes.
+// Then define struct "GlobalViews_${funcName}" which contains the global memrefs
+// required by the function. Its default constructor assigns these from the global variables.
+static LogicalResult createGlobalMemrefStruct(KokkosCppEmitter &emitter, StringRef funcName, func::FuncOp func, bool& created) {
+  // A function may reference only a subset of global memrefs in the module,
+  // so only list the ones actually used by this function.
+  DenseSet<StringRef> globalsReferenced;
+  func->walk([&](memref::GetGlobalOp ggo) {
+      globalsReferenced.insert(ggo.getName());
+  });
+  if(!globalsReferenced.size()) {
+    created = false;
+    return success();
+  }
+  created = true;
+  // then get the corresponding GlobalOps
+  ModuleOp m = func->getParentOfType<ModuleOp>();
+  SmallVector<memref::GlobalOp> globals;
+  m->walk([&](memref::GlobalOp g) {
+      if(globalsReferenced.find(g.getSymName()) != globalsReferenced.end())
+        globals.push_back(g);
+  });
+  emitter.pushStream();
+  emitter.selectDeclCppStream();
+  emitter << "struct GlobalViews_" << funcName << " {\n";
+  emitter.indent();
+  // Add constructor which populates all members from the globals
+  emitter << "GlobalViews_" << funcName << "() {\n";
+  emitter.indent();
+  for(memref::GlobalOp g : globals) {
+    emitter << "m_" << g.getSymName() << " = " << g.getSymName() << ";\n";
+  }
+  emitter.unindent();
+  emitter << "}\n";
+  // Declare members
+  for(memref::GlobalOp g : globals) {
+    if(failed(emitter.emitMemrefType(g.getLoc(), g.getType(), kokkos::MemorySpace::Device)))
+      return failure();
+    emitter << " m_" << g.getSymName() << ";\n";
+  }
+  emitter.unindent();
+  emitter << "};\n";
+  emitter.popStream();
+  return success();
+}
+
 static LogicalResult createScratchHelpers(KokkosCppEmitter &emitter, StringRef funcName, func::FuncOp func) {
   int totalScratchUsed = 0;
   // Make a list of all the scratch allocations in the function
@@ -2896,6 +2945,12 @@ static LogicalResult printFunctionTeamLevel(KokkosCppEmitter &emitter, func::Fun
       memrefParams.push_back(arg);
     }
   }
+  // Declare a structure to pass in all required global memrefs, since the device code can't reference host globals
+  bool referencesGlobals = false;
+  if(failed(createGlobalMemrefStruct(emitter, funcName, func, referencesGlobals))) {
+    return func.emitError(
+        "Failed to declare struct with global memrefs referenced by this function");
+  }
   if(failed(createScratchHelpers(emitter, funcName, func))) {
     return func.emitError(
         "Failed to generate kokkos scratch helper functions");
@@ -2910,7 +2965,10 @@ static LogicalResult printFunctionTeamLevel(KokkosCppEmitter &emitter, func::Fun
   if (failed(emitter.emitFuncResultTypes(loc, func.getFunctionType().getResults())))
     return failure();
   emitter << ' ' << funcName;
-  emitter << "(typename Kokkos::TeamPolicy<ExecSpace>::member_type& team, ";
+  emitter << "(const typename Kokkos::TeamPolicy<ExecSpace>::member_type& team, ";
+  if(referencesGlobals) {
+    emitter << "const GlobalViews_" << funcName << "& globals, ";
+  }
   // Make a list of the memref parameters.
   // Their types will be template parameters since we don't want to enforce a certain layout on them.
   {
@@ -3100,13 +3158,13 @@ LogicalResult KokkosCppEmitter::emitAttribute(Location loc, Attribute attr) {
   auto printInt = [&](const APInt &val, bool isUnsigned) {
     if (val.getBitWidth() == 1) {
       if (val.getBoolValue())
-        os << "true";
+        *this << "true";
       else
-        os << "false";
+        *this << "false";
     } else {
       SmallString<128> strValue;
       val.toString(strValue, 10, !isUnsigned, false);
-      os << strValue;
+      *this << strValue;
     }
   };
 
@@ -3115,10 +3173,10 @@ LogicalResult KokkosCppEmitter::emitAttribute(Location loc, Attribute attr) {
       SmallString<128> strValue;
       // Use default values of toString except don't truncate zeros.
       val.toString(strValue, 0, 0, false);
-      os << strValue;
+      *this << strValue;
       switch (llvm::APFloatBase::SemanticsToEnum(val.getSemantics())) {
       case llvm::APFloatBase::S_IEEEsingle:
-        os << "f";
+        *this << "f";
         break;
       case llvm::APFloatBase::S_IEEEdouble:
         //no suffix for double literal
@@ -3128,11 +3186,11 @@ LogicalResult KokkosCppEmitter::emitAttribute(Location loc, Attribute attr) {
         break;
       };
     } else if (val.isNaN()) {
-      os << "NAN";
+      *this << "NAN";
     } else if (val.isInfinity()) {
       if (val.isNegative())
-        os << "-";
-      os << "INFINITY";
+        *this << "-";
+      *this << "INFINITY";
     }
   };
 
@@ -3142,9 +3200,9 @@ LogicalResult KokkosCppEmitter::emitAttribute(Location loc, Attribute attr) {
     return success();
   }
   if (auto dense = dyn_cast<DenseFPElementsAttr>(attr)) {
-    os << '{';
-    interleaveComma(dense, os, [&](const APFloat &val) { printFloat(val); });
-    os << '}';
+    *this << '{';
+    interleaveComma(dense, ostream(), [&](const APFloat &val) { printFloat(val); });
+    *this << '}';
     return success();
   }
   // Print integer attributes.
@@ -3160,18 +3218,18 @@ LogicalResult KokkosCppEmitter::emitAttribute(Location loc, Attribute attr) {
   }
   if (auto dense = dyn_cast<DenseIntElementsAttr>(attr)) {
     if (auto iType = dyn_cast<IntegerType>(cast<TensorType>(dense.getType()).getElementType())) {
-      os << '{';
-      interleaveComma(dense, os, [&](const APInt &val) {
+      *this << '{';
+      interleaveComma(dense, ostream(), [&](const APInt &val) {
         printInt(val, shouldMapToUnsigned(iType.getSignedness()));
       });
-      os << '}';
+      *this << '}';
       return success();
     }
     if (auto iType = dyn_cast<IndexType>(cast<TensorType>(dense.getType()).getElementType())) {
-      os << '{';
-      interleaveComma(dense, os,
+      *this << '{';
+      interleaveComma(dense, ostream(),
                       [&](const APInt &val) { printInt(val, false); });
-      os << '}';
+      *this << '}';
       return success();
     }
   }
@@ -3180,22 +3238,22 @@ LogicalResult KokkosCppEmitter::emitAttribute(Location loc, Attribute attr) {
   if (auto sAttr = dyn_cast<SymbolRefAttr>(attr)) {
     if (sAttr.getNestedReferences().size() > 1)
       return emitError(loc, "attribute has more than 1 nested reference");
-    os << sAttr.getRootReference().getValue();
+    *this << sAttr.getRootReference().getValue();
     return success();
   }
 
   // Print string attribute (including quotes). Using hex of each character so that special characters don't need escaping.
   if (auto strAttr = dyn_cast<StringAttr>(attr))
   {
-    os << '"';
+    *this << '"';
     auto val = strAttr.strref();
     for(char c : val)
     {
       char buf[4];
       snprintf(buf, 4, "%02x", (unsigned) c);
-      os << "\\x" << buf;
+      *this << "\\x" << buf;
     }
-    os << '"';
+    *this << '"';
     return success();
   }
 
@@ -3257,7 +3315,7 @@ KokkosCppEmitter::emitValue(Value val)
     //If calling this, the value should have already been declared
     if (!valueMapper.count(val))
       return failure();
-    os << *valueMapper.begin(val);
+    *this << *valueMapper.begin(val);
     return success();
   }
 }
@@ -3855,7 +3913,7 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
   if(isa<arith::ConstantOp, memref::CastOp, memref::GetGlobalOp, kokkos::YieldOp>(&op)) {
     skipPrint = true;
   }
-  //os << "// " << op.getName() << '\n';
+  //*this << "// " << op.getName() << '\n';
   LogicalResult status =
       llvm::TypeSwitch<Operation *, LogicalResult>(&op)
           // Builtin ops.
@@ -3937,7 +3995,7 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
   if (failed(status))
     return failure();
   if(!skipPrint) {
-    os << (trailingSemicolon ? ";\n" : "\n");
+    *this << (trailingSemicolon ? ";\n" : "\n");
   }
   // If op produced any DualView typed memrefs,
   // declare variables for its host and device views 
@@ -4484,7 +4542,8 @@ LogicalResult kokkos::translateToKokkosCppTeamLevel(Operation *op, raw_ostream* 
   llvm::raw_string_ostream cppStream(cppBuffer);
   KokkosCppEmitter emitter(cppDeclStream, cppStream, true);
   emitter.selectDeclCppStream();
-  // TODO: emit all function declarations
+  // Do not need any boilerplate except this
+  emitter << "#include <Kokkos_Core.hpp>\n";
   emitter.selectMainCppStream();
   //Emit the actual module (global variables and functions)
   if(failed(emitter.emitOperation(*op, /*trailingSemicolon=*/false)))
