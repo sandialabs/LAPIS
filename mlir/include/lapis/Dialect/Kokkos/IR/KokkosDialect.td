@@ -35,7 +35,8 @@ def Kokkos_MemorySpace : I64EnumAttr<
     [
       I64EnumAttrCase<"Host", 0, "host">,
       I64EnumAttrCase<"Device", 1, "device">,
-      I64EnumAttrCase<"DualView", 2, "dualview">
+      I64EnumAttrCase<"DualView", 2, "dualview">,
+      I64EnumAttrCase<"Scratch", 3, "scratch">
     ]> {
   let cppNamespace = "::mlir::kokkos";
 }
@@ -204,12 +205,12 @@ def ThreadParallelOp : Kokkos_Op<"thread_parallel",
   let hasVerifier = 0;
 }
 
-def TeamBarrierOp : Kokkos_Op<"team_barrier", [HasParent<"TeamParallelOp">]> {
+def TeamBarrierOp : Kokkos_Op<"team_barrier"> {
   let summary = "Synchronize all threads in a team. In C++, t.team_barrier()";
   let description = [{
-    Kokkos team barrier, to be called within a TeamPolicy context. All threads in
-    the team must reach the barrier together to avoid deadlock, but this is enforced by the
-    fact that TeamParallelOp must be the parent.
+    Kokkos team barrier, to be called within a TeamPolicy context (either ``kokkos.team_parallel``,
+    or a team-level function). All threads in
+    the team must reach the barrier together to avoid deadlock.
     ```
     kokkos.team_barrier
     ```
@@ -313,6 +314,25 @@ def YieldOp : Kokkos_Op<"yield", [Pure, ReturnLike, Terminator,
   
   let assemblyFormat = 
       [{  attr-dict ($results^ `:` type($results))? }];
+}
+
+def AllocScratchOp : Kokkos_Op<"alloc_scratch">
+{
+  let summary = "Allocate Kokkos team-level scratch view";
+  let description = [{ 
+    "kokkos.alloc_scratch" allocates a statically-sized scratch view.
+    Each scratch view is aligned to the size of its elements.
+  }];
+  // note: type and shape information is all in memref's type
+  let arguments = (ins IndexAttr:$offset);
+  let results = (outs AnyMemRef:$memref);
+  let extraClassDeclaration = [{
+    uint64_t getScratchBegin();
+    uint64_t getScratchEnd();
+    MemRefType getType() { return ::llvm::cast<MemRefType>(getResult().getType()); }
+  }];
+
+  let hasVerifier = 1;
 }
 
 #endif
