@@ -498,7 +498,10 @@ uint64_t AllocScratchOp::getScratchBegin() {
 uint64_t AllocScratchOp::getScratchEnd() {
   size_t size;
   // We should have already verified that this allocation is statically sized
-  assert(memrefSizeInBytesKnown(getType(), size, *this));
+  bool succeeded = memrefSizeInBytesKnown(getType(), size, *this);
+  if(!succeeded) {
+    emitOpError("Could not determine scratch end pointer");
+  }
   return getScratchBegin() + size;
 }
 
