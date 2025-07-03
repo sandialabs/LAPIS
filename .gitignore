@@ -140,3 +140,9 @@ benchmarks/batched_gemm/batched_gemm.hpp
 benchmarks/gemm/gemm.hpp
 benchmarks/spmv/spmv.hpp
 benchmarks/resnet/resnet.hpp
+
+# Temporary files produced by mala teamlevel test
+examples/mala_teamlevel/forward_snap.cpp
+examples/mala_teamlevel/forward_snap.hpp
+examples/mala_teamlevel/forward_snap_lowered.mlir
+
