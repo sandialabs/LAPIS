@@ -422,10 +422,14 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
 static LogicalResult printOperation(KokkosCppEmitter &emitter,
                                     memref::GetGlobalOp op) {
   // Shallow copy in local scope. Can't reference host global in device code
-  if(emitter.emittingTeamLevel())
+  if(emitter.emittingTeamLevel()) {
     emitter << "const auto& " << emitter.getOrCreateName(op.getResult()) << " = globals.m_" << op.getName() << ";\n";
-  else
-    emitter << "const auto& " << emitter.getOrCreateName(op.getResult()) << " = " << op.getName() << ";\n";
+  }
+  else {
+    // Make a shallow copy that is local,
+    // so that the generated KOKKOS_LAMBDAs can capture it
+    emitter << "auto " << emitter.getOrCreateName(op.getResult()) << " = " << op.getName() << ";\n";
+  }
   return success();
 }
 
