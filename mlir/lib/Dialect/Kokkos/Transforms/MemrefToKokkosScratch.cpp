@@ -20,7 +20,7 @@ namespace mlir {
 using namespace mlir;
 
 // Uncomment to print out detailed debug info about allocation scheduling
-#define SCRATCH_ALLOCATION_DEBUG
+// #define SCRATCH_ALLOCATION_DEBUG
 
 struct UndirectedGraph
 {
@@ -344,8 +344,6 @@ struct MemrefToKokkosScratchPass
     // Exhaustive strategy is very expensive (N! * N^2) so only do it if the total number
     // of allocations is small
     constexpr int exhaustiveMax = 6;
-    // For MALA snap model, this strategy gives the optimal placement.
-    //
     // Sort the allocations into placement order
     SmallVector<Allocation> allocsToPlace;
     for(int i = 0; i < allocCounter; i++) {
