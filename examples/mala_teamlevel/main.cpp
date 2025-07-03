@@ -90,7 +90,7 @@ int main()
   lapis_finalize();
   Kokkos::finalize();
   if(passed)
-    std::cout << "** Sucess**\n";
+    std::cout << "** Success **\n";
   else
     std::cout << "** Failure **\n";
   return passed ? 0 : 1;
