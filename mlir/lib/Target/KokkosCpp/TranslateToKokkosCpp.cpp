@@ -423,7 +423,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
                                     memref::GetGlobalOp op) {
   // Shallow copy in local scope. Can't reference host global in device code
   if(emitter.emittingTeamLevel()) {
-    emitter << "const auto& " << emitter.getOrCreateName(op.getResult()) << " = globals.m_" << op.getName() << ";\n";
+    emitter << "const auto& " << emitter.getOrCreateName(op.getResult()) << " = globals.m" << op.getName() << ";\n";
   }
   else {
     // Make a shallow copy that is local,
@@ -2851,7 +2851,7 @@ static LogicalResult createGlobalMemrefStruct(KokkosCppEmitter &emitter, StringR
   emitter << "GlobalViews_" << funcName << "() {\n";
   emitter.indent();
   for(memref::GlobalOp g : globals) {
-    emitter << "m_" << g.getSymName() << " = " << g.getSymName() << ";\n";
+    emitter << "m" << g.getSymName() << " = " << g.getSymName() << ";\n";
   }
   emitter.unindent();
   emitter << "}\n";
@@ -2859,7 +2859,7 @@ static LogicalResult createGlobalMemrefStruct(KokkosCppEmitter &emitter, StringR
   for(memref::GlobalOp g : globals) {
     if(failed(emitter.emitMemrefType(g.getLoc(), g.getType(), kokkos::MemorySpace::Device)))
       return failure();
-    emitter << " m_" << g.getSymName() << ";\n";
+    emitter << " m" << g.getSymName() << ";\n";
   }
   emitter.unindent();
   emitter << "};\n";
