@@ -2877,6 +2877,13 @@ static LogicalResult createScratchHelpers(KokkosCppEmitter &emitter, StringRef f
     if(addrEnd > totalScratchUsed)
       totalScratchUsed = addrEnd;
   });
+  emitter << "// Return the total amount of scratch that the function uses\n";
+  emitter << "// This is the upper bound to what " << funcName << "_L0_scratch_required can return\n";
+  emitter << "KOKKOS_INLINE_FUNCTION constexpr int " << funcName << "_total_scratch_required() {\n";
+  emitter.indent();
+  emitter << "return " << totalScratchUsed << ";\n";
+  emitter.unindent();
+  emitter << "}\n\n";
   emitter << "// Find L1 address shift: for allocations spilling into level 1 scratch,\n";
   emitter << "// this is subtracted from the allocation address to find its relative address within L1.\n";
   emitter << "KOKKOS_INLINE_FUNCTION constexpr int " << funcName << "_L1_shift(int L0_scratch_max) {\n";
