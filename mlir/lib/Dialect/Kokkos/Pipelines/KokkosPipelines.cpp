@@ -42,6 +42,10 @@ using namespace mlir::kokkos;
 void mlir::kokkos::buildSparseKokkosCompiler(
     OpPassManager &pm, const LapisCompilerOptions& options) {
   bool enableRuntimeLib = !options.decompose;
+
+  // Fold linalg.transpose on constant tensors
+  pm.addPass(::mlir::createTransposeConstantFoldPass());
+
 #ifdef LAPIS_ENABLE_PART_TENSOR
   pm.addPass(::mlir::createPartTensorConversionPass(options.partTensorBackend));
 #endif
@@ -143,6 +147,9 @@ void mlir::kokkos::buildSparseKokkosCompiler(
 }
 
 void mlir::kokkos::buildTeamLevelKokkosCompiler(OpPassManager &pm, const TeamLevelCompilerOptions& /*options*/) {
+  // Fold linalg.transpose on constant tensors
+  pm.addPass(::mlir::createTransposeConstantFoldPass());
+
   pm.addPass(createInlinerPass());
 
   // Rewrite named linalg ops into generic ops and apply fusion.

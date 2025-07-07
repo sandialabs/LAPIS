@@ -1,4 +1,5 @@
 add_mlir_dialect_library(MLIRKokkosTransforms
+  TransposeConstantFold.cpp
   MemrefResultsToParams.cpp
   MemrefToKokkosScratch.cpp
   ParallelUnitStep.cpp

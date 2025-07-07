@@ -5,6 +5,14 @@
 
 include "mlir/Pass/PassBase.td"
 
+def TransposeConstantFoldPass : Pass<"fold-constant-transpose"> {
+  let summary = "Fold linalg.transpose ops with constant operands";
+  let dependentDialects = [
+    "affine::AffineDialect", "linalg::LinalgDialect", "memref::MemRefDialect"
+  ];
+  let constructor = "mlir::createTransposeConstantFoldPass()";
+}
+
 def MemrefResultsToParams : Pass<"memref-results-to-params", "ModuleOp"> {
   let summary = "Moves memref-type return values to be function parameters instead";
   let description = [{
