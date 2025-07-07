@@ -20,6 +20,8 @@ namespace mlir {
 #define GEN_PASS_DECL
 #include "lapis/Dialect/Kokkos/Transforms/Passes.h.inc"
 
+std::unique_ptr<Pass> createTransposeConstantFoldPass();
+
 std::unique_ptr<Pass> createMemrefResultsToParamsPass();
 
 std::unique_ptr<Pass> createMemrefToKokkosScratchPass();
