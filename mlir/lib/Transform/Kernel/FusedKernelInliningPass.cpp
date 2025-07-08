@@ -72,9 +72,10 @@ FusedKernelInliningPass::FusedKernelInliningPass(PipelineTy defaultPipeline,
   config.setOpPipelines(std::move(opPipelines));
 }
 
-// adapted cost model function; only inline kernels that are tagged for inlining 
+// adapted cost model function; only inline kernels that are tagged for inlining
 static bool isProfitableToInline(const Inliner::ResolvedCall &resolvedCall) {
-  return resolvedCall.call->hasAttr("inline");
+  return resolvedCall.call->hasAttr("inline") ||
+         !resolvedCall.call->hasAttr("noinline");
 }
 
 void FusedKernelInliningPass::runOnOperation() {

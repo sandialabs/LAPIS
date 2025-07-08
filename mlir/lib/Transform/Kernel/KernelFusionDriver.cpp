@@ -5,6 +5,7 @@
 #include "Transform/Kernel/KernelPasses.h"
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Linalg/Passes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LLVM.h"
@@ -30,7 +31,7 @@ struct KernelFusionDriver : impl::KernelFusionDriverBase<KernelFusionDriver> {
     driveKernelFusionPass.addPass(createFusedKernelInliningPass());
 
     // reorder linalg generics to minimize temp size/computational cost
-    driveKernelFusionPass.addPass(createLinalgGenericReorderingPass());
+    // driveKernelFusionPass.addPass(createLinalgGenericReorderingPass());
 
     // run the pipeline
     if (failed(runPipeline(driveKernelFusionPass, module)))

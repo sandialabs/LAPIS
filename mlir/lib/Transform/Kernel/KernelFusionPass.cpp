@@ -113,7 +113,7 @@ bool parallelIterationSpacesMatch(ModuleOp module, CallOp firstCall,
 }
 
 bool markedForFusion(CallOp keyKernel, CallOp valKernel) {
-  if (!keyKernel->hasAttr("fuse_with") || !valKernel->hasAttr("fuse_with"))
+  if (!keyKernel->getAttr("fuse_with") || !valKernel->getAttr("fuse_with"))
     return false;
 
   SmallVector<StringRef> keyKernelFuseWithStrings;
@@ -209,12 +209,17 @@ struct KernelFusionPass : impl::KernelFusionPassBase<KernelFusionPass> {
     // get the module and main function
     ModuleOp module = dyn_cast<ModuleOp>(getOperation());
     FuncOp mainFuncOp;
+    bool foundMainFunc = false;
     for (FuncOp funcOp : module.getOps<FuncOp>()) {
       if (funcOp.getSymName() == "main") {
         mainFuncOp = funcOp;
+        foundMainFunc = true;
         break;
       }
     }
+
+    if (!foundMainFunc)
+      return;
 
     // 1. identify candidate kernels
     CallMap callMap = getCallMap(mainFuncOp);
@@ -381,10 +386,16 @@ struct KernelFusionPass : impl::KernelFusionPassBase<KernelFusionPass> {
       builder.create<ReturnOp>(fusedKernelOp.getLoc(),
                                      ValueRange(returnOperands));
 
+      // disable inlining on the fusedKernelOp (Kokkos sparse compiler
+      // compatibility)
+      fusedKernelOp->setAttr("noinline", builder.getUnitAttr());
+
       // call the built funcOp
       builder.setInsertionPoint(*fusionSet.rbegin());
       CallOp fusedKernelCallHandle = builder.create<CallOp>(
           mainFuncOp.getLoc(), fusedKernelOp, newArgs);
+
+      fusedKernelCallHandle->setAttr("noinline", builder.getUnitAttr());
 
       // update SSA values to make sense in the new kernel
       for (auto kernelCall : fusionSet) {

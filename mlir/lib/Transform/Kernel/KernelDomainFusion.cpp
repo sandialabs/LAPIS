@@ -132,8 +132,6 @@ static LogicalResult verifyDependencies(ParallelOp firstPloop,
 }
 
 static bool isFusionLegal(ParallelOp firstPloop, ParallelOp secondPloop) {
-  // NOTE: we do not check parallel iteration spaces since a prerequisite for
-  // kernel fusion is that the iteration space of the parallel loops match.
   return !hasNestedParallelOp(firstPloop) &&
          !hasNestedParallelOp(secondPloop) &&
          succeeded(verifyDependencies(firstPloop, secondPloop));
@@ -247,8 +245,6 @@ struct KernelDomainFusion
     : public mlir::impl::SCFParallelLoopFusionBase<KernelDomainFusion> {
 
   void runOnOperation() override {
-    // WARNING: DOES NOT CHECK FOR ALIASING!!
-    // TODO: restrict to *only* fused kernels (will implement via attributes)
     getOperation()->walk([&](Operation *child) {
       for (Region &region : child->getRegions())
         naivelyFuseParallelOps(region);
