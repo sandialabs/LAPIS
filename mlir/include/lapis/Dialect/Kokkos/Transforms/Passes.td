@@ -5,6 +5,58 @@
 
 include "mlir/Pass/PassBase.td"
 
+def TransposeConstantFoldPass : Pass<"fold-constant-transpose"> {
+  let summary = "Fold linalg.transpose ops with constant operands";
+  let dependentDialects = [
+    "affine::AffineDialect", "linalg::LinalgDialect", "memref::MemRefDialect"
+  ];
+  let constructor = "mlir::createTransposeConstantFoldPass()";
+}
+
+def MemrefResultsToParams : Pass<"memref-results-to-params", "ModuleOp"> {
+  let summary = "Moves memref-type return values to be function parameters instead";
+  let description = [{
+    For each non-private function with at least one memref-typed return value, remove the return value and add
+    a parameter with the same type. Each return value of the original function must be the result of a memref.alloc operation,
+    or an alias of an allocation.
+    Replace all usages of this allocation with the new parameter, and delete the allocation.
+    Also remove any return values which are equivalent to a newly added parameter.
+    The user/caller is then responsible for passing in a view with the correct size.
+    This is similar but not equivalent to the built-in passes ``--buffer-results-to-out-params --drop-equivalent-buffer-results``.
+
+    That pass updates call sites for the new interface, but does not eliminate memref allocations for
+    results (the whole point of this pass) and deep-copies from the allocated buffer to the argument.
+    There does not seem to be a built-in pass to eliminate allocations that are used in this way.
+    This pass requires that no public function has a call site in the module (it is intended to be run
+    after inlining, and only in modules without recursion).
+  }];
+  let constructor = "mlir::createMemrefResultsToParamsPass()";
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "func::FuncDialect"
+  ];
+}
+
+def MemrefToKokkosScratch : Pass<"memref-to-kokkos-scratch", "func::FuncOp"> {
+  let summary = "Replaces memref-type return values to be function parameters instead";
+  let description = [{
+    Replace each memref.alloc op with kokkos.alloc_scratch. This analyzes lifetimes of each
+    allocation (including aliasing memrefs) to determine which memrefs can occupy the same
+    scratch, and then greedily places the scratch allocations. Each allocation's address is
+    determined at compile-time (as an attribute) and will be aligned properly for the memref element type.
+    This pass makes simplifying assumptions about the input program: function arguments are assumed to be "restrict"
+    and it is assumed that this pass is run after ``memref-results-to-params`` so that all allocations inside the
+    function have a lifetime that ends inside the function. This is why the pass has its own memref lifetime determination,
+    instead of using bufferization's passes for inserting deallocations.
+  }];
+  let constructor = "mlir::createMemrefToKokkosScratchPass()";
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "func::FuncDialect",
+    "kokkos::KokkosDialect"
+  ];
+}
+
 def ParallelUnitStep : Pass<"parallel-unit-step"> {
   let summary = "Rewrites scf.parallel ops to have lower bound 0 and step size 1 in all dimensions";
   let description = [{
@@ -20,29 +72,20 @@ def KokkosLoopMapping : Pass<"kokkos-loop-mapping"> {
   let summary = "Maps nested SCF parallel loops to Kokkos parallel loops";
   let description = [{
   }];
-  let constructor = "mlir::createKokkosLoopMappingPass()";
+  let options = [
+    Option<"teamLevel", "team-level", "bool", /*default=*/"false",
+           "Whether to generate code to be called within a TeamPolicy">
+  ];
   let dependentDialects = [
     "arith::ArithDialect",
     "kokkos::KokkosDialect",
+    "func::FuncDialect",
     "memref::MemRefDialect",
     "scf::SCFDialect"
   ];
 }
 
-def KokkosMemorySpaceAssignment : Pass<"kokkos-assign-memory-spaces"> {
-  let summary = "Determines the MemorySpace attributes for each memref value";
-  let description = [{
-  }];
-  let constructor = "mlir::createKokkosMemorySpaceAssignmentPass()";
-  let dependentDialects = [
-    "arith::ArithDialect",
-    "kokkos::KokkosDialect",
-    "memref::MemRefDialect",
-    "scf::SCFDialect"
-  ];
-}
-
-def KokkosDualViewManagement : Pass<"kokkos-dualview-management", "ModuleOp"> {
+def KokkosDualViewManagement : Pass<"kokkos-dualview-management", "func::FuncOp"> {
   let summary = "Insert sync and modify operations for DualView-typed memrefs";
   let description = [{
   }];
@@ -53,43 +96,6 @@ def KokkosDualViewManagement : Pass<"kokkos-dualview-management", "ModuleOp"> {
     "kokkos::KokkosDialect",
     "memref::MemRefDialect",
     "scf::SCFDialect"
-  ];
-}
-
-def SparseAssemblerDirectOut : Pass<"sparse-assembler-direct-out", "ModuleOp"> {
-  let summary = "Add [dis]assemble operations on external sparse tensors";
-  let description = [{
-    Unlike dense tensors, MLIR does **not** provide a direct `_mlir_ciface_`
-    ABI for passing sparse tensors as arguments from and to external methods
-    (within MLIR-generated methods, sparse tensors can be freely passed
-    around, but this eventually uses a bespoke parameter passing format
-    that is subject to change; like opaque pointers when the sparse runtime
-    support library is used or the constituent arrays and structs for 
-    direct IR codegen). The sparse assembler pass, however, can be used
-    to obtain a stable `_mlir_ciface_` API for passing sparse tensors
-    from and to an external environment, such as Python, PyTorch, or JAX.
-
-    The pass converts public entry methods that use sparse tensors as
-    input parameters and/or output return values into wrapper methods
-    that [dis]assemble the individual tensors that constitute the actual
-    storage used externally into MLIR sparse tensors. This pass can be used
-    to prepare the public entry methods of a program that is compiled by the 
-    MLIR sparsifier to interface with an external runtime, e.g., when passing
-    sparse tensors as numpy arrays from and to Python. Note that eventual
-    bufferization decisions (e.g. who [de]allocates the underlying memory)
-    should be resolved in agreement with the external runtime.
-
-    By default, the pass uses the [dis]assemble operations to input and output
-    sparse tensors. When the direct-out option is set, however, the output
-    directly returns the MLIR allocated buffers to the external runtime.
-
-    The pass should always run before the actual sparsification passes.
-  }]; 
-  let constructor = "mlir::createSparseAssemblerDirectOutPass()";
-  let dependentDialects = [ 
-    "bufferization::BufferizationDialect",
-    "sparse_tensor::SparseTensorDialect",
-    "tensor::TensorDialect",
   ];
 }
 

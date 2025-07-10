@@ -73,6 +73,10 @@ struct LapisCompilerOptions
 #endif
 };
 
+struct TeamLevelCompilerOptions
+    : public PassPipelineOptions<TeamLevelCompilerOptions> {
+};
+
 //===----------------------------------------------------------------------===//
 // Building and Registering.
 //===----------------------------------------------------------------------===//
@@ -82,6 +86,8 @@ struct LapisCompilerOptions
 /// the sparse-tensor type and lowering it to the Kokkos dialect with concrete
 /// representations and algorithms for sparse tensors.
 void buildSparseKokkosCompiler(OpPassManager &pm, const LapisCompilerOptions &options);
+
+void buildTeamLevelKokkosCompiler(OpPassManager &pm, const TeamLevelCompilerOptions &options);
 
 /// Registers all pipelines for the `kokkos` dialect.
 void registerKokkosPipelines();
