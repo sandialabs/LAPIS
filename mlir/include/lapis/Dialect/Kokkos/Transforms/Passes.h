@@ -32,6 +32,8 @@ std::unique_ptr<Pass> createKokkosLoopMappingPass(bool teamLevel = false);
 
 std::unique_ptr<Pass> createKokkosDualViewManagementPass();
 
+std::unique_ptr<Pass> createKokkosMdrangeIterationPass();
+
 //===----------------------------------------------------------------------===//
 // Registration.
 //===----------------------------------------------------------------------===//

@@ -5,6 +5,7 @@ add_mlir_dialect_library(MLIRKokkosTransforms
   ParallelUnitStep.cpp
   KokkosLoopMapping.cpp
   KokkosDualViewManagement.cpp
+  KokkosMdrangeIterationPass.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Dialect/Kokkos
