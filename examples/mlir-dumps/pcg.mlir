@@ -60,15 +60,15 @@ module {
 
     %x, %p, %z, %r, %final_relres, %rz, %iters = scf.while (%xiter = %x0, %piter = %p0, %ziter = %z0, %riter = %r0, %rziter = %f0, %i = %c1) : (tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, f64, index) -> (tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, f64, f64, index)
     {
-      %Ap = func.call @spmv(%A, %piter, %Apbuf) { fuse_with = "dot", "axpby" } : (tensor<?x?xf64, #sparse>, tensor<?xf64>, tensor<?xf64>) -> tensor<?xf64>
-      %pAp = func.call @dot(%Ap, %piter) { fuse_with = "spmv", "axpby" } : (tensor<?xf64>, tensor<?xf64>) -> f64
+      %Ap = func.call @spmv(%A, %piter, %Apbuf) { fuse_with = "dot" } : (tensor<?x?xf64, #sparse>, tensor<?xf64>, tensor<?xf64>) -> tensor<?xf64>
+      %pAp = func.call @dot(%Ap, %piter) { fuse_with = "spmv" } : (tensor<?xf64>, tensor<?xf64>) -> f64
       %rz = func.call @dot(%riter, %ziter) : (tensor<?xf64>, tensor<?xf64>) -> f64
       %alpha = arith.divf %rz, %pAp : f64
       %malpha = arith.negf %alpha : f64
 
       // Update x and r
-      %xnext = func.call @axpby(%f1, %xiter, %alpha, %piter, %xiter) : (f64, tensor<?xf64>, f64, tensor<?xf64>, tensor<?xf64>) -> tensor<?xf64>
-      %rnext = func.call @axpby(%f1, %riter, %malpha, %Ap, %riter) { fuse_with = "spmv", "dot" }: (f64, tensor<?xf64>, f64, tensor<?xf64>, tensor<?xf64>) -> tensor<?xf64>
+      %xnext = func.call @axpby(%f1, %xiter, %alpha, %piter, %xiter) { fuse_with = "axpby" } : (f64, tensor<?xf64>, f64, tensor<?xf64>, tensor<?xf64>) -> tensor<?xf64>
+      %rnext = func.call @axpby(%f1, %riter, %malpha, %Ap, %riter) { fuse_with = "axpby" } : (f64, tensor<?xf64>, f64, tensor<?xf64>, tensor<?xf64>) -> tensor<?xf64>
 
       // Test against tolerance and 
       %rr = func.call @dot(%rnext, %rnext) : (tensor<?xf64>, tensor<?xf64>) -> f64
