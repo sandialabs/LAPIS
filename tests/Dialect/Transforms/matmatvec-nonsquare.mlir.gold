@@ -26,20 +26,8 @@ module {
     %1 = tensor.empty() : tensor<10x4096xf64>
     %2 = tensor.empty() : tensor<4096xf64>
     %3 = tensor.empty() : tensor<10xf64>
-    %4 = tensor.empty() : tensor<10x4096xf64>
-    %5 = linalg.generic {indexing_maps = [#map, #map1, #map2], iterator_types = ["parallel", "parallel", "reduction"]} ins(%0, %1 : tensor<10x10xf64>, tensor<10x4096xf64>) outs(%4 : tensor<10x4096xf64>) {
-    ^bb0(%in: f64, %in_0: f64, %out: f64):
-      %7 = arith.mulf %in, %in_0 : f64
-      %8 = arith.addf %out, %7 : f64
-      linalg.yield %8 : f64
-    } -> tensor<10x4096xf64>
-    %6 = linalg.generic {indexing_maps = [#map3, #map4, #map5], iterator_types = ["parallel", "reduction"]} ins(%5, %2 : tensor<10x4096xf64>, tensor<4096xf64>) outs(%3 : tensor<10xf64>) {
-    ^bb0(%in: f64, %in_0: f64, %out: f64):
-      %7 = arith.mulf %in, %in_0 : f64
-      %8 = arith.addf %out, %7 : f64
-      linalg.yield %8 : f64
-    } -> tensor<10xf64>
-    return %6 : tensor<10xf64>
+    %4 = call @mmv(%0, %1, %2, %3) : (tensor<10x10xf64>, tensor<10x4096xf64>, tensor<4096xf64>, tensor<10xf64>) -> tensor<10xf64>
+    return %4 : tensor<10xf64>
   }
 }
 
