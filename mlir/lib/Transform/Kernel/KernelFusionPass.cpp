@@ -14,6 +14,7 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Casting.h"
 
 namespace mlir {
@@ -118,12 +119,13 @@ bool markedForFusion(CallOp keyKernel, CallOp valKernel) {
     return false;
 
   SmallVector<StringRef> keyKernelFuseWithStrings;
-  SmallVector<StringRef> valKernelFuseWithStrings;
   StringRef keyKernelFuseWithString =
       dyn_cast<StringAttr>(keyKernel->getAttr("fuse_with")).strref();
+  keyKernelFuseWithString.split(keyKernelFuseWithStrings, ",");
+
+  SmallVector<StringRef> valKernelFuseWithStrings;
   StringRef valKernelFuseWithString =
       dyn_cast<StringAttr>(valKernel->getAttr("fuse_with")).strref();
-  keyKernelFuseWithString.split(keyKernelFuseWithStrings, ",");
   valKernelFuseWithString.split(valKernelFuseWithStrings, ",");
 
   bool fuseWithFlag1 = false;
@@ -133,6 +135,7 @@ bool markedForFusion(CallOp keyKernel, CallOp valKernel) {
       break;
     }
   }
+
   bool fuseWithFlag2 = false;
   for (StringRef fuseWithString : valKernelFuseWithStrings) {
     if (keyKernel.getCallee() == fuseWithString.trim(' ')) {
@@ -172,13 +175,13 @@ FusionSetVector createFusionSets(mlir::ModuleOp module, FuncOp mainFuncOp,
       fusionSets.push_back(std::vector<CallOp>());
     fusionSets[fusionSetIndex].push_back(kernelToFuse);
 
-    bool fusionLegal = false;
     for (auto val : callMap[kernelToFuse]) {
-      fusionLegal = parallelIterationSpacesMatch(module, kernelToFuse, val);
+      bool fusionLegal =
+          parallelIterationSpacesMatch(module, kernelToFuse, val);
       if (fusionLegal && markedForFusion(kernelToFuse, val)) {
         kernelSet.extract(val);
         fusionSets[fusionSetIndex].push_back(val);
-        fusionLegal = false; // reset flag
+        fusionLegal = false;
       }
     }
 
@@ -189,6 +192,7 @@ FusionSetVector createFusionSets(mlir::ModuleOp module, FuncOp mainFuncOp,
 
     fusionSetIndex += 1;
   }
+
   return fusionSets;
 }
 
@@ -216,32 +220,42 @@ void buildArgsToIndexMap(FusionSet &fusionSet, CallOp kernel,
   }
 }
 
+bool checkResultUserIsInFusionSet(FusionSet &fusionSet, Value result) {
+  bool userInFusionSet = false;
+  for (auto user : result.getUsers()) {
+    userInFusionSet |= (
+      std::find(fusionSet.begin(), fusionSet.end(), user) != fusionSet.end()
+    );
+  }
+
+  return userInFusionSet;
+}
+
+bool checkResultUserIsNotInFusionSet(FusionSet &fusionSet, Value result) {
+  bool userNotInFusionSet = false;
+  for (auto user : result.getUsers()) {
+    userNotInFusionSet |= (
+      std::find(fusionSet.begin(), fusionSet.end(), user) == fusionSet.end()
+    );
+  }
+
+  return userNotInFusionSet;
+}
+
 void buildResultsToIndexMap(FusionSet &fusionSet, CallOp kernel,
                             SmallVector<Value> &newResults,
                             DenseMap<Value, int> &resultsToIndexMap,
                             int &fusedKernelResultIndex) {
   for (auto res : kernel.getResults()) {
-    // TODO: mark subkernels that have results that are used outside of the
-    // context of the fused kernel (used to determine whether we need to return
-    // intermediate results or not)
+    auto resCheck = std::find(newResults.begin(), newResults.end(), res);
+    if (resCheck != newResults.end())
+      continue;
 
-    // auto resCheck = std::find(newResults.begin(), newResults.end(), res);
-    // if (resCheck != newResults.end())
-    //   continue;
-    //
-    // // check if the result is used by someone else in the fusion set
-    // bool userInFusionSet = false;
-    // for (auto user : res.getUsers()) {
-    //   auto userCheck =
-    //       std::find(fusionSet.begin(), fusionSet.end(), user);
-    //   if (userCheck != fusionSet.end()) {
-    //     userInFusionSet = true;
-    //     break;
-    //   }
-    // }
-    //
-    // if (userInFusionSet)
-    //   continue;
+    bool userInFusionSet = checkResultUserIsInFusionSet(fusionSet, res);
+    bool userNotInFusionSet = checkResultUserIsNotInFusionSet(fusionSet, res);
+
+    if (userInFusionSet && !userNotInFusionSet)
+      continue;
 
     newResults.push_back(res);
     resultsToIndexMap[res] = fusedKernelResultIndex;
@@ -252,7 +266,7 @@ void buildResultsToIndexMap(FusionSet &fusionSet, CallOp kernel,
 FuncOp buildFusedKernelOp(OpBuilder &builder, ModuleOp &module,
                           FusionSet &fusionSet, SmallVector<Value> &newArgs,
                           SmallVector<Value> &newResults,
-                          int fusedKernelCounter) {
+                          int &fusedKernelCounter) {
   TypeRange newArgTypes(newArgs);
   TypeRange newResultTypes(newResults);
   FunctionType fusedKernelType =
@@ -273,43 +287,39 @@ FuncOp buildFusedKernelOp(OpBuilder &builder, ModuleOp &module,
   return fusedKernelOp;
 }
 
-void insertSubkernelCallsIntoFusedKernel(OpBuilder &builder, ModuleOp module,
-                                         FusionSet &fusionSet,
-                                         FuncOp fusedKernelOp,
-                                         DenseMap<Value, int> &argsToIndexMap) {
+void insertSubkernelCallsIntoFusedKernel(
+    OpBuilder &builder, ModuleOp module, FusionSet &fusionSet,
+    FuncOp fusedKernelOp, DenseMap<Value, int> &argsToIndexMap,
+    DenseMap<CallOp, CallOp> &newCallsToOldCallsMap) {
+  DenseMap<CallOp, ArgsToIdxTy> callsToIntermediateValues(fusionSet.size());
+
   builder.setInsertionPointToStart(&fusedKernelOp.front());
-
-  DenseMap<CallOp, ArgsToIdxTy> callsToIntermediateValues;
-  for (CallOp kernel : fusionSet)
-    callsToIntermediateValues[kernel] = ArgsToIdxTy();
-
   for (CallOp kernel : fusionSet) {
     FuncOp callee = dyn_cast<FuncOp>(SymbolTable::lookupNearestSymbolFrom(
         module, kernel.getCallableForCallee().get<SymbolRefAttr>()));
 
-    if (!callee.isPrivate())
-      callee.setPrivate();
+    if (!callee.isPrivate()) callee.setPrivate();
 
     SmallVector<Value> args;
     for (auto arg : kernel.getOperands())
       args.push_back(fusedKernelOp.getArgument(argsToIndexMap[arg]));
 
-    auto newCallHandle =
+    // remap producer results to consumer arguments within fused kernel 
+    CallOp newCallHandle =
         builder.create<CallOp>(fusedKernelOp.getLoc(), callee, args);
+    newCallsToOldCallsMap[newCallHandle] = kernel;
 
     for (auto result : kernel.getResults()) {
       for (auto user : result.getUsers()) {
+
         auto userCheck = std::find(fusionSet.begin(), fusionSet.end(), user);
         if (userCheck != fusionSet.end()) {
-          int argIndex = 0;
-          CallOp userCall = *userCheck;
-          for (auto arg : userCall.getOperands()) {
-            if (arg == result) {
-              auto newArg = newCallHandle.getResult(argIndex);
-              callsToIntermediateValues[userCall].push_back(
-                  std::make_pair(newArg, argIndex));
-            }
-            argIndex++;
+          auto argIter = llvm::find((*userCheck).getOperands(), result);
+          if (argIter != (*userCheck).getOperands().end()) {
+            int argIndex = argIter - (*userCheck).getOperands().begin();
+            auto newArg = newCallHandle.getResult(argIndex);
+            callsToIntermediateValues[*userCheck].push_back(
+                std::make_pair(newArg, argIndex));
           }
         }
       }
@@ -324,20 +334,31 @@ void insertSubkernelCallsIntoFusedKernel(OpBuilder &builder, ModuleOp module,
   }
 }
 
-void insertReturnOpToFusedKernelOp(OpBuilder &builder, FuncOp fusedKernelOp) {
-  SmallVector<Value> returnOperands;
-  for (auto newCall : fusedKernelOp.getOps<CallOp>())
-    for (auto result : newCall.getResults())
-      returnOperands.push_back(result);
+void insertReturnOpToFusedKernelOp(
+    OpBuilder &builder, FusionSet &fusionSet, FuncOp fusedKernelOp,
+    DenseMap<Value, int> &resultsToIndexMap,
+    DenseMap<CallOp, CallOp> &newCallsToOldCallsMap) {
+  SmallVector<Value> returnOperands(resultsToIndexMap.size());
+  for (auto newCall : fusedKernelOp.getOps<CallOp>()) {
+    CallOp oldCall = newCallsToOldCallsMap[newCall];
+    for (Value res : oldCall.getResults()) {
+      if (resultsToIndexMap.find(res) != resultsToIndexMap.end()) {
+        int resIndex = llvm::find(oldCall.getResults(), res) -
+                       oldCall.getResults().begin();
+        llvm::errs() << resIndex << "\n";
+        returnOperands[resultsToIndexMap[res]] = newCall.getResult(resIndex);
+        llvm::errs() << returnOperands[resultsToIndexMap[res]] << "\n";
+      }
+    }
+  }
 
-  builder.create<ReturnOp>(fusedKernelOp.getLoc(),
-                                 ValueRange(returnOperands));
+  builder.create<ReturnOp>(fusedKernelOp.getLoc(), ValueRange(returnOperands));
 }
 
 void buildFusedKernelCallAndReplaceSubkernelUses(
     OpBuilder &builder, FusionSet &fusionSet, FuncOp mainFuncOp,
     FuncOp fusedKernelOp, SmallVector<Value> newArgs,
-    DenseMap<Value, int> resultsToIndexMap) {
+    DenseMap<Value, int> &resultsToIndexMap) {
 
   builder.setInsertionPoint(*fusionSet.rbegin());
   CallOp fusedKernelCallHandle =
@@ -351,7 +372,7 @@ void buildFusedKernelCallAndReplaceSubkernelUses(
       result.replaceAllUsesWith(newResult);
       kernelCall.erase();
     }
-  } // end loop over kernels in fusionSet
+  }
 }
 
 #define GEN_PASS_DEF_KERNELFUSIONPASS
@@ -361,8 +382,6 @@ struct KernelFusionPass : impl::KernelFusionPassBase<KernelFusionPass> {
   using KernelFusionPassBase::KernelFusionPassBase;
 
   void runOnOperation() override {
-
-    // get the module and main function
     OpBuilder builder(getOperation()->getContext());
     ModuleOp module = dyn_cast<ModuleOp>(getOperation());
     FuncOp mainFuncOp;
@@ -391,6 +410,7 @@ struct KernelFusionPass : impl::KernelFusionPassBase<KernelFusionPass> {
       SmallVector<Value> intermediates;
       DenseMap<Value, int> argsToIndexMap;
       DenseMap<Value, int> resultsToIndexMap;
+      DenseMap<CallOp, CallOp> newCallsToOldCallsMap;
       int fusedKernelArgIndex = 0;
       int fusedKernelResultIndex = 0;
       for (auto kernel : fusionSet) {
@@ -405,9 +425,11 @@ struct KernelFusionPass : impl::KernelFusionPassBase<KernelFusionPass> {
           builder, module, fusionSet, newArgs, newResults, fusedKernelCounter);
 
       insertSubkernelCallsIntoFusedKernel(builder, module, fusionSet,
-                                          fusedKernelOp, argsToIndexMap);
+                                          fusedKernelOp, argsToIndexMap,
+                                          newCallsToOldCallsMap);
 
-      insertReturnOpToFusedKernelOp(builder, fusedKernelOp);
+      insertReturnOpToFusedKernelOp(builder, fusionSet, fusedKernelOp,
+                                    resultsToIndexMap, newCallsToOldCallsMap);
 
       buildFusedKernelCallAndReplaceSubkernelUses(builder, fusionSet,
                                                   mainFuncOp, fusedKernelOp,
