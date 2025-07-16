@@ -35,7 +35,7 @@ module {
 
   // CG solve with diagonal preconditioner
   // Returns: x, numiter, resnorm
-  func.func @main(%A: tensor<?x?xf64, #sparse>, %b: tensor<?xf64>, %dinv: tensor<?xf64>, %tol: f64, %maxiter: index) -> (tensor<?xf64>, index, f64) {
+  func.func @pcg(%A: tensor<?x?xf64, #sparse>, %b: tensor<?xf64>, %dinv: tensor<?xf64>, %tol: f64, %maxiter: index) -> (tensor<?xf64>, index, f64) {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %n = tensor.dim %b, %c0 : tensor<?xf64>
