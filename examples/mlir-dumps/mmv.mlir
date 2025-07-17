@@ -1,61 +1,58 @@
-// RUN: %lapis-opt %s --drive-kernel-fusion | diff %s.gold -
-
-#map = affine_map<(i, j, k) -> (i, k)>
-#map1 = affine_map<(i, j, k) -> (k, j)>
-#map2 = affine_map<(i, j, k) -> (i, j)>
-
-#map3 = affine_map<(i, j) -> (i, j)>
-#map4 = affine_map<(i, j) -> (j)>
-#map5 = affine_map<(i, j) -> (i)>
-
 module {
-  func.func @mmv(%a: tensor<4096x4096xf64>,
-                 %b: tensor<4096x4096xf64>,
-                 %x: tensor<4096xf64>,
-                 %y_out: tensor<4096xf64>) -> tensor<4096xf64>
-  {
-    %c_init = tensor.empty() : tensor<4096x4096xf64>
-    %c = linalg.generic {
-      indexing_maps = [#map, #map1, #map2],
-      iterator_types = ["parallel", "parallel", "reduction"]
-    }
-      ins(%a, %b: tensor<4096x4096xf64>, tensor<4096x4096xf64>)
-      outs(%c_init: tensor<4096x4096xf64>)
-    {
-      ^bb0(%in: f64, %in_0: f64, %out: f64):
-        %1 = arith.mulf %in, %in_0 : f64
-        %2 = arith.addf %out, %1 : f64
-        linalg.yield %2 : f64
-    } -> tensor<4096x4096xf64>
-
-    %y = linalg.generic {
-      indexing_maps = [#map3, #map4, #map5],
-      iterator_types = ["parallel", "reduction"]
-    } ins(%c, %x : tensor<4096x4096xf64>, tensor<4096xf64>)
-      outs(%y_out: tensor<4096xf64>)
-    {
-      ^bb0(%cij : f64, %xj : f64, %yi : f64):
-        %1 = arith.mulf %cij, %xj : f64
-        %2 = arith.addf %yi, %1 : f64
-        linalg.yield %2 : f64
-    } -> tensor<4096xf64>
-
-    return %y : tensor<4096xf64>
-  }
-
-  func.func @main(
+  func.func private @matmul(
     %a: tensor<4096x4096xf64>,
     %b: tensor<4096x4096xf64>,
+    %c_out: tensor<4096x4096xf64>
+  ) -> tensor<4096x4096xf64> {
+    %c = linalg.matmul ins(%a, %b: tensor<4096x4096xf64>, tensor<4096x4096xf64>)
+      outs(%c_out: tensor<4096x4096xf64>) -> tensor<4096x4096xf64>
+    return %c : tensor<4096x4096xf64>
+  }
+
+  func.func private @matvec(
+    %a: tensor<4096x4096xf64>,
     %x: tensor<4096xf64>,
-    %y: tensor<4096xf64>
+    %y_out: tensor<4096xf64>
+  ) -> tensor<4096xf64> {
+    %y = linalg.matvec ins(%a, %x: tensor<4096x4096xf64>, tensor<4096xf64>)
+      outs(%y_out: tensor<4096xf64>) -> tensor<4096xf64>
+
+      return %y : tensor<4096xf64>
+  }
+
+  func.func @matmul_into_matvec(
+    %a: tensor<4096x4096xf64>,
+    %b: tensor<4096x4096xf64>,
+    %x: tensor<4096xf64>
   ) -> tensor<4096xf64> {
 
-    %y_out = call @mmv(%a, %b, %x, %y) : (
-      tensor<4096x4096xf64>, 
-      tensor<4096x4096xf64>,
-      tensor<4096xf64>, 
-      tensor<4096xf64>
-    ) -> tensor<4096xf64>
+    %c_init = tensor.empty() : tensor<4096x4096xf64>
+    %c = func.call @matmul(%a, %b, %c_init) { fuse_with = "matvec" } 
+      : (tensor<4096x4096xf64>, tensor<4096x4096xf64>, tensor<4096x4096xf64>) 
+        -> tensor<4096x4096xf64>
+
+    %y_init = tensor.empty() : tensor<4096xf64>
+    %y_out = func.call @matvec(%c, %x, %y_init) { fuse_with = "matmul" } 
+      : (tensor<4096x4096xf64>, tensor<4096xf64>, tensor<4096xf64>) 
+        -> tensor<4096xf64>
+
+    return %y_out : tensor<4096xf64>
+  }
+
+  func.func @matvec_into_matvec(
+    %a: tensor<4096x4096xf64>,
+    %b: tensor<4096x4096xf64>,
+    %x: tensor<4096xf64>
+  ) -> tensor<4096xf64> {
+    %bx_init = tensor.empty() : tensor<4096xf64>
+    %bx = func.call @matvec(%b, %x, %bx_init) { fuse_with = "matvec" } 
+    : (tensor<4096x4096xf64>, tensor<4096xf64>, tensor<4096xf64>) 
+      -> tensor<4096xf64>
+
+    %y_init = tensor.empty() : tensor<4096xf64>
+    %y_out = func.call @matvec(%a, %bx, %y_init) { fuse_with = "matvec" }
+    : (tensor<4096x4096xf64>, tensor<4096xf64>, tensor<4096xf64>) 
+      -> tensor<4096xf64>
 
     return %y_out : tensor<4096xf64>
   }

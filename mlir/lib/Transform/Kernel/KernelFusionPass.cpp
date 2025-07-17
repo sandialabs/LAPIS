@@ -8,6 +8,7 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/Types.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Pass/Pass.h"
@@ -301,33 +302,33 @@ void insertSubkernelCallsIntoFusedKernel(
     if (!callee.isPrivate()) callee.setPrivate();
 
     SmallVector<Value> args;
-    for (auto arg : kernel.getOperands())
+    for (auto arg : kernel.getOperands()) {
       args.push_back(fusedKernelOp.getArgument(argsToIndexMap[arg]));
+    }
 
-    // remap producer results to consumer arguments within fused kernel 
     CallOp newCallHandle =
         builder.create<CallOp>(fusedKernelOp.getLoc(), callee, args);
     newCallsToOldCallsMap[newCallHandle] = kernel;
 
     for (auto result : kernel.getResults()) {
-      for (auto user : result.getUsers()) {
-
-        auto userCheck = std::find(fusionSet.begin(), fusionSet.end(), user);
-        if (userCheck != fusionSet.end()) {
-          auto argIter = llvm::find((*userCheck).getOperands(), result);
-          if (argIter != (*userCheck).getOperands().end()) {
-            int argIndex = argIter - (*userCheck).getOperands().begin();
-            auto newArg = newCallHandle.getResult(argIndex);
-            callsToIntermediateValues[*userCheck].push_back(
-                std::make_pair(newArg, argIndex));
+      for (auto &use : result.getUses()) {
+        if (auto consumer = dyn_cast<CallOp>(use.getOwner())) {
+          auto userCheck =
+              std::find(fusionSet.begin(), fusionSet.end(), consumer);
+          if (userCheck != fusionSet.end()) {
+            int argIndex = use.getOperandNumber();
+            auto newArg = newCallHandle.getResult(result.getResultNumber());
+            callsToIntermediateValues[consumer].push_back({newArg, argIndex});
           }
         }
       }
     }
 
-    if (!callsToIntermediateValues[kernel].empty())
-      for (auto argIndexPair : callsToIntermediateValues[kernel])
+    if (!callsToIntermediateValues[kernel].empty()) {
+      for (auto argIndexPair : callsToIntermediateValues[kernel]) {
         newCallHandle.setOperand(argIndexPair.second, argIndexPair.first);
+      }
+    }
 
     newCallHandle.getOperation()->setAttr("inline",
                                           builder.getStringAttr("true"));
@@ -345,9 +346,7 @@ void insertReturnOpToFusedKernelOp(
       if (resultsToIndexMap.find(res) != resultsToIndexMap.end()) {
         int resIndex = llvm::find(oldCall.getResults(), res) -
                        oldCall.getResults().begin();
-        llvm::errs() << resIndex << "\n";
         returnOperands[resultsToIndexMap[res]] = newCall.getResult(resIndex);
-        llvm::errs() << returnOperands[resultsToIndexMap[res]] << "\n";
       }
     }
   }
@@ -414,7 +413,6 @@ void fuseKernels(ModuleOp module, FuncOp func) {
     buildFusedKernelCallAndReplaceSubkernelUses(
         builder, fusionSet, func, fusedKernelOp, newArgs, resultsToIndexMap);
 
-    fusedKernelCounter += 1;
   }
 }
 
@@ -430,7 +428,6 @@ struct KernelFusionPass : impl::KernelFusionPassBase<KernelFusionPass> {
       if (!func.isPrivate()) 
         fuseKernels(module, func);
     });
-
   } // end runOnOperation
 };
 } // namespace kernel
