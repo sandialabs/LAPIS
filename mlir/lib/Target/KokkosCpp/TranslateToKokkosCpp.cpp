@@ -872,7 +872,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     emitter << "Kokkos::deep_copy(";
     if(failed(emitter.emitValue(op.getTarget())))
       return failure();
-    emitter << "." << (isDevice ? "device" : "host") << "_view, ";
+    emitter << "." << (isDevice ? "device" : "host") << "_view(), ";
     if(failed(emitter.emitValue(op.getSource())))
       return failure();
     emitter << ");";
@@ -2141,7 +2141,8 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::YieldOp yiel
 
             if (!emitter.hasValueInScope(operand))
               return yieldOp.emitError("operand value not in scope");
-            os << emitter.getOrCreateName(operand);
+            if(failed(emitter.emitValue(operand)))
+              return failure();
             return success();
           },
           [&]() { os << ";\n"; })))
