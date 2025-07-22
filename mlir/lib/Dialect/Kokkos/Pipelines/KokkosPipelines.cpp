@@ -6,6 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "Transform/Kernel/KernelFusionDriver.h"
+#include "Transform/Kernel/KernelPasses.h"
 #include "lapis/LAPIS_config.h"
 #include "lapis/Dialect/Kokkos/Pipelines/Passes.h"
 #include "mlir/Conversion/Passes.h"
@@ -49,6 +51,8 @@ void mlir::kokkos::buildSparseKokkosCompiler(
 #ifdef LAPIS_ENABLE_PART_TENSOR
   pm.addPass(::mlir::createPartTensorConversionPass(options.partTensorBackend));
 #endif
+
+  pm.addPass(kernel::createKernelFusionDriver());
 
   pm.addPass(createInlinerPass());
 
@@ -224,6 +228,8 @@ void mlir::kokkos::buildTeamLevelKokkosCompiler(OpPassManager &pm, const TeamLev
   pm.addNestedPass<func::FuncOp>(createConvertComplexToStandardPass());
   // Ensure all casts are realized.
   pm.addPass(createReconcileUnrealizedCastsPass());
+
+  pm.addNestedPass<func::FuncOp>(kernel::createKernelDomainFusionPass());
 
   // Finally, lower scf/memref to kokkos
   pm.addPass(createMemrefResultsToParamsPass());

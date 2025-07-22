@@ -1,12 +1,3 @@
-from lapis import KokkosBackend
-import numpy as np
-from scipy.sparse.linalg import cg
-from scipy.sparse import csr_matrix
-from scipy.io import mmread
-import ctypes
-import sys
-
-moduleText = """
 #sparse = #sparse_tensor.encoding<{ map = (d0, d1) -> (d0 : dense, d1 : compressed), posWidth = 32, crdWidth = 32 }>
 #idmap = affine_map<(d0) -> (d0)>
 module {
@@ -70,16 +61,14 @@ module {
     %x, %p, %z, %r, %final_relres, %rz, %iters = scf.while (%xiter = %x0, %piter = %p0, %ziter = %z0, %riter = %r0, %rziter = %f0, %i = %c1) : (tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, f64, index) -> (tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, f64, f64, index)
     {
       %Ap = func.call @spmv(%A, %piter, %Apbuf) { fuse_with = "dot" } : (tensor<?x?xf64, #sparse>, tensor<?xf64>, tensor<?xf64>) -> tensor<?xf64>
-      %pAp = func.call @dot(%piter, %Ap) { fuse_with = "spmv" } : (tensor<?xf64>, tensor<?xf64>) -> f64
+      %pAp = func.call @dot(%Ap, %piter) { fuse_with = "spmv" } : (tensor<?xf64>, tensor<?xf64>) -> f64
       %rz = func.call @dot(%riter, %ziter) : (tensor<?xf64>, tensor<?xf64>) -> f64
       %alpha = arith.divf %rz, %pAp : f64
       %malpha = arith.negf %alpha : f64
 
       // Update x and r
-      %xnext = func.call @axpby(%f1, %xiter, %alpha, %piter, %xiter) { fuse_with
-      = "axpby" } : (f64, tensor<?xf64>, f64, tensor<?xf64>, tensor<?xf64>) -> tensor<?xf64>
-      %rnext = func.call @axpby(%f1, %riter, %malpha, %Ap, %riter) { fuse_with =
-      "axpby" } : (f64, tensor<?xf64>, f64, tensor<?xf64>, tensor<?xf64>) -> tensor<?xf64>
+      %xnext = func.call @axpby(%f1, %xiter, %alpha, %piter, %xiter) { fuse_with = "axpby" } : (f64, tensor<?xf64>, f64, tensor<?xf64>, tensor<?xf64>) -> tensor<?xf64>
+      %rnext = func.call @axpby(%f1, %riter, %malpha, %Ap, %riter) { fuse_with = "axpby" } : (f64, tensor<?xf64>, f64, tensor<?xf64>, tensor<?xf64>) -> tensor<?xf64>
 
       // Test against tolerance and 
       %rr = func.call @dot(%rnext, %rnext) : (tensor<?xf64>, tensor<?xf64>) -> f64
@@ -105,46 +94,4 @@ module {
     return %x, %iters, %final_relres : tensor<?xf64>, index, f64
   }
 }
-"""
-
-def main():
-    A = csr_matrix(mmread('data/nos4.mtx'))
-    n = A.shape[0]
-    nnz = A.nnz
-
-    xgold = np.ones((n), dtype=np.double)
-    b = A @ xgold
-
-    # Construct Jacobi preconditioner
-    # Note: nos4 is only 100x100 so converting to dense is cheap
-    Adense = A.todense()
-    # Create Jacobi preconditioner
-    dinv = np.zeros((n))
-    for i in range(n):
-        dinv[i] = 1.0 / Adense[i, i]
-
-    reltol = 1e-10
-    maxiter = 40
-
-    backend = KokkosBackend.KokkosBackend(decompose_tensors=True)
-    module_kokkos = backend.compile(moduleText)
-
-    print("x exact solution (first 10 elements):", xgold[:10])
-
-    (x, numiter, relres) = module_kokkos.pcg(A.indptr, A.indices, A.data, ((n, n), (n + 1, nnz, nnz)), b, dinv, reltol, maxiter)
-    print("Ran CG for", numiter, "iterations and achieved relative residual norm", relres)
-    print("x vector from LAPIS (first 10 elements):", x[:10])
-
-    [x_scipy, info] = cg(A, b, np.zeros((n)), rtol = reltol, maxiter=maxiter, M=np.diag(dinv))
-    print("x vector from scipy (first 10 elements):", x_scipy[:10])
-
-    if np.allclose(x, x_scipy):
-        print("Success")
-        sys.exit(0)
-    else:
-        print("Failure: incorrect result")
-        sys.exit(1)
-
-if __name__ == "__main__":
-    main()
 
