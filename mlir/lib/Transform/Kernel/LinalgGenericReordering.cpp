@@ -132,11 +132,8 @@ void printGenericAsEinsum(linalg::LinalgOp generic) {
 }
 
 bool isConvertibleToEinsum(linalg::GenericOp generic) {
-
-  // 1. must have a single result
   if (llvm::range_size(generic.getResults()) > 1) return false;
 
-  // 2. must only contain additions or multiplications
   auto &block = generic.getRegion().front();
   for (auto &op : block) {
     if (
@@ -149,13 +146,11 @@ bool isConvertibleToEinsum(linalg::GenericOp generic) {
     }
   }
 
-  // 3. must only contain a single addition and single multiplication
   auto addOps = block.getOps<arith::AddFOp>();
   auto mulOps = block.getOps<arith::MulFOp>();
   if (llvm::range_size(addOps) != 1) return false;
   if (llvm::range_size(mulOps) != 1) return false;
 
-  // 4. accumulation must happen via addition in final block arg
   arith::AddFOp addition = *addOps.begin();
   auto accCheck = llvm::find(
     addition.getOperands(),
@@ -163,7 +158,6 @@ bool isConvertibleToEinsum(linalg::GenericOp generic) {
   );
   if (accCheck == addition.getOperands().end()) return false;
 
-  // 5. final block arg cannot be present in multiplication
   arith::MulFOp mul = *mulOps.begin();
   auto mulCheck = llvm::find(
     mul.getOperands(),
@@ -204,6 +198,35 @@ SmallVector<EinsumArg> generateEinsumArgsFromGeneric(linalg::LinalgOp generic) {
   }
 
   return args;
+}
+
+
+bool isProfitableToReorderGenerics(std::vector<EinsumSpecification> einsums) {
+  std::set<double> costs;
+  bool isProfitable = false;
+  for (EinsumSpecification einsum : einsums) {
+
+    double cost = 1.0;
+    std::set<char> seenIndices;
+    for (EinsumArg input : einsum.inputs) {
+      for (auto specIdx : llvm::enumerate(input.spec)) {
+        bool indexSeen = (
+          std::find(seenIndices.begin(), seenIndices.end(), specIdx.value())
+          !=
+          seenIndices.end()
+        );
+
+        if (!indexSeen) {
+          cost *= input.shape[specIdx.index()];
+          seenIndices.insert(specIdx.value());
+        }
+      }
+    }
+
+    costs.insert(cost);
+  }
+
+  return (costs.size() != 1);
 }
 
 void EinsumSpecification::setDimTypes() {
@@ -544,46 +567,6 @@ typedef struct BruteForceOptimizer {
 
 } BruteForceOptimizer;
 
-std::vector<char> getSharedIndices(EinsumArg iarg, EinsumArg jarg) {
-  std::set<char> iindices(iarg.spec.begin(), iarg.spec.end());
-  std::set<char> jindices(jarg.spec.begin(), jarg.spec.end());
-
-  std::vector<char> sharedIndices;
-  std::set_intersection(
-    iindices.begin(), iindices.end(), 
-    jindices.begin(), jindices.end(), 
-    std::back_inserter(sharedIndices)
-  );
-
-  return sharedIndices;
-}
-
-double estimateCost(EinsumArg iarg, EinsumArg jarg,
-                    std::vector<char> sharedIndices) {
-  double cost = 1.0;
-  for (char sharedIdx : sharedIndices)
-    cost *= iarg.shape[iarg.spec.find(sharedIdx)];
-
-  std::set<char> allIndices(iarg.spec.begin(), iarg.spec.end());
-  allIndices.insert(jarg.spec.begin(), jarg.spec.end());
-
-  std::vector<char> disjointIndices;
-  std::set_difference(
-    allIndices.begin(), allIndices.end(), 
-    sharedIndices.begin(), sharedIndices.end(),
-    std::back_inserter(disjointIndices)
-  );
-
-  for (char idx : disjointIndices) {
-    if (iarg.spec.find(idx) != std::string::npos)
-      cost *= iarg.shape[iarg.spec.find(idx)];
-    else if (jarg.spec.find(idx) != std::string::npos)
-      cost *= jarg.shape[jarg.spec.find(idx)];
-  }
-
-  return cost;
-}
-
 SmallVector<int> getResultShape(EinsumArg iarg, EinsumArg jarg,
                                 std::string resultIndices) {
   SmallVector<int> shape;
@@ -648,6 +631,46 @@ bool checkLegalContraction(EinsumArg iarg, EinsumArg jarg,
   }
 
   return true;
+
+}
+std::vector<char> getSharedIndices(EinsumArg iarg, EinsumArg jarg) {
+  std::set<char> iindices(iarg.spec.begin(), iarg.spec.end());
+  std::set<char> jindices(jarg.spec.begin(), jarg.spec.end());
+
+  std::vector<char> sharedIndices;
+  std::set_intersection(
+    iindices.begin(), iindices.end(), 
+    jindices.begin(), jindices.end(), 
+    std::back_inserter(sharedIndices)
+  );
+
+  return sharedIndices;
+}
+
+double estimateCost(EinsumArg iarg, EinsumArg jarg,
+                    std::vector<char> sharedIndices) {
+  double cost = 1.0;
+  for (char sharedIdx : sharedIndices)
+    cost *= iarg.shape[iarg.spec.find(sharedIdx)];
+
+  std::set<char> allIndices(iarg.spec.begin(), iarg.spec.end());
+  allIndices.insert(jarg.spec.begin(), jarg.spec.end());
+
+  std::vector<char> disjointIndices;
+  std::set_difference(
+    allIndices.begin(), allIndices.end(), 
+    sharedIndices.begin(), sharedIndices.end(),
+    std::back_inserter(disjointIndices)
+  );
+
+  for (char idx : disjointIndices) {
+    if (iarg.spec.find(idx) != std::string::npos)
+      cost *= iarg.shape[iarg.spec.find(idx)];
+    else if (jarg.spec.find(idx) != std::string::npos)
+      cost *= jarg.shape[jarg.spec.find(idx)];
+  }
+
+  return cost;
 }
 
 void BruteForceOptimizer::optimize() {
@@ -725,11 +748,7 @@ struct LinalgGenericReordering
   using LinalgGenericReorderingPassBase::LinalgGenericReorderingPassBase;
 
   EinsumSequence 
-  getOptimalContractionOrder(func::FuncOp func) {
-    std::vector<EinsumSpecification> einsums;
-    for (linalg::LinalgOp laOp : func.getOps<linalg::LinalgOp>())
-      einsums.push_back(genericToEinsumSpec(laOp));
-
+  getOptimalContractionOrder(std::vector<EinsumSpecification> einsums) {
     FusedEinsum fused = fuseEinsums(einsums);
     BruteForceOptimizer optimizer(fused);
     optimizer.optimize();
@@ -742,8 +761,14 @@ struct LinalgGenericReordering
       if (!isConvertibleToEinsum(generic)) return false;
     }
 
+    std::vector<EinsumSpecification> einsums;
+    for (linalg::LinalgOp laOp : func.getOps<linalg::LinalgOp>())
+      einsums.push_back(genericToEinsumSpec(laOp));
+
+    if (!isProfitableToReorderGenerics(einsums)) return false;
+
     EinsumSequence optimalOrder =
-        getOptimalContractionOrder(func);
+        getOptimalContractionOrder(einsums);
     return buildGenericsFromEinsums(func, optimalOrder);
   }
 

@@ -46,13 +46,13 @@ module {
   ) -> tensor<4096xf64> {
     %bx_init = tensor.empty() : tensor<4096xf64>
     %bx = func.call @matvec(%b, %x, %bx_init) { fuse_with = "matvec" } 
-    : (tensor<4096x4096xf64>, tensor<4096xf64>, tensor<4096xf64>) 
-      -> tensor<4096xf64>
+      : (tensor<4096x4096xf64>, tensor<4096xf64>, tensor<4096xf64>) 
+        -> tensor<4096xf64>
 
     %y_init = tensor.empty() : tensor<4096xf64>
     %y_out = func.call @matvec(%a, %bx, %y_init) { fuse_with = "matvec" }
-    : (tensor<4096x4096xf64>, tensor<4096xf64>, tensor<4096xf64>) 
-      -> tensor<4096xf64>
+      : (tensor<4096x4096xf64>, tensor<4096xf64>, tensor<4096xf64>) 
+        -> tensor<4096xf64>
 
     return %y_out : tensor<4096xf64>
   }
