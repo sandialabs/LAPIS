@@ -823,7 +823,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     emitter << "Kokkos::deep_copy(";
     if(failed(emitter.emitValue(op.getTarget())))
       return failure();
-    emitter << "." << (isDevice ? "device" : "host") << "_view, ";
+    emitter << "." << (isDevice ? "device" : "host") << "_view(), ";
     if(failed(emitter.emitValue(op.getSource())))
       return failure();
     emitter << ");";
