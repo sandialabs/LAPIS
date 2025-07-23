@@ -27,7 +27,7 @@ void registerToKokkosTranslation() {
   TranslateFromMLIRRegistration reg1(
       "mlir-to-kokkos", "translate from mlir to Kokkos",
       [](Operation *op, raw_ostream &output) {
-        return kokkos::translateToKokkosCpp(op, output);
+        return kokkos::translateToKokkosCpp(op, &output, nullptr, "");
       },
       [](DialectRegistry &registry) {
         // clang-format off

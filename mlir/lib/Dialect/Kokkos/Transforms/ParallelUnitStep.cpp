@@ -1,11 +1,5 @@
 //===- ParallelUnitStep.cpp - define parallel-unit-step pass pattern
 //--------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
 
 #include "mlir/Dialect/EmitC/IR/EmitC.h"
 #include "lapis/Dialect/Kokkos/IR/KokkosDialect.h"
@@ -14,6 +8,12 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+
+namespace mlir {
+#define GEN_PASS_DEF_PARALLELUNITSTEP
+#include "lapis/Dialect/Kokkos/Transforms/Passes.h.inc"
+}
 
 using namespace mlir;
 
@@ -122,6 +122,22 @@ struct ParallelUnitStepRewriter : public OpRewritePattern<scf::ParallelOp> {
 
 } // namespace
 
-void mlir::populateParallelUnitStepPatterns(RewritePatternSet &patterns) {
-  patterns.add<ParallelUnitStepRewriter>(patterns.getContext());
+struct ParallelUnitStepPass
+    : public impl::ParallelUnitStepBase<ParallelUnitStepPass> {
+
+  ParallelUnitStepPass() = default;
+  ParallelUnitStepPass(const ParallelUnitStepPass& pass) = default;
+
+  void runOnOperation() override {
+    auto *ctx = &getContext();
+    RewritePatternSet patterns(ctx);
+    patterns.add<ParallelUnitStepRewriter>(patterns.getContext());
+    (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+  }
+};
+
+std::unique_ptr<Pass> mlir::createParallelUnitStepPass()
+{
+  return std::make_unique<ParallelUnitStepPass>();
 }
+

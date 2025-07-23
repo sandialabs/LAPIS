@@ -13,7 +13,7 @@ int main()
     // Construct inputs
     DualV input(std::string("in_descriptors"));
     {
-      input.modifiedHost();
+      input.modifyHost();
       std::ifstream f("MALA/snap_descriptors.txt");
       for(int i = 0; i < 8748; i++) {
         for(int j = 0; j < 91; j++) {

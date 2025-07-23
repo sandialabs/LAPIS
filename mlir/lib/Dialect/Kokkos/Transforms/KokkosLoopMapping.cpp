@@ -1,11 +1,5 @@
 //===- KokkosLoopMapping.cpp - Pattern for kokkos-loop-mapping pass
 //--------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
 
 #include "lapis/Dialect/Kokkos/IR/KokkosDialect.h"
 #include "lapis/Dialect/Kokkos/Transforms/Passes.h"
@@ -13,6 +7,12 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+
+namespace mlir {
+#define GEN_PASS_DEF_KOKKOSLOOPMAPPING
+#include "lapis/Dialect/Kokkos/Transforms/Passes.h.inc"
+}
 
 using namespace mlir;
 
@@ -677,10 +677,9 @@ static bool inVectorLoop(Operation *op) {
          par.getParallelLevel() == kokkos::ParallelLevel::TeamVector;
 }
 
-// Within the given loop, wrap individual ops inside kokkos.single as needed.
 static LogicalResult insertSingleWraps(RewriterBase &rewriter,
-                                       Operation *loop) {
-  loop->walk<WalkOrder::PostOrder>([&](Operation *op) {
+                                       Region& region) {
+  region.walk<WalkOrder::PostOrder>([&](Operation *op) {
     if (opNeedsSingle(op)) {
       rewriter.setInsertionPoint(op);
       if (inTeamLoop(op) && !inThreadLoop(op)) {
@@ -711,6 +710,17 @@ static LogicalResult insertSingleWraps(RewriterBase &rewriter,
   return success();
 }
 
+// Within the given loop, wrap individual ops inside kokkos.single as needed.
+static LogicalResult insertSingleWraps(RewriterBase &rewriter,
+                                       Operation *loop) {
+  for(Region& region : loop->getRegions()) {
+    auto result = insertSingleWraps(rewriter, region);
+    if(failed(result))
+      return result;
+  }
+  return success();
+}
+
 // !! TODO: optimal team synchronization requires dataflow analysis within op's
 // body to understand what specific memrefs might be in use at each point
 // (reading or writing) by other threads executing a team-level loop or single.
@@ -718,8 +728,8 @@ static LogicalResult insertSingleWraps(RewriterBase &rewriter,
 // But for now, use a conservate version that inserts a barrier after each
 // team-wide parallel op and single that does not already synchronize.
 static LogicalResult insertTeamSynchronization(RewriterBase &rewriter,
-                                               kokkos::TeamParallelOp op) {
-  op->walk([&](kokkos::RangeParallelOp nestedOp) {
+                                               Region& region) {
+  region.walk([&](kokkos::RangeParallelOp nestedOp) {
     auto level = nestedOp.getParallelLevel();
     bool needsPostBarrier = (nestedOp.getNumResults() == 0) &&
                             (level == kokkos::ParallelLevel::TeamThread ||
@@ -729,7 +739,7 @@ static LogicalResult insertTeamSynchronization(RewriterBase &rewriter,
       rewriter.create<kokkos::TeamBarrierOp>(nestedOp.getLoc());
     }
   });
-  op->walk([&](kokkos::SingleOp single) {
+  region.walk([&](kokkos::SingleOp single) {
     bool needsPostBarrier = single.getNumResults() == 0 &&
                             single.getLevel() == kokkos::SingleLevel::PerTeam;
     if (needsPostBarrier) {
@@ -738,6 +748,11 @@ static LogicalResult insertTeamSynchronization(RewriterBase &rewriter,
     }
   });
   return success();
+}
+
+static LogicalResult insertTeamSynchronization(RewriterBase &rewriter,
+                                               kokkos::TeamParallelOp op) {
+  return insertTeamSynchronization(rewriter, op->getRegion(0));
 }
 
 // Recursively map the scf.parallel children of op.
@@ -791,9 +806,17 @@ static LogicalResult mapNestedLoopsImpl(RewriterBase &rewriter, Operation *op,
 }
 
 // Map all scf.parallel loops nested within a kokkos.team_parallel.
-static LogicalResult mapTeamNestedLoops(RewriterBase &rewriter,
+static LogicalResult mapNestedLoopsTeamPolicy(RewriterBase &rewriter,
                                         kokkos::TeamParallelOp op) {
   return mapNestedLoopsImpl(rewriter, op, 2);
+}
+
+// For team-level code generation:
+// - single/non-nested parallel loops always become TeamVector
+// - remaining cases, passed to this function: we are inside a TeamThread loop,
+//   so 1 level of parallelism remains
+static LogicalResult mapNestedLoopsTeamThread(RewriterBase &rewriter, kokkos::RangeParallelOp op) {
+  return mapNestedLoopsImpl(rewriter, op, 1);
 }
 
 struct KokkosLoopRewriter : public OpRewritePattern<scf::ParallelOp> {
@@ -896,7 +919,7 @@ struct KokkosLoopRewriter : public OpRewritePattern<scf::ParallelOp> {
       }
     } else if (nestingLevel >= 3) {
       // Generate a team policy for the top level. This leaves 2 more levels of
-      // parallelism to use. See mapTeamNestedLoops() above for how these are
+      // parallelism to use. See mapNestedLoopsTeamPolicy() above for how these are
       // used.
       //
       // Note: zero for team size hint and vector length hint mean that no hint
@@ -907,7 +930,7 @@ struct KokkosLoopRewriter : public OpRewritePattern<scf::ParallelOp> {
           scfParallelToKokkosTeam(newOp, rewriter, op, zero, zero);
       if (failed(result))
         return result;
-      result = mapTeamNestedLoops(rewriter, newOp);
+      result = mapNestedLoopsTeamPolicy(rewriter, newOp);
       if (failed(result))
         return result;
       // The loop structure is now finalized; insert singles and team barriers
@@ -940,8 +963,98 @@ struct KokkosLoopRewriter : public OpRewritePattern<scf::ParallelOp> {
   }
 };
 
+struct KokkosTeamLevelLoopRewriter : public OpRewritePattern<func::FuncOp> {
+  using OpRewritePattern<func::FuncOp>::OpRewritePattern;
+
+  KokkosTeamLevelLoopRewriter(MLIRContext *context) : OpRewritePattern(context) {}
+
+  LogicalResult matchAndRewrite(func::FuncOp op,
+                                PatternRewriter &rewriter) const override {
+    // Check if the function contains any scf.parallel ops
+    {
+      bool earlyExit = true;
+      op->walk([&](scf::ParallelOp parOp) {
+        earlyExit = false;
+      });
+      if(earlyExit)
+        return failure(); // nothing to do
+    }
+    LogicalResult result = success();
+    // Iterate over top-level parallel ops inside the func
+    op->walk<WalkOrder::PostOrder>([&](scf::ParallelOp parOp) {
+        // rewrite from top-level ParallelOps only
+        if(parOp->getParentOfType<scf::ParallelOp>())
+          return WalkResult::skip();
+        // Determine the maximum depth of parallel nesting (a simple RangePolicy is
+        // 1, etc.)
+        int nestingLevel = getParallelNumLevels(parOp);
+        kokkos::ExecutionSpace exec = kokkos::ExecutionSpace::TeamHandle;
+        // Cases for exec == TeamHandle:
+        //
+        // - Depth == 1: TeamVectorRange
+        // - Depth >= 2: TeamThreadRange for outermost
+        //               sequential for (all others)
+        //               ThreadVectorRange for innermost
+        if (nestingLevel == 1) {
+          // Without nesting: execute loop at TeamVector level
+          kokkos::RangeParallelOp newOp;
+          result = scfParallelToKokkosRange(
+              newOp, rewriter, parOp, exec, kokkos::ParallelLevel::TeamVector);
+          if (failed(result))
+            return WalkResult::interrupt();
+        } else {
+          // With nesting, top-level loop becomes TeamThread
+          kokkos::RangeParallelOp newOp;
+          LogicalResult result = scfParallelToKokkosRange(
+              newOp, rewriter, parOp, exec, kokkos::ParallelLevel::TeamThread);
+          if (failed(result))
+            return WalkResult::interrupt();
+          // And then rewrite nested loops (using ThreadVector and sequential for)
+          result = mapNestedLoopsTeamThread(rewriter, newOp);
+          if (failed(result))
+            return WalkResult::interrupt();
+        }
+        return WalkResult::skip();
+    });
+    if (failed(result))
+      return result;
+    Region& funcRegion = op->getRegion(0);
+    // The loop structure is now finalized; insert singles and team barriers
+    // where needed
+    result = insertSingleWraps(rewriter, funcRegion);
+    if (failed(result))
+      return result;
+    result = insertTeamSynchronization(rewriter, funcRegion);
+    if (failed(result))
+      return result;
+    return success();
+  }
+};
+
 } // namespace
 
-void mlir::populateKokkosLoopMappingPatterns(RewritePatternSet &patterns) {
-  patterns.add<KokkosLoopRewriter>(patterns.getContext());
+struct KokkosLoopMappingPass
+    : public impl::KokkosLoopMappingBase<KokkosLoopMappingPass> {
+
+  KokkosLoopMappingPass() = default;
+  KokkosLoopMappingPass(const KokkosLoopMappingPass& pass) = default;
+  KokkosLoopMappingPass(const KokkosLoopMappingOptions& options) : impl::KokkosLoopMappingBase<KokkosLoopMappingPass>(options) {}
+
+  void runOnOperation() override {
+    auto *ctx = &getContext();
+    RewritePatternSet patterns(ctx);
+    if(this->teamLevel)
+      patterns.add<KokkosTeamLevelLoopRewriter>(patterns.getContext());
+    else
+      patterns.add<KokkosLoopRewriter>(patterns.getContext());
+    (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+  }
+};
+
+std::unique_ptr<Pass> mlir::createKokkosLoopMappingPass(bool teamLevel)
+{
+  KokkosLoopMappingOptions klmo;
+  klmo.teamLevel = teamLevel;
+  return std::make_unique<KokkosLoopMappingPass>(klmo);
 }
+
