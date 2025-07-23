@@ -203,7 +203,6 @@ SmallVector<EinsumArg> generateEinsumArgsFromGeneric(linalg::LinalgOp generic) {
 
 bool isProfitableToReorderGenerics(std::vector<EinsumSpecification> einsums) {
   std::set<double> costs;
-  bool isProfitable = false;
   for (EinsumSpecification einsum : einsums) {
 
     double cost = 1.0;

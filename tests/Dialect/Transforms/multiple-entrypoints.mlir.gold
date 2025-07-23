@@ -1,0 +1,25 @@
+module {
+  func.func @matvec_matvec_0(%arg0: tensor<4096x4096xf64>, %arg1: tensor<4096xf64>, %arg2: tensor<4096xf64>, %arg3: tensor<4096x4096xf64>, %arg4: tensor<4096xf64>) -> tensor<4096xf64> {
+    %0 = linalg.matvec ins(%arg0, %arg1 : tensor<4096x4096xf64>, tensor<4096xf64>) outs(%arg2 : tensor<4096xf64>) -> tensor<4096xf64>
+    %1 = linalg.matvec ins(%arg3, %0 : tensor<4096x4096xf64>, tensor<4096xf64>) outs(%arg4 : tensor<4096xf64>) -> tensor<4096xf64>
+    return %1 : tensor<4096xf64>
+  }
+  func.func @matmul_matvec_0(%arg0: tensor<4096x4096xf64>, %arg1: tensor<4096x4096xf64>, %arg2: tensor<4096x4096xf64>, %arg3: tensor<4096xf64>, %arg4: tensor<4096xf64>) -> tensor<4096xf64> {
+    %0 = linalg.matmul ins(%arg0, %arg1 : tensor<4096x4096xf64>, tensor<4096x4096xf64>) outs(%arg2 : tensor<4096x4096xf64>) -> tensor<4096x4096xf64>
+    %1 = linalg.matvec ins(%0, %arg3 : tensor<4096x4096xf64>, tensor<4096xf64>) outs(%arg4 : tensor<4096xf64>) -> tensor<4096xf64>
+    return %1 : tensor<4096xf64>
+  }
+  func.func @matmul_into_matvec(%arg0: tensor<4096x4096xf64>, %arg1: tensor<4096x4096xf64>, %arg2: tensor<4096xf64>) -> tensor<4096xf64> {
+    %0 = tensor.empty() : tensor<4096x4096xf64>
+    %1 = tensor.empty() : tensor<4096xf64>
+    %2 = call @matmul_matvec_0(%arg0, %arg1, %0, %arg2, %1) {noinline} : (tensor<4096x4096xf64>, tensor<4096x4096xf64>, tensor<4096x4096xf64>, tensor<4096xf64>, tensor<4096xf64>) -> tensor<4096xf64>
+    return %2 : tensor<4096xf64>
+  }
+  func.func @matvec_into_matvec(%arg0: tensor<4096x4096xf64>, %arg1: tensor<4096x4096xf64>, %arg2: tensor<4096xf64>) -> tensor<4096xf64> {
+    %0 = tensor.empty() : tensor<4096xf64>
+    %1 = tensor.empty() : tensor<4096xf64>
+    %2 = call @matvec_matvec_0(%arg1, %arg2, %0, %arg0, %1) {noinline} : (tensor<4096x4096xf64>, tensor<4096xf64>, tensor<4096xf64>, tensor<4096x4096xf64>, tensor<4096xf64>) -> tensor<4096xf64>
+    return %2 : tensor<4096xf64>
+  }
+}
+
