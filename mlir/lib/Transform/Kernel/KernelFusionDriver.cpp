@@ -30,7 +30,6 @@ struct KernelFusionDriver : impl::KernelFusionDriverBase<KernelFusionDriver> {
     // inline the calls using a custom inlining pass
     driveKernelFusionPass.addPass(createFusedKernelInliningPass());
 
-    // FIXME:
     // reorder linalg generics to minimize temp size/computational cost
     driveKernelFusionPass.addPass(createLinalgGeneralizeNamedOpsPass());
     driveKernelFusionPass.addPass(createLinalgGenericReorderingPass());
