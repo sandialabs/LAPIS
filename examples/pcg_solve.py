@@ -17,7 +17,7 @@ module {
 
   func.func private @dot(%x: tensor<?xf64>, %y: tensor<?xf64>) -> f64 {
     %f0 = arith.constant 0.0 : f64
-    %0 = tensor.splat %f0 : tensor<f64>
+    %0 = tensor.splat %f0[] : tensor<f64>
     %dot = linalg.dot ins(%x, %y : tensor<?xf64>,tensor<?xf64>) outs(%0: tensor<f64>) -> tensor<f64>
     %6 = tensor.extract %dot[] : tensor<f64>
     return %6: f64
