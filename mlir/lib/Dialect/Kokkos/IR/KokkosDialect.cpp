@@ -18,6 +18,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/raw_ostream.h"
+#include "mlir/Interfaces/DataLayoutInterfaces.h"
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/OpImplementation.h"
@@ -470,6 +471,40 @@ void UpdateReductionOp::build(
                   body->getArgument(1));
 }
 
+// *************** //
+//  AllocScratchOp //
+// *************** //
+
+LogicalResult AllocScratchOp::verify() {
+  if(!isa<MemRefType>(getMemref().getType()))
+    return emitOpError("result type is not a MemRefType");
+  size_t elemAlignment = getBuiltinTypeSize(getType().getElementType(), *this);
+  if(elemAlignment == 0)
+    return emitOpError("cannot statically determine size & alignment of element type");
+  // Make sure that the result's type has a known size in bytes
+  size_t unused;
+  if(!memrefSizeInBytesKnown(getType(), unused, *this))
+    return emitOpError("cannot statically determine allocation size in bytes");
+  // Make sure that the starting offset is sufficiently aligned for the element type
+  if(getScratchBegin() % elemAlignment)
+    return emitOpError("scratch begin pointer is not sufficiently aligned for element type");
+  return success();
+}
+
+uint64_t AllocScratchOp::getScratchBegin() {
+  return getOffset().getLimitedValue();
+}
+
+uint64_t AllocScratchOp::getScratchEnd() {
+  size_t size;
+  // We should have already verified that this allocation is statically sized
+  bool succeeded = memrefSizeInBytesKnown(getType(), size, *this);
+  if(!succeeded) {
+    emitOpError("Could not determine scratch end pointer");
+  }
+  return getScratchBegin() + size;
+}
+
 #define GET_OP_CLASSES
 #include "lapis/Dialect/Kokkos/IR/Kokkos.cpp.inc"
 #include "lapis/Dialect/Kokkos/IR/KokkosDialect.cpp.inc"
@@ -480,9 +515,8 @@ void UpdateReductionOp::build(
 
 namespace mlir::kokkos {
 
-static bool isViewAliasingOp(Operation* op) {
-  // This is not a complete list, but is kept up to date
-  // with what the emitter supports
+bool isViewAliasingOp(Operation* op) {
+  // This is not a complete list, but should be kept up to date with what the emitter supports
   return isa<
     memref::SubViewOp, memref::CollapseShapeOp,
     memref::CastOp, memref::ReinterpretCastOp,
@@ -827,6 +861,30 @@ int getStructElementCount(LLVM::LLVMStructType st)
     }
   }
   return size;
+}
+
+size_t getBuiltinTypeSize(Type t, Operation* op)
+{
+  auto dl = DataLayout::closest(op);
+  llvm::TypeSize elementSize = dl.getTypeSize(t);
+  if(!elementSize.isFixed())
+    return 0;
+  return elementSize.getFixedValue();
+}
+
+bool memrefSizeInBytesKnown(MemRefType mrt, size_t& size, Operation* op)
+{
+  // First, check if mrt has all static dimensions.
+  if(!mrt.hasStaticShape())
+    return false;
+  // Then get the number of elements.
+  size_t numElements = mrt.getNumElements();
+  // Check if the element type has a known size
+  size_t elementSize = getBuiltinTypeSize(mrt.getElementType(), op);
+  if(elementSize == 0)
+    return false;
+  size = numElements * elementSize;
+  return true;
 }
 
 } // namespace mlir::kokkos

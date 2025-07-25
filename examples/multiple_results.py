@@ -7,10 +7,11 @@ moduleText = """
 module {
   func.func @plus_norm(%x: tensor<?xf64>, %y: tensor<?xf64>) -> (tensor<?xf64>, f64) {
     %c0 = arith.constant 0 : index
+    %f0 = arith.constant 0.0 : f64
     %n = tensor.dim %y, %c0 : tensor<?xf64>
-    %alloc1 = tensor.empty (%n) : tensor<?xf64>
+    %alloc1 = tensor.splat %f0[%n] : tensor<?xf64>
     %x_plus_y = linalg.add ins(%x, %y : tensor<?xf64>, tensor<?xf64>) outs(%alloc1: tensor<?xf64>) -> tensor<?xf64>
-    %alloc2 = tensor.empty () : tensor<f64>
+    %alloc2 = tensor.splat %f0 : tensor<f64>
     %sumTensor = linalg.dot ins(%x_plus_y, %x_plus_y : tensor<?xf64>, tensor<?xf64>) outs(%alloc2: tensor<f64>) -> tensor<f64>
     %sum = tensor.extract %sumTensor[] : tensor<f64>
     %norm = math.sqrt %sum : f64
@@ -31,7 +32,8 @@ def main():
     print("x:", x)
     print("y:", y)
 
-    (x_plus_y, norm) = module_kokkos.plus_norm(x, y)
+    x_plus_y, norm = module_kokkos.plus_norm(x, y)
+    x_plus_y = x_plus_y.asnumpy()
 
     print("x + y:", x_plus_y)
     print("norm(x+y):", norm)

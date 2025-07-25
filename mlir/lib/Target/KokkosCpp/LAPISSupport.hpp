@@ -394,12 +394,12 @@ namespace LAPIS
       impl->parent->modified_device = true;
     }
 
-    bool modifiedHost() const {
+    [[nodiscard]] bool modifiedHost() const {
       // note: parent may just point to this
       return impl->parent->modified_host;
     }
 
-    bool modifiedDevice() const {
+    [[nodiscard]] bool modifiedDevice() const {
       // note: parent may just point to this
       return impl->parent->modified_device;
     }
