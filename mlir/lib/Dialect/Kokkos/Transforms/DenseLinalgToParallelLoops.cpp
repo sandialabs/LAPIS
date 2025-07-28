@@ -20,8 +20,8 @@ namespace mlir {
 }
 
 using namespace mlir;
-
 using LinalgLoops = SmallVector<Operation *, 4>;
+using linalg::LinalgOp;
 
 static bool isParallelIterator(utils::IteratorType iteratorType) {
   return iteratorType == utils::IteratorType::parallel;
@@ -46,7 +46,7 @@ static void unpackRanges(OpBuilder &builder, Location loc,
   }
 }
 
-static void inlineRegionAndEmitStore(OpBuilder &b, Location loc, linalg::GenericOp op,
+static void inlineRegionAndEmitStore(OpBuilder &b, Location loc, LinalgOp op,
                                      ArrayRef<Value> indexedValues,
                                      ArrayRef<SmallVector<Value>> indexing,
                                      ArrayRef<Value> outputBuffers) {
@@ -86,8 +86,8 @@ static SmallVector<Value> makeCanonicalAffineApplies(OpBuilder &b, Location loc,
 }
 
 static void emitScalarImplementation(OpBuilder &b, Location loc,
-                                     ArrayRef<Value> allIvs,
-                                     linalg::GenericOp linalgOp) {
+                                     ValueRange allIvs,
+                                     LinalgOp linalgOp) {
   assert(linalgOp.hasPureBufferSemantics() &&
          "expected linalg op with buffer semantics");
   SmallVector<Value> indexedValues;
@@ -183,43 +183,8 @@ static void generateParallelLoopNest(
       });
 }
 
-static void generateLoopNest(
-    OpBuilder &b, Location loc, ArrayRef<Range> loopRanges, linalg::GenericOp linalgOp,
-    ArrayRef<utils::IteratorType> iteratorTypes,
-    function_ref<scf::ValueVector(OpBuilder &, Location, ValueRange,
-                                  ValueRange)>
-        bodyBuilderFn) {
-  SmallVector<Value> iterArgInitValues;
-  if (!linalgOp.hasPureBufferSemantics())
-    llvm::append_range(iterArgInitValues, linalgOp.getDpsInits());
-  assert(iterArgInitValues.empty() && "unexpected ParallelOp init values");
-  // This function may be passed more iterator types than ranges.
-  assert(iteratorTypes.size() >= loopRanges.size() &&
-         "expected iterator type for all ranges");
-  iteratorTypes = iteratorTypes.take_front(loopRanges.size());
-  SmallVector<Value, 8> lbsStorage, ubsStorage, stepsStorage, ivs;
-  unsigned numLoops = iteratorTypes.size();
-  ivs.reserve(numLoops);
-  lbsStorage.reserve(numLoops);
-  ubsStorage.reserve(numLoops);
-  stepsStorage.reserve(numLoops);
-
-  // Get the loop lb, ub, and step.
-  unpackRanges(b, loc, loopRanges, lbsStorage, ubsStorage, stepsStorage);
-
-  ValueRange lbs(lbsStorage), ubs(ubsStorage), steps(stepsStorage);
-  generateParallelLoopNest(
-      b, loc, lbs, ubs, steps, iteratorTypes,
-      [&](OpBuilder &b, Location loc, ValueRange ivs) {
-        bodyBuilderFn(b, loc, ivs, linalgOp->getOperands());
-      },
-      ivs);
-
-  assert(ivs.size() == iteratorTypes.size() && "did not generate enough loops");
-}
-
 static void replaceIndexOpsByInductionVariables(RewriterBase &rewriter,
-                                                linalg::GenericOp linalgOp,
+                                                LinalgOp linalgOp,
                                                 ArrayRef<Operation *> loopOps) {
   // Extract the induction variables of the loop nest from outer to inner.
   SmallVector<Value> allIvs;
@@ -242,26 +207,46 @@ static void replaceIndexOpsByInductionVariables(RewriterBase &rewriter,
   }
 }
 
-static LogicalResult genericToParallel(RewriterBase &rewriter, linalg::GenericOp linalgOp) {
+static LogicalResult linalgOpToParallel(RewriterBase &rewriter, LinalgOp linalgOp) {
   // The flattened loopToOperandRangesMaps is expected to be an invertible
   // permutation map (which is asserted in the inverse calculation).
   assert(linalgOp.hasPureBufferSemantics() &&
          "expected linalg op with buffer semantics");
 
   Operation* op = linalgOp;
-  auto loopRanges = cast<linalg::LinalgOp>(op).createLoopRanges(rewriter, linalgOp.getLoc());
-  auto iteratorTypes = linalgOp.getIteratorTypesArray();
+  auto loopRanges = linalgOp.createLoopRanges(rewriter, linalgOp.getLoc());
+  ArrayRef<utils::IteratorType> iteratorTypes = linalgOp.getIteratorTypesArray();
 
   SmallVector<Value> allIvs;
-  generateLoopNest(rewriter, linalgOp.getLoc(), loopRanges, linalgOp, iteratorTypes,
-      [&](OpBuilder &b, Location loc, ValueRange ivs,
-          ValueRange operandValuesToUse) -> scf::ValueVector {
-        assert(operandValuesToUse == linalgOp->getOperands() &&
-               "expect operands are captured and not passed by loop argument");
+  auto loc = linalgOp.getLoc();
+  SmallVector<Value> iterArgInitValues;
+  if (!linalgOp.hasPureBufferSemantics())
+    llvm::append_range(iterArgInitValues, linalgOp.getDpsInits());
+  assert(iterArgInitValues.empty() && "unexpected ParallelOp init values");
+  // This function may be passed more iterator types than ranges.
+  assert(iteratorTypes.size() >= loopRanges.size() &&
+         "expected iterator type for all ranges");
+  iteratorTypes = iteratorTypes.take_front(loopRanges.size());
+  SmallVector<Value, 8> lbsStorage, ubsStorage, stepsStorage, ivs;
+  unsigned numLoops = iteratorTypes.size();
+  ivs.reserve(numLoops);
+  lbsStorage.reserve(numLoops);
+  ubsStorage.reserve(numLoops);
+  stepsStorage.reserve(numLoops);
+
+  // Get the loop lb, ub, and step.
+  unpackRanges(rewriter, loc, loopRanges, lbsStorage, ubsStorage, stepsStorage);
+
+  ValueRange lbs(lbsStorage), ubs(ubsStorage), steps(stepsStorage);
+  generateParallelLoopNest(
+      rewriter, loc, lbs, ubs, steps, iteratorTypes,
+      [&](OpBuilder &rewriter, Location loc, ValueRange ivs) {
         allIvs.append(ivs.begin(), ivs.end());
-        emitScalarImplementation(b, loc, allIvs, linalgOp);
-        return scf::ValueVector{};
-      });
+        emitScalarImplementation(rewriter, loc, ivs, linalgOp);
+      },
+      ivs);
+
+  assert(ivs.size() == iteratorTypes.size() && "did not generate enough loops");
   // Number of loop ops might be different from the number of ivs since some
   // loops like affine.parallel and scf.parallel have multiple ivs.
   SetVector<Operation *> loopSet;
@@ -284,16 +269,16 @@ static LogicalResult genericToParallel(RewriterBase &rewriter, linalg::GenericOp
 
 // Pattern to rewrite a bufferized linalg.generic op
 // as an scf.parallel loop nest.
-struct LinalgToParallelPattern : public OpRewritePattern<linalg::GenericOp> {
-  using OpRewritePattern<linalg::GenericOp>::OpRewritePattern;
+struct LinalgToParallelPattern : public RewritePattern {
 
-  LinalgToParallelPattern(MLIRContext *context) : OpRewritePattern(context) {}
+  LinalgToParallelPattern(MLIRContext *context) : RewritePattern(MatchAnyOpTypeTag(), 1, context) {}
 
-  LogicalResult matchAndRewrite(linalg::GenericOp op, PatternRewriter &rewriter) const override {
-    if (!op.hasPureBufferSemantics()) {
+  LogicalResult matchAndRewrite(Operation* op, PatternRewriter &rewriter) const override {
+    auto linalgOp = dyn_cast<LinalgOp>(op);
+    if (!isa<LinalgOp>(op) || !linalgOp.hasPureBufferSemantics()) {
       return rewriter.notifyMatchFailure(op, "expected linalg op with buffer semantics");
     }
-    return genericToParallel(rewriter, op);
+    return linalgOpToParallel(rewriter, linalgOp);
   }
 };
 

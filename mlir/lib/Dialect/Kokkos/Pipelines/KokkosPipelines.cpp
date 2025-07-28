@@ -129,7 +129,7 @@ void mlir::kokkos::buildSparseKokkosCompiler(
   pm.addNestedPass<func::FuncOp>(torch::TMTensor::createTMTensorToLoopsPass());
 #endif
 
-  pm.addNestedPass<func::FuncOp>(createConvertLinalgToParallelLoopsPass());
+  pm.addNestedPass<func::FuncOp>(createDenseLinalgToParallelLoopsPass());
 
   pm.addNestedPass<func::FuncOp>(arith::createArithExpandOpsPass());
   pm.addPass(memref::createExpandStridedMetadataPass());
@@ -215,7 +215,7 @@ void mlir::kokkos::buildTeamLevelKokkosCompiler(OpPassManager &pm, const TeamLev
   pm.addNestedPass<func::FuncOp>(torch::TMTensor::createTMTensorToLoopsPass());
 #endif
 
-  pm.addNestedPass<func::FuncOp>(createConvertLinalgToParallelLoopsPass());
+  pm.addNestedPass<func::FuncOp>(createDenseLinalgToParallelLoopsPass());
 
   pm.addNestedPass<func::FuncOp>(arith::createArithExpandOpsPass());
   pm.addPass(memref::createExpandStridedMetadataPass());
