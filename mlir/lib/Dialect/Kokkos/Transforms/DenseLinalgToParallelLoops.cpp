@@ -52,7 +52,7 @@ static bool hasComplexReduction(LinalgOp op) {
   // if op has no reduction iterators, then it can't have complex reductions
   {
     bool allParallel = true;
-    ArrayRef<utils::IteratorType> iteratorTypes = op.getIteratorTypesArray();
+    auto iteratorTypes = op.getIteratorTypesArray();
     for(auto it : iteratorTypes) {
       if(!isParallelIterator(it)) {
         allParallel = false;
@@ -155,20 +155,14 @@ static SmallVector<Value> makeCanonicalAffineApplies(PatternRewriter &b, Locatio
 // b) the actual reduction is perfomed in a single arith op (whose result is yielded by the body terminator)
 static void emitReductionScalarImplementation(
     PatternRewriter &rewriter, Location loc,
-    ValueRange allIvs,
+    ValueRange allIvsRange,
     LinalgOp linalgOp) {
   assert(linalgOp.hasPureBufferSemantics() &&
          "expected linalg op with buffer semantics");
   // Generate loads
   SmallVector<Value> inputValues;
+  SmallVector<Value> allIvs(allIvsRange);
 
-  auto allIvsPlusDims = SmallVector<Value>(allIvs);
-
-  int numInputs = linalgOp.getDpsInputOperands().size();
-  int numOutputs = linalgOp.getDpsInitsMutable().size();
-
-  // TODO: Avoid the loads if the corresponding argument of the
-  // region has no uses.
   // 1.a. Emit load from input operand or for scalars access the operand itself.
   for (OpOperand *inputOperand : linalgOp.getDpsInputOperands()) {
     if (linalgOp.isScalar(inputOperand)) {
@@ -176,68 +170,15 @@ static void emitReductionScalarImplementation(
       continue;
     }
     auto indexing = makeCanonicalAffineApplies(
-        rewriter, loc, linalgOp.getMatchingIndexingMap(inputOperand), allIvsPlusDims);
+        rewriter, loc, linalgOp.getMatchingIndexingMap(inputOperand), allIvs);
     inputValues.push_back(
         rewriter.create<memref::LoadOp>(loc, inputOperand->get(), indexing));
   }
-  /*
-  // 1.b. Emit load from output views.
-  for (OpOperand &outputOperand : linalgOp.getDpsInitsMutable()) {
-    SmallVector<Value> indexing = makeCanonicalAffineApplies(
-        b, loc, linalgOp.getMatchingIndexingMap(&outputOperand),
-        allIvsPlusDims);
-    indexedValues.push_back(
-        b.create<memref::LoadOp>(loc, outputOperand.get(), indexing));
-  }
-  */
-
-  // 2. Inline region, currently only works for a single basic block.
-  // 3. Emit store.
-  /*
-  SmallVector<SmallVector<Value>, 8> indexing;
-  SmallVector<Value> outputBuffers;
-  for (OpOperand &outputOperand : linalgOp.getDpsInitsMutable()) {
-    if (!isa<MemRefType>(outputOperand.get().getType()))
-      continue;
-    indexing.push_back(makeCanonicalAffineApplies(
-        b, loc, linalgOp.getMatchingIndexingMap(&outputOperand),
-        allIvsPlusDims));
-    outputBuffers.push_back(outputOperand.get());
-  }
-  */
-
-  /* Example output IR from spmv
-     scf.parallel (%arg3) = (%c0) to (%3) step (%c1) {
-       %7 = memref.load %2[%arg3] : memref<?xf64>
-       %8 = memref.load %4[%arg3] : memref<?xi32>
-       %9 = arith.extui %8 : i32 to i64
-       %10 = arith.index_cast %9 : i64 to index
-       %11 = arith.addi %arg3, %c1 : index
-       %12 = memref.load %4[%11] : memref<?xi32>
-       %13 = arith.extui %12 : i32 to i64
-       %14 = arith.index_cast %13 : i64 to index
-       %15 = scf.parallel (%arg4) = (%10) to (%14) step (%c1) init (%7) -> f64 {
-         %16 = memref.load %5[%arg4] : memref<?xi32>
-         %17 = arith.extui %16 : i32 to i64
-         %18 = arith.index_cast %17 : i64 to index
-         %19 = memref.load %0[%arg4] : memref<?xf64>
-         %20 = memref.load %1[%18] : memref<?xf64>
-         %21 = arith.mulf %19, %20 : f64
-         scf.reduce(%21 : f64) {
-         ^bb0(%arg5: f64, %arg6: f64):
-           %22 = arith.addf %arg5, %arg6 : f64
-           scf.reduce.return %22 : f64
-         }
-       } {"Emitted from" = "linalg.generic"}
-       memref.store %15, %2[%arg3] : memref<?xf64>
-       scf.reduce
-     } {"Emitted from" = "linalg.generic"}
-  */
 
   auto &body = linalgOp->getRegion(0).front();
   // Check preconditions of the rewrite logic
-  llvm::outs() << "Orig linalg op has " << numInputs << " input tensors and " << numOutputs << " outputs.\n";
-  assert(numOutputs == 1);
+  //llvm::outs() << "Orig linalg op has " << numInputs << " input tensors and " << numOutputs << " outputs.\n";
+  assert(linalgOp.getDpsInitsMutable().size() == 1);
   assert(isa<linalg::YieldOp>(body.getTerminator()));
   Value yielded = body.getTerminator()->getOperand(0);
   // We have only one result, so the final body argument must be the incoming partial reduction
@@ -323,7 +264,7 @@ static void emitScalarImplementation(PatternRewriter &b, Location loc,
   inlineRegionAndEmitStore(b, loc, linalgOp, indexedValues, indexing, outputBuffers);
 }
 
-static SmallVector<Value> generateParallelLoopNest(
+static void generateParallelLoopNest(
     PatternRewriter &rewriter, Location loc, ValueRange lbs, ValueRange ubs,
     ValueRange steps, ArrayRef<utils::IteratorType> iteratorTypes, LinalgOp linalgOp) {
   size_t n = lbs.size();
@@ -358,7 +299,17 @@ static SmallVector<Value> generateParallelLoopNest(
   // - mixed parallel and reduction dimensions
   // - all parallel
   // - all reductions
+  /*
   llvm::outs() << "Have " << parallelIters.size() << " parallel iters and " << reductionIters.size() << " reduction iters.\n";
+  llvm::outs() << "Iterator types: ";
+  for (auto iterType : iteratorTypes) {
+    if(isParallelIterator(iterType))
+      llvm::outs() << "P";
+    else
+      llvm::outs() << "R";
+  }
+  llvm::outs() << '\n';
+  */
   if(parallelIters.size() && reductionIters.size()) {
     // Create two scf.parallel ops: outer over parallels, and inner over reductions.
     // Write-back of results will go into the outer loop only.
@@ -378,9 +329,10 @@ static SmallVector<Value> generateParallelLoopNest(
             outputInitValues.push_back(
                 rewriter.create<memref::LoadOp>(loc, outputOperand.get(), indexing));
           }
+          auto allIVsDummyInner = allIVs;
           // The body of the outer loop is another parallel which performs the reduction(s).
           auto innerLoop = nestedRewriter1.create<scf::ParallelOp>(
-              loc, innerLB, innerLB, innerStep, outputInitValues,
+              loc, innerLB, innerUB, innerStep, outputInitValues,
               [&](OpBuilder& nestedRewriter2, Location innerLoc, ValueRange innerIVs, ValueRange /* unused */) {
                 for(auto [i, iv] : llvm::enumerate(innerIVs)) {
                   allIVs[reductionIters[i]] = iv;
@@ -393,7 +345,7 @@ static SmallVector<Value> generateParallelLoopNest(
           for (auto& outputOperand : linalgOp.getDpsInitsMutable()) {
             SmallVector<Value> indexing = makeCanonicalAffineApplies(
                 rewriter, loc, linalgOp.getMatchingIndexingMap(&outputOperand),
-                allIVs);
+                allIVsDummyInner);
             rewriter.create<memref::StoreOp>(loc, innerLoop->getResult(counter++), outputOperand.get(), indexing);
           }
         });
@@ -413,7 +365,7 @@ static SmallVector<Value> generateParallelLoopNest(
     }
     // The body of the outer loop is another parallel which performs the reduction(s).
     auto innerLoop = rewriter.create<scf::ParallelOp>(
-        loc, innerLB, innerLB, innerStep, outputInitValues,
+        loc, innerLB, innerUB, innerStep, outputInitValues,
         [&](OpBuilder& nestedRewriter, Location innerLoc, ValueRange innerIVs, ValueRange /* unused */) {
           for(auto [i, iv] : llvm::enumerate(innerIVs)) {
             allIVs[reductionIters[i]] = iv;
@@ -443,34 +395,7 @@ static SmallVector<Value> generateParallelLoopNest(
           emitScalarImplementation((PatternRewriter&) nestedRewriter, loc, allIVs, linalgOp);
         });
   }
-  return allIVs;
 }
-
-/*
-static void replaceIndexOpsByInductionVariables(RewriterBase &rewriter,
-                                                LinalgOp linalgOp,
-                                                ArrayRef<Operation *> loopOps) {
-  // Extract the induction variables of the loop nest from outer to inner.
-  SmallVector<Value> allIvs;
-  for (Operation *loopOp : loopOps) {
-    if(auto parallelOp = dyn_cast<scf::ParallelOp>(loopOp))
-      allIvs.append(parallelOp.getInductionVars());
-    else if(auto forOp = dyn_cast<scf::ForOp>(loopOp))
-      allIvs.push_back(forOp.getInductionVar());
-    else
-      assert(false && "unexpected op");
-  }
-  assert(linalgOp.getNumLoops() == allIvs.size() &&
-         "expected the number of loops and induction variables to match");
-  // Replace the index operations in the body of the innermost loop op.
-  if (!loopOps.empty()) {
-    auto loopOp = cast<LoopLikeOpInterface>(loopOps.back());
-    for (Region *r : loopOp.getLoopRegions())
-      for (linalg::IndexOp indexOp : llvm::make_early_inc_range(r->getOps<linalg::IndexOp>()))
-        rewriter.replaceOp(indexOp, allIvs[indexOp.getDim()]);
-  }
-}
-*/
 
 static LogicalResult linalgOpToParallel(PatternRewriter &rewriter, LinalgOp linalgOp) {
   // The flattened loopToOperandRangesMaps is expected to be an invertible
@@ -479,8 +404,13 @@ static LogicalResult linalgOpToParallel(PatternRewriter &rewriter, LinalgOp lina
          "expected linalg op with buffer semantics");
 
   Operation* op = linalgOp;
+  /*
+  llvm::outs() << "Original op being lowered:\n";
+  op->dump();
+  */
+
   auto loopRanges = linalgOp.createLoopRanges(rewriter, linalgOp.getLoc());
-  ArrayRef<utils::IteratorType> iteratorTypes = linalgOp.getIteratorTypesArray();
+  auto iteratorTypes = linalgOp.getIteratorTypesArray();
 
   SmallVector<Value> allIvs;
   auto loc = linalgOp.getLoc();
@@ -491,35 +421,18 @@ static LogicalResult linalgOpToParallel(PatternRewriter &rewriter, LinalgOp lina
   // This function may be passed more iterator types than ranges.
   assert(iteratorTypes.size() >= loopRanges.size() &&
          "expected iterator type for all ranges");
-  iteratorTypes = iteratorTypes.take_front(loopRanges.size());
+  //iteratorTypes = iteratorTypes.take_front(loopRanges.size());
   SmallVector<Value> lbs, ubs, steps;
-  //unsigned numLoops = iteratorTypes.size();
 
   // Get the loop lb, ub, and step.
   unpackRanges(rewriter, loc, loopRanges, lbs, ubs, steps);
 
-  SmallVector<Value> ivs = generateParallelLoopNest(rewriter, loc, lbs, ubs, steps, iteratorTypes, linalgOp);
-
+  generateParallelLoopNest(rewriter, loc, lbs, ubs, steps, iteratorTypes, linalgOp);
   /*
-  assert(ivs.size() == iteratorTypes.size() && "did not generate enough loops");
-  // Number of loop ops might be different from the number of ivs since some
-  // loops like affine.parallel and scf.parallel have multiple ivs.
-  SetVector<Operation *> loopSet;
-  for (Value iv : allIvs) {
-    if (!iv)
-      return failure();
-    // The induction variable is a block argument of the entry block of the
-    // loop operation.
-    BlockArgument ivVal = dyn_cast<BlockArgument>(iv);
-    if (!ivVal)
-      return failure();
-    loopSet.insert(ivVal.getOwner()->getParentOp());
-  }
-  LinalgLoops loops(loopSet.begin(), loopSet.end());
-  llvm::outs() << "Found " << loops.size() << " loops implementing the linalg op, with " << ivs.size() << " IVs.\n";
-  // Replace all index operations in the loop body.
-  replaceIndexOpsByInductionVariables(rewriter, linalgOp, loops);
+  llvm::outs() << "IR after creating new loop, but before deleting linalg:\n";
+  op->getParentOfType<func::FuncOp>()->dump();
   */
+
   rewriter.eraseOp(op);
   return success();
 }
