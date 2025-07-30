@@ -135,7 +135,7 @@ void mlir::kokkos::buildSparseKokkosCompiler(
   // The built-in lowering will take care of any remaining linalg ops
   pm.addNestedPass<func::FuncOp>(createConvertLinalgToParallelLoopsPass());
 
-  pm.addNestedPass<func::FuncOp>(arith::createArithExpandOpsPass());
+  // pm.addNestedPass<func::FuncOp>(arith::createArithExpandOpsPass());
   pm.addPass(memref::createExpandStridedMetadataPass());
   pm.addPass(createLowerAffinePass());
 
@@ -225,7 +225,7 @@ void mlir::kokkos::buildTeamLevelKokkosCompiler(OpPassManager &pm, const TeamLev
   // The built-in lowering will take care of any remaining linalg ops
   pm.addNestedPass<func::FuncOp>(createConvertLinalgToParallelLoopsPass());
 
-  pm.addNestedPass<func::FuncOp>(arith::createArithExpandOpsPass());
+  // pm.addNestedPass<func::FuncOp>(arith::createArithExpandOpsPass());
   pm.addPass(memref::createExpandStridedMetadataPass());
   pm.addPass(createLowerAffinePass());
 
