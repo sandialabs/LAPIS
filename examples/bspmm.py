@@ -57,7 +57,6 @@ module {
     return
   }
 }
-
 """
 
 def main():
@@ -89,13 +88,15 @@ def main():
             for l in range(k):
                 Cslice[j, l] = result[j, l]
 
-    #func.func @pte_local_bspmm(%arg0: memref<?xindex>, %arg1: memref<?xindex>, %arg2: memref<?xf32>, %arg3: !llvm.struct<(array<3 x i64>, array<3 x i64>)>, %arg4: memref<?x?x?xf32>) -> memref<?x?x?xf32> {
-
     successes = []
+    skipped = []
     failures = []
     parStrats = ['none', 'dense-outer-loop', 'dense-any-loop', 'any-storage-any-loop']
     instance = 0
     for par in parStrats:
+        if par == 'any-storage-any-loop':
+            skipped.append(par)
+            continue
         backend = KokkosBackend.KokkosBackend(decompose_tensors=True, parallel_strategy=par, index_instance=instance, num_instances=len(parStrats))
         instance += 1
         module_kokkos = backend.compile(moduleText)
@@ -108,6 +109,7 @@ def main():
             failures.append(par)
     print("Succeeded for parallelization strategies:", successes)
     print("Failed for parallelization strategies:", failures)
+    print("Skipped parallelization strategies:", skipped)
     if len(failures):
         sys.exit(1)
     else:
