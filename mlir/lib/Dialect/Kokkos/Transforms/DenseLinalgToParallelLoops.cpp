@@ -31,8 +31,8 @@ static bool isAdd(Operation* op) {
 static bool isAssociativeAndCommutativeArith(Operation* op) {
   return isa<
     arith::AddFOp, arith::AddIOp, arith::AndIOp,
-    arith::MaximumFOp, arith::MaxNumFOp, arith::MaxSIOp, arith::MaxUIOp,
-    arith::MinimumFOp, arith::MinNumFOp, arith::MinSIOp, arith::MinUIOp,
+    arith::MaximumFOp, arith::MaxSIOp, arith::MaxUIOp,
+    arith::MinimumFOp, arith::MinSIOp, arith::MinUIOp,
     arith::MulFOp, arith::MulIOp, arith::OrIOp, arith::XOrIOp>(op);
 }
 
