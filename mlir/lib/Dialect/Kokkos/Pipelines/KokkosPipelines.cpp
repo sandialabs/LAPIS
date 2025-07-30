@@ -129,7 +129,11 @@ void mlir::kokkos::buildSparseKokkosCompiler(
   pm.addNestedPass<func::FuncOp>(torch::TMTensor::createTMTensorToLoopsPass());
 #endif
 
+  // This is the LAPIS custom pass to lower dense linalg ops with parallel reductions,
+  // but it does not work in certain uncommon cases (multiple results with reductions)
   pm.addNestedPass<func::FuncOp>(createDenseLinalgToParallelLoopsPass());
+  // The built-in lowering will take care of any remaining linalg ops
+  pm.addNestedPass<func::FuncOp>(createConvertLinalgToParallelLoopsPass());
 
   pm.addNestedPass<func::FuncOp>(arith::createArithExpandOpsPass());
   pm.addPass(memref::createExpandStridedMetadataPass());
@@ -215,7 +219,11 @@ void mlir::kokkos::buildTeamLevelKokkosCompiler(OpPassManager &pm, const TeamLev
   pm.addNestedPass<func::FuncOp>(torch::TMTensor::createTMTensorToLoopsPass());
 #endif
 
+  // This is the LAPIS custom pass to lower dense linalg ops with parallel reductions,
+  // but it does not work in certain uncommon cases (multiple results with reductions)
   pm.addNestedPass<func::FuncOp>(createDenseLinalgToParallelLoopsPass());
+  // The built-in lowering will take care of any remaining linalg ops
+  pm.addNestedPass<func::FuncOp>(createConvertLinalgToParallelLoopsPass());
 
   pm.addNestedPass<func::FuncOp>(arith::createArithExpandOpsPass());
   pm.addPass(memref::createExpandStridedMetadataPass());
