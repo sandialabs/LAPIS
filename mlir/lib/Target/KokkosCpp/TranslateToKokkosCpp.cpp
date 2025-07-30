@@ -1527,7 +1527,7 @@ static bool isBuiltinReduction(std::string& reduction, kokkos::UpdateReductionOp
   Type type = op2->getOperands()[0].getType();
   // Finally, if op1 has one of the supported types, return true.
   if(isa<arith::AddFOp, arith::AddIOp>(op1)) {
-    reduction = "Kokkos::Sum";
+    reduction = "";
     return true;
   }
   else if(isa<arith::MulFOp, arith::MulIOp>(op1)) {
@@ -1712,10 +1712,14 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::RangePara
       return op.emitError("Do not yet support non-builtin reducers");
     Value result = op.getResults()[0];
     // Pass in reducer arguments to parallel_reduce
-    emitter << ", " << kokkosReducer << "<";
-    if(failed(emitter.emitType(op.getLoc(), result.getType())))
-      return failure();
-    emitter << ">(" << emitter.getOrCreateName(result) << ")";
+    emitter << ", ";
+    if(kokkosReducer != "") {
+      emitter << kokkosReducer << "<";
+      if(failed(emitter.emitType(op.getLoc(), result.getType())))
+        return failure();
+      emitter << ">";
+    }
+    emitter << "(" << emitter.getOrCreateName(result) << ")";
   }
   emitter << ")";
   return success();
@@ -1824,10 +1828,14 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::TeamParal
       return op.emitError("Do not yet support non-builtin reducers");
     Value result = op.getResults()[0];
     // Pass in reducer arguments to parallel_reduce
-    emitter << ", " << kokkosReducer << "<";
-    if(failed(emitter.emitType(op.getLoc(), result.getType())))
-      return failure();
-    emitter << ">(" << emitter.getOrCreateName(result) << ")";
+    emitter << ", ";
+    if(kokkosReducer != "") {
+      emitter << kokkosReducer << "<";
+      if(failed(emitter.emitType(op.getLoc(), result.getType())))
+        return failure();
+      emitter << ">";
+    }
+    emitter << "(" << emitter.getOrCreateName(result) << ")";
   }
   emitter << ")";
   return success();
@@ -1917,10 +1925,14 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::ThreadPar
       return op.emitError("Do not yet support non-builtin reducers");
     Value result = op.getResults()[0];
     // Pass in reducer arguments to parallel_reduce
-    emitter << ", " << kokkosReducer << "<";
-    if(failed(emitter.emitType(op.getLoc(), result.getType())))
-      return failure();
-    emitter << ">(" << emitter.getOrCreateName(result) << ")";
+    emitter << ", ";
+    if(kokkosReducer != "") {
+      emitter << kokkosReducer << "<";
+      if(failed(emitter.emitType(op.getLoc(), result.getType())))
+        return failure();
+      emitter << ">";
+    }
+    emitter << "(" << emitter.getOrCreateName(result) << ")";
   }
   emitter << ")";
   return success();
