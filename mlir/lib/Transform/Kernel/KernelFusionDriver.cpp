@@ -31,8 +31,8 @@ struct KernelFusionDriver : impl::KernelFusionDriverBase<KernelFusionDriver> {
     driveKernelFusionPass.addPass(createFusedKernelInliningPass());
 
     // reorder linalg generics to minimize temp size/computational cost
-    driveKernelFusionPass.addPass(createLinalgGeneralizeNamedOpsPass());
-    driveKernelFusionPass.addPass(createLinalgGenericReorderingPass());
+    // driveKernelFusionPass.addPass(createLinalgGeneralizeNamedOpsPass());
+    // driveKernelFusionPass.addPass(createLinalgGenericReorderingPass());
 
     // run the pipeline
     if (failed(runPipeline(driveKernelFusionPass, module)))

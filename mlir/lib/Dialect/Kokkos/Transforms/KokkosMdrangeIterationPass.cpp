@@ -1249,7 +1249,7 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
 
     MDRANGE_DEBUG("====\nbuild new module\n====\n");
     // modify the parallel ops in the module
-    mod.walk([&](scf::ParallelOp parallelOp) {
+    mod.walk([&bestCfg = bestCfg](scf::ParallelOp parallelOp) {
       MDRANGE_DEBUG("modifying " << parallelOp << "\n");
       if (auto it = bestCfg.perms_.find(parallelOp); it != bestCfg.perms_.end()) {
         const Permutation &permutation = it->second;
