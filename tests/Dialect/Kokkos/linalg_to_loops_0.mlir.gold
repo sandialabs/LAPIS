@@ -1,0 +1,23 @@
+module {
+  func.func @dot(%arg0: memref<?xf64>, %arg1: memref<?xf64>) -> f64 {
+    %c1 = arith.constant 1 : index
+    %c0 = arith.constant 0 : index
+    %alloc = memref.alloc() {alignment = 64 : i64} : memref<f64>
+    %dim = memref.dim %arg0, %c0 : memref<?xf64>
+    %0 = memref.load %alloc[] : memref<f64>
+    %1 = scf.parallel (%arg2) = (%c0) to (%dim) step (%c1) init (%0) -> f64 {
+      %3 = memref.load %arg0[%arg2] : memref<?xf64>
+      %4 = memref.load %arg1[%arg2] : memref<?xf64>
+      %5 = arith.mulf %3, %4 : f64
+      scf.reduce(%5 : f64) {
+      ^bb0(%arg3: f64, %arg4: f64):
+        %6 = arith.addf %arg3, %arg4 : f64
+        scf.reduce.return %6 : f64
+      }
+    }
+    memref.store %1, %alloc[] : memref<f64>
+    %2 = memref.load %alloc[] : memref<f64>
+    return %2 : f64
+  }
+}
+

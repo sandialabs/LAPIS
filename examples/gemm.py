@@ -25,8 +25,6 @@ def main():
 
     mlir_module = torchscript.compile(m, (aPH, bPH), output_type='linalg-on-tensors')
 
-    print(mlir_module)
-
     backend = KokkosBackend.KokkosBackend(dump_mlir=False)
     k_backend = backend.compile(mlir_module)
 
