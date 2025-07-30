@@ -24,6 +24,10 @@ using namespace mlir;
 using LinalgLoops = SmallVector<Operation *, 4>;
 using linalg::LinalgOp;
 
+static bool isAdd(Operation* op) {
+  return isa<arith::AddFOp, arith::AddIOp>(op);
+}
+
 static bool isAssociativeAndCommutativeArith(Operation* op) {
   return isa<
     arith::AddFOp, arith::AddIOp, arith::AndIOp,
@@ -43,58 +47,56 @@ static int getNumUses(Value v) {
   return count;
 }
 
-// Does op do a complex reduction in its body?
-// This is true iff each output scalar argument has at most 1 usage inside the body.
-// If an ouput scalar has 1 usage, and that usage is an input to a
-//   commutative + associative arithmetic operation, then this is a simple reduction.
-// If it has 0 usages, it is not used in a reduction at all.
-static bool hasComplexReduction(LinalgOp op) {
+// Can op (including its reductions) be parallelized in the Kokkos model?
+// Flow chart:
+// - If there are no reductions, then yes.
+// - If there are multiple outputs, then no (possible in theory but pipeline/emitter need more work)
+// - If the output scalar argument has at exactly one usage inside the body,
+//   and that usage is to an arith op, then call that arith op is the 'join'.
+// - If the join is non-commutative or non-associative, then no.
+// - If the join is an add, then yes (sum-reduction is supported by all Kokkos policies)
+// - If there is at least one parallel iterator AND more than one reduction iterator, then no.
+//   This is because nested MDRange policies do not support reductions other than add
+//   (for example, see https://kokkos.org/kokkos-core-wiki/API/core/policies/TeamVectorMDRange.html#restrictions).
+// Otherwise, yes.
+static bool canBeParallelized(LinalgOp op) {
   // if op has no reduction iterators, then it can't have complex reductions
+  int numParallelIters = 0;
+  int numReductionIters = 0;
   {
-    bool allParallel = true;
     auto iteratorTypes = op.getIteratorTypesArray();
     for(auto it : iteratorTypes) {
-      if(!isParallelIterator(it)) {
-        allParallel = false;
-        break;
-      }
+      if(isParallelIterator(it))
+        numParallelIters++;
+      else
+        numReductionIters++;
     }
-    if(allParallel)
-      return false;
   }
+  if(numReductionIters == 0)
+    return true;
   // Note: after bufferization, linalg ops have zero results since their output is stored into a memref.
   // So count the output tensors based on how many are DPS buffers.
+  // For now, don't try to handle multiple results in ops with at least one reduction.
   int numOutputs = op.getDpsInitsMutable().size();
-  if(numOutputs > 1) {
-    // For now, don't try to handle multiple results in ops with at least one reduction.
-    // The logic in this pass will fail if there are mixed reduction and non-reduction outputs
-    return true;
-  }
+  if(numOutputs != 1) return false;
+  // The last body block argument is the scalar from output tensor (we have checked that there is exactly one)
   Block& body = op->getRegion(0).front();
-  // The last numOutputs block arguments are the scalars from output tensors
-  auto outputArgs = body.getArguments().take_back(numOutputs);
-  bool allSimple = true;
-  for(auto arg : outputArgs) {
-    int numUses = getNumUses(arg);
-    if(numUses > 1) {
-      allSimple = false;
-      break;
-    }
-    else if(numUses == 1) {
-      // Arg is used only once, but check if it's a simple reduction that we know how to parallelize
-      Operation* outputUsage = arg.use_begin()->getOwner();
-      if(!isAssociativeAndCommutativeArith(outputUsage)) {
-        allSimple = false;
-        break;
-      }
-      auto updatedOutput = outputUsage->getResult(0);
-      if(getNumUses(updatedOutput) != 1 || !isa<linalg::YieldOp>(updatedOutput.use_begin()->getOwner())) {
-        allSimple = false;
-        break;
-      }
-    }
+  Value outputArg = *body.args_rbegin();
+  int numUses = getNumUses(outputArg);
+  if(numUses != 1) {
+    return false;
   }
-  return !allSimple;
+  // Arg is used once, but check if it's in a simple reduction that we know how to parallelize
+  // and which Kokkos supports.
+  Operation* join = outputArg.use_begin()->getOwner();
+  // outputUsage should be the 'join' operation. Make sure its result is directly yielded by the body,
+  // and has no other uses.
+  auto joinedValue = join->getResult(0);
+  if(getNumUses(joinedValue) != 1 || !isa<linalg::YieldOp>(joinedValue.use_begin()->getOwner()))
+    return false;
+  if(numParallelIters > 0 && numReductionIters > 1)
+    return isAdd(join);
+  return isAssociativeAndCommutativeArith(join);
 }
 
 static void unpackRanges(PatternRewriter &rewriter, Location loc,
@@ -177,7 +179,6 @@ static void emitReductionScalarImplementation(
 
   auto &body = linalgOp->getRegion(0).front();
   // Check preconditions of the rewrite logic
-  //llvm::outs() << "Orig linalg op has " << numInputs << " input tensors and " << numOutputs << " outputs.\n";
   assert(linalgOp.getDpsInitsMutable().size() == 1);
   assert(isa<linalg::YieldOp>(body.getTerminator()));
   Value yielded = body.getTerminator()->getOperand(0);
@@ -299,17 +300,6 @@ static void generateParallelLoopNest(
   // - mixed parallel and reduction dimensions
   // - all parallel
   // - all reductions
-  /*
-  llvm::outs() << "Have " << parallelIters.size() << " parallel iters and " << reductionIters.size() << " reduction iters.\n";
-  llvm::outs() << "Iterator types: ";
-  for (auto iterType : iteratorTypes) {
-    if(isParallelIterator(iterType))
-      llvm::outs() << "P";
-    else
-      llvm::outs() << "R";
-  }
-  llvm::outs() << '\n';
-  */
   if(parallelIters.size() && reductionIters.size()) {
     // Create two scf.parallel ops: outer over parallels, and inner over reductions.
     // Write-back of results will go into the outer loop only.
@@ -404,10 +394,6 @@ static LogicalResult linalgOpToParallel(PatternRewriter &rewriter, LinalgOp lina
          "expected linalg op with buffer semantics");
 
   Operation* op = linalgOp;
-  /*
-  llvm::outs() << "Original op being lowered:\n";
-  op->dump();
-  */
 
   auto loopRanges = linalgOp.createLoopRanges(rewriter, linalgOp.getLoc());
   auto iteratorTypes = linalgOp.getIteratorTypesArray();
@@ -428,10 +414,6 @@ static LogicalResult linalgOpToParallel(PatternRewriter &rewriter, LinalgOp lina
   unpackRanges(rewriter, loc, loopRanges, lbs, ubs, steps);
 
   generateParallelLoopNest(rewriter, loc, lbs, ubs, steps, iteratorTypes, linalgOp);
-  /*
-  llvm::outs() << "IR after creating new loop, but before deleting linalg:\n";
-  op->getParentOfType<func::FuncOp>()->dump();
-  */
 
   rewriter.eraseOp(op);
   return success();
@@ -448,10 +430,10 @@ struct LinalgToParallelPattern : public RewritePattern {
     if (!isa<LinalgOp>(op) || !linalgOp.hasPureBufferSemantics()) {
       return rewriter.notifyMatchFailure(op, "expected linalg op with buffer semantics");
     }
-    if (hasComplexReduction(linalgOp)) {
+    if (!canBeParallelized(linalgOp)) {
       // If we fail to match on this pass, op will instead get lowered by --convert-linalg-to-parallel-loops
       // (which will not attempt to parallelize reductions)
-      return rewriter.notifyMatchFailure(op, "pass can only lower linalg ops with simple reductions or no reductions");
+      return rewriter.notifyMatchFailure(op, "pass can only lower linalg ops with at most 1 output and reduction supported by Kokkos");
     }
     return linalgOpToParallel(rewriter, linalgOp);
   }
