@@ -1153,6 +1153,20 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
 }
 
 static LogicalResult printOperation(KokkosCppEmitter &emitter,
+                                    arith::RemFOp op) {
+  if(failed(emitter.emitAssignPrefix(*op)))
+    return failure();
+  emitter << "Kokkos::fmod(";
+  if(failed(emitter.emitValue(op.getLhs())))
+    return failure();
+  emitter << ", ";
+  if(failed(emitter.emitValue(op.getRhs())))
+    return failure();
+  emitter << ")";
+  return success();
+}
+
+static LogicalResult printOperation(KokkosCppEmitter &emitter,
                                     arith::FPToUIOp op) {
   //In C, float->unsigned conversion when input is negative is implementation defined, but MLIR says it should convert to the nearest value (0)
   if(failed(emitter.emitType(op.getLoc(), op.getOut().getType())))
@@ -3691,6 +3705,18 @@ struct ArithBinaryInfixOperator<arith::DivUIOp>
 };
 
 template<>
+struct ArithBinaryInfixOperator<arith::RemSIOp>
+{
+  static std::string get() {return "%";}
+};
+
+template<>
+struct ArithBinaryInfixOperator<arith::RemUIOp>
+{
+  static std::string get() {return "%";}
+};
+
+template<>
 struct ArithBinaryInfixOperator<arith::AndIOp>
 {
   static std::string get() {return "&";}
@@ -3955,11 +3981,16 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
           .Case<scf::ForOp, scf::WhileOp, scf::IfOp, scf::YieldOp>(
               [&](auto op) { return printOperation(*this, op); })
           // Arithmetic ops: general
-          .Case<arith::ConstantOp, arith::FPToUIOp, arith::NegFOp, arith::CmpFOp, arith::CmpIOp, arith::SelectOp, arith::IndexCastOp, arith::SIToFPOp, arith::MinNumFOp, arith::MaxNumFOp>(
+          .Case<arith::ConstantOp, arith::FPToUIOp, arith::NegFOp, arith::CmpFOp, arith::CmpIOp, arith::SelectOp, arith::IndexCastOp, arith::SIToFPOp, arith::MinNumFOp, arith::MaxNumFOp, arith::RemFOp>(
               [&](auto op) { return printOperation(*this, op); })
           // Arithmetic ops: standard binary infix operators. All have the same syntax "result = lhs <operator> rhs;".
           // ArithBinaryInfixOperator<Op>::get() will provide the <operator>.
-          .Case<arith::AddFOp, arith::AddIOp, arith::SubFOp, arith::SubIOp, arith::MulFOp, arith::MulIOp, arith::DivFOp, arith::DivSIOp, arith::DivUIOp, arith::AndIOp, arith::OrIOp, arith::XOrIOp>(
+          .Case<arith::AddFOp, arith::AddIOp,
+                arith::SubFOp, arith::SubIOp,
+                arith::MulFOp, arith::MulIOp,
+                arith::DivFOp, arith::DivSIOp, arith::DivUIOp,
+                arith::RemSIOp, arith::RemUIOp,
+                arith::AndIOp, arith::OrIOp, arith::XOrIOp>(
               [&](auto op) { return printBinaryInfixOperation(*this, op); })
           // Arithmetic ops: scalar type casting that can be done easily with C-style cast
           .Case<arith::UIToFPOp, arith::FPToSIOp, arith::TruncIOp, arith::TruncFOp, arith::ExtFOp, arith::ExtSIOp, arith::ExtUIOp>(
