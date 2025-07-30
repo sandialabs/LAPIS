@@ -90,8 +90,9 @@ class KokkosBackend:
         par = self.parallel_strategy
         dst = ""
         if self.decompose_tensors:
-            dst = "decompose-sparse-tensors"
-        pipeline = f'--sparse-compiler-kokkos=parallelization-strategy={par} {dst}'
+            pipeline = f'--sparse-compiler-kokkos=parallelization-strategy={par} decompose-sparse-tensors'
+        else:
+            pipeline = f'--sparse-compiler-kokkos=parallelization-strategy={par}'
         moduleLowered = ""
         try:
             moduleLowered = self.run_cli("lapis-opt", [pipeline], moduleText)
