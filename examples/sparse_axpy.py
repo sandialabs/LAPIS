@@ -39,8 +39,36 @@ module {
     sparse_tensor.print %arg0 : tensor<16xi64, #sparse>
     return
   }
+
+  func.func @sparse_to_dense(%arg0: tensor<16xi64, #sparse>) -> tensor<16xi64> {
+    %0 = sparse_tensor.convert %arg0 : tensor<16xi64, #sparse> to tensor<16xi64>
+    return %0 : tensor<16xi64>
+  }
 }
 """
+
+# Run sparse_axpy and check output. Return True if success.
+def check_axpy(module_kokkos, v1_pos, v1_inds, v1_vals, v2_pos, v2_inds, v2_vals):
+    gold = np.zeros(16)
+    for i in range(len(v1_inds)):
+        gold[v1_inds[i]] += 2 * v1_vals[i]
+    for i in range(len(v2_inds)):
+        gold[v2_inds[i]] += v2_vals[i]
+    v1 = newSparseTensorFactory()([16], np.int64, postype=np.int64, crdtype=np.int64, buffers=[v1_pos, v1_inds, v1_vals])
+    v2 = newSparseTensorFactory()([16], np.int64, postype=np.int64, crdtype=np.int64, buffers=[v2_pos, v2_inds, v2_vals])
+    correct_nnz = sum([1 for val in gold if val != 0])
+    [result, actual_nnz] = module_kokkos.sparse_axpy(v1, v2)
+    print("Test case result:")
+    module_kokkos.print_sparse_vec(result)
+    result = module_kokkos.sparse_to_dense(result)
+    if correct_nnz != actual_nnz:
+        print("Failed: result nonzero count incorrect")
+        return False
+    if not np.allclose(gold, result):
+        print("Failed: result value(s) incorrect")
+        return False
+    print("Success")
+    return True
 
 def main():
     # Create two sparse vectors of i64, which have length 16
@@ -50,33 +78,32 @@ def main():
     v2_pos = np.array([0, 5], dtype=np.int64)
     v2_inds = np.array([7, 9, 10, 11, 15], dtype=np.int64)
     v2_vals = np.array([1, -2, 3, -4, 5], dtype=np.int64)
-    v1 = newSparseTensorFactory()([16], np.int64, postype=np.int64, crdtype=np.int64, buffers=[v1_pos, v1_inds, v1_vals])
-    v2 = newSparseTensorFactory()([16], np.int64, postype=np.int64, crdtype=np.int64, buffers=[v2_pos, v2_inds, v2_vals])
-
-    gold = np.zeros(16)
-    for i in range(len(v1_inds)):
-        gold[v1_inds[i]] += v1_vals[i]
-    for i in range(len(v2_inds)):
-        gold[v2_inds[i]] += v2_vals[i]
-
-    correct_nnz = sum([1 for val in gold if val != 0])
+    empty_pos = np.array([0, 0], dtype=np.int64)
+    empty_inds = np.array([], dtype=np.int64)
+    empty_vals = np.array([], dtype=np.int64)
     # Use MPACT/TorchFX to export the torch module while maintaining sparsity
     # (torchscript, which we use for dense examples, can't do this)
     backend = KokkosBackend.KokkosBackend()
     module_kokkos = backend.compile(moduleText)
-    module_kokkos.print_sparse_vec(v1)
-    module_kokkos.print_sparse_vec(v2)
-    results = module_kokkos.sparse_axpy(v1, v2)
-    print("Result vector:")
-    module_kokkos.print_sparse_vec(results[0])
-    actual_nnz = results[1]
-    print("Correct number of nonzeros:", correct_nnz)
-    print("Actual number of nonzeros:", actual_nnz)
-    if correct_nnz == actual_nnz:
-        print("Success")
+
+    failures = 0
+    if not check_axpy(module_kokkos, v1_pos, v1_inds, v1_vals, v2_pos, v2_inds, v2_vals):
+        failures += 1
+    if not check_axpy(module_kokkos, v2_pos, v2_inds, v2_vals, v1_pos, v1_inds, v1_vals):
+        failures += 1
+    if not check_axpy(module_kokkos, v1_pos, v1_inds, v1_vals, empty_pos, empty_inds, empty_vals):
+        failures += 1
+    if not check_axpy(module_kokkos, empty_pos, empty_inds, empty_vals, v1_pos, v1_inds, v1_vals):
+        failures += 1
+    if not check_axpy(module_kokkos, v1_pos, v1_inds, v1_vals, v1_pos, v1_inds, v1_vals):
+        failures += 1
+    if not check_axpy(module_kokkos, empty_pos, empty_inds, empty_vals, empty_pos, empty_inds, empty_vals):
+        failures += 1
+    if failures == 0:
+        print("All cases succeeded")
         sys.exit(0)
     else:
-        print("Failure")
+        print("At least one case failed")
         sys.exit(1)
 
 if __name__ == "__main__":
