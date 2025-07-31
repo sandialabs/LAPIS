@@ -443,9 +443,9 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   StringRef name = emitter.getOrCreateName(result);
   emitter << " " << name;
   if(space == kokkos::MemorySpace::DualView)
-    emitter << "(\"" << emitter.getOrCreateName(result) << "\"";
+    emitter << "(std::string(\"" << emitter.getOrCreateName(result) << "\")";
   else
-    emitter << "(Kokkos::view_alloc(Kokkos::WithoutInitializing, \"" << name << "\")";
+    emitter << "(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string(\"" << name << "\"))";
   // If ANY dim is dynamic, we use ALL dynamic dimensions for the Kokkos::View.
   // This is because Kokkos/C++ limit the orders that static and dynamic dimensions can go in the type,
   // but MLIR allows all orderings.
@@ -2562,23 +2562,23 @@ static LogicalResult printFunctionDeviceLevel(KokkosCppEmitter &emitter, func::F
     if(t.isIndex())
       return "numpy.uint64";
     //Note: treating MLIR "signless" integer types as equivalent to unsigned NumPy integers.
-    if(t.isSignlessInteger(1) || t.isUnsignedInteger(1))
+    if(t.isSignlessInteger(1) || t.isSignedInteger(1) || t.isUnsignedInteger(1))
       return "numpy.bool";
-    if(t.isSignlessInteger(8) || t.isUnsignedInteger(8))
+    if(t.isUnsignedInteger(8))
       return "numpy.uint8";
-    if(t.isSignlessInteger(16) || t.isUnsignedInteger(16))
+    if(t.isUnsignedInteger(16))
       return "numpy.uint16";
-    if(t.isSignlessInteger(32) || t.isUnsignedInteger(32))
+    if(t.isUnsignedInteger(32))
       return "numpy.uint32";
-    if(t.isSignlessInteger(64) || t.isUnsignedInteger(64))
+    if(t.isUnsignedInteger(64))
       return "numpy.uint64";
-    if(t.isSignedInteger(8))
+    if(t.isSignlessInteger(8) || t.isSignedInteger(8))
       return "numpy.int8";
-    if(t.isSignedInteger(16))
+    if(t.isSignlessInteger(16) || t.isSignedInteger(16))
       return "numpy.int16";
-    if(t.isSignedInteger(32))
+    if(t.isSignlessInteger(32) || t.isSignedInteger(32))
       return "numpy.int32";
-    if(t.isSignedInteger(64))
+    if(t.isSignlessInteger(64) || t.isSignedInteger(64))
       return "numpy.int64";
     if(t.isF16())
       return "numpy.float16";
@@ -2593,23 +2593,23 @@ static LogicalResult printFunctionDeviceLevel(KokkosCppEmitter &emitter, func::F
     if(t.isIndex())
       return "ctypes.c_ulong";
     //Note: treating MLIR "signless" integer types as equivalent to unsigned NumPy integers.
-    if(t.isSignlessInteger(1) || t.isUnsignedInteger(1))
+    if(t.isSignlessInteger(1) || t.isSignedInteger(1) || t.isUnsignedInteger(1))
       return "ctypes.c_bool";
-    if(t.isSignlessInteger(8) || t.isUnsignedInteger(8))
+    if(t.isUnsignedInteger(8))
       return "ctypes.c_ubyte";
-    if(t.isSignlessInteger(16) || t.isUnsignedInteger(16))
+    if(t.isUnsignedInteger(16))
       return "ctypes.c_ushort";
-    if(t.isSignlessInteger(32) || t.isUnsignedInteger(32))
+    if(t.isUnsignedInteger(32))
       return "ctypes.c_uint";
-    if(t.isSignlessInteger(64) || t.isUnsignedInteger(64))
+    if(t.isUnsignedInteger(64))
       return "ctypes.c_ulong";
-    if(t.isSignedInteger(8))
+    if(t.isSignlessInteger(8) || t.isSignedInteger(8))
       return "ctypes.c_byte";
-    if(t.isSignedInteger(16))
+    if(t.isSignlessInteger(16) || t.isSignedInteger(16))
       return "ctypes.c_short";
-    if(t.isSignedInteger(32))
+    if(t.isSignlessInteger(32) || t.isSignedInteger(32))
       return "ctypes.c_int";
-    if(t.isSignedInteger(64))
+    if(t.isSignlessInteger(64) || t.isSignedInteger(64))
       return "ctypes.c_long";
     if(t.isF16())
       // ctypes doesn't have an fp16/half type
