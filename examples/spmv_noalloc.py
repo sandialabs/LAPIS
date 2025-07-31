@@ -25,7 +25,11 @@ def main():
     # Use MPACT/TorchFX to export the torch module while maintaining sparsity
     # (torchscript, which we use for dense examples, can't do this)
     backend = KokkosBackend.KokkosBackend(decompose_tensors=True)
-    module_kokkos = backend.compile(moduleText)
+    should_compile = True
+    if should_compile:
+        module_kokkos = backend.compile(moduleText)
+    else:
+        import lapis_package.lapis_package as module_kokkos
 
     print("y = Ax from kokkos:")
     module_kokkos.spmv(rowptrs, colinds, values, ((m, n), (len(rowptrs), len(colinds), len(values))), x, ykokkos)
