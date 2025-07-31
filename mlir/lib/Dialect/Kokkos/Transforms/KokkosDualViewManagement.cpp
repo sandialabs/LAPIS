@@ -52,8 +52,8 @@ static LogicalResult insertSyncModifyChild(Region* region, const DenseSet<Value>
         // Then we can insert sync and/or modify calls before op.
         // Modifies must go after syncs, otherwise the sync would
         // immediately trigger a copy.
-        if(dr) builder.create<kokkos::SyncOp>(op.getLoc(), v, kokkos::MemorySpace::Device);
-        if(hr) builder.create<kokkos::SyncOp>(op.getLoc(), v, kokkos::MemorySpace::Host);
+        if(dr || dw) builder.create<kokkos::SyncOp>(op.getLoc(), v, kokkos::MemorySpace::Device);
+        if(hr || hw) builder.create<kokkos::SyncOp>(op.getLoc(), v, kokkos::MemorySpace::Host);
         if(dw) builder.create<kokkos::ModifyOp>(op.getLoc(), v, kokkos::MemorySpace::Device);
         if(hw) builder.create<kokkos::ModifyOp>(op.getLoc(), v, kokkos::MemorySpace::Host);
       }
@@ -120,8 +120,8 @@ struct KokkosDualViewManagementPass
             // Then we can insert sync and/or modify calls before op.
             // Modifies must go after syncs, otherwise the sync would
             // immediately trigger a copy.
-            if(dr) builder.create<kokkos::SyncOp>(op.getLoc(), v, kokkos::MemorySpace::Device);
-            if(hr) builder.create<kokkos::SyncOp>(op.getLoc(), v, kokkos::MemorySpace::Host);
+            if(dr || dw) builder.create<kokkos::SyncOp>(op.getLoc(), v, kokkos::MemorySpace::Device);
+            if(hr || hw) builder.create<kokkos::SyncOp>(op.getLoc(), v, kokkos::MemorySpace::Host);
             if(dw) builder.create<kokkos::ModifyOp>(op.getLoc(), v, kokkos::MemorySpace::Device);
             if(hw) builder.create<kokkos::ModifyOp>(op.getLoc(), v, kokkos::MemorySpace::Host);
           }
