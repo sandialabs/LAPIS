@@ -22,6 +22,8 @@ namespace mlir {
 
 std::unique_ptr<Pass> createTransposeConstantFoldPass();
 
+std::unique_ptr<Pass> createDenseLinalgToParallelLoopsPass();
+
 std::unique_ptr<Pass> createMemrefResultsToParamsPass();
 
 std::unique_ptr<Pass> createMemrefToKokkosScratchPass();
