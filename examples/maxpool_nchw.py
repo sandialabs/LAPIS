@@ -28,7 +28,7 @@ def main():
     ph = TensorPlaceholder([-1, C, H, W], torch.float32)
     mlir_module = torchscript.compile(m, ph, output_type='linalg-on-tensors')
 
-    backend = KokkosBackend.KokkosBackend(dump_mlir=True)
+    backend = KokkosBackend.KokkosBackend(dump_mlir=False)
     k_backend = backend.compile(mlir_module)
 
     mpTorch = m(T).numpy()
