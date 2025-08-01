@@ -477,7 +477,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     return failure();
   emitter << " " << emitter.getOrCreateName(result);
   if(space == kokkos::MemorySpace::DualView)
-    emitter << "(\"" << emitter.getOrCreateName(result) << "\")";
+    emitter << "(std::string(\"" << emitter.getOrCreateName(result) << "\"))";
   else
     emitter << "(Kokkos::view_alloc(Kokkos::WithoutInitializing, \"" << emitter.getOrCreateName(result) << "\"))";
   return success();
@@ -2532,12 +2532,16 @@ static LogicalResult printFunctionDeviceLevel(KokkosCppEmitter &emitter, func::F
       emitter << ".host_view());\n";
       // Keep the host view alive until lapis_finalize() is called.
       // Otherwise it would be deallocated as soon as this function returns.
-      emitter << "LAPIS::keepAlive(";
+      std::string resultExpr;
       if(numResults == size_t(1))
-        emitter << "results";
+        resultExpr = "results";
       else
-        emitter << "std::get<" << i << ">(results)";
-      emitter << ".host_view());\n";
+        resultExpr = "std::get<" + std::to_string(i) + ">(results)";
+      // If host and device memory alias each other, one of the views will be an unmanaged
+      // shallow copy of the other. Keep both host and device alive in this case.
+      emitter << "LAPIS::keepAlive(" << resultExpr << ".host_view());\n";
+      emitter << "if(" << resultExpr << ".host_view().data() == " << resultExpr << ".device_view().data()) \n";
+      emitter << "  LAPIS::keepAlive(" << resultExpr << ".device_view());\n";
     }
     else
     {
@@ -3963,6 +3967,7 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
   if(isa<arith::ConstantOp, memref::CastOp, memref::GetGlobalOp, kokkos::YieldOp>(&op)) {
     skipPrint = true;
   }
+  // Uncomment to print the op type before each line of C++
   //*this << "// " << op.getName() << '\n';
   LogicalResult status =
       llvm::TypeSwitch<Operation *, LogicalResult>(&op)
@@ -4051,16 +4056,16 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
     return failure();
   if(!skipPrint) {
     *this << (trailingSemicolon ? ";\n" : "\n");
-  }
-  // If op produced any DualView typed memrefs,
-  // declare variables for its host and device views 
-  for(auto result : op.getResults()) {
-    if(auto memrefType = dyn_cast<MemRefType>(result.getType())) {
-      if(kokkos::getMemSpace(result) == kokkos::MemorySpace::DualView) {
-        if(skipPrint || !trailingSemicolon) {
-          return op.emitOpError("op produced at least one DualView, but op was emitted in a context where we can't declare v_d and v_h views");
+    // If op produced any DualView typed memrefs,
+    // declare variables for its host and device views 
+    for(auto result : op.getResults()) {
+      if(auto memrefType = dyn_cast<MemRefType>(result.getType())) {
+        if(kokkos::getMemSpace(result) == kokkos::MemorySpace::DualView) {
+          if(skipPrint || !trailingSemicolon) {
+            return op.emitOpError("op produced at least one DualView, but op was emitted in a context where we can't declare v_d and v_h views");
+          }
+          declareDeviceHostViews(result);
         }
-        declareDeviceHostViews(result);
       }
     }
   }
