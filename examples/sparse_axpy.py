@@ -81,8 +81,7 @@ def main():
     empty_pos = np.array([0, 0], dtype=np.int64)
     empty_inds = np.array([], dtype=np.int64)
     empty_vals = np.array([], dtype=np.int64)
-    # Use MPACT/TorchFX to export the torch module while maintaining sparsity
-    # (torchscript, which we use for dense examples, can't do this)
+
     backend = KokkosBackend.KokkosBackend()
     module_kokkos = backend.compile(moduleText)
 
