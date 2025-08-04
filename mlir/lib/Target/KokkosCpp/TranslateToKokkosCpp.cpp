@@ -443,9 +443,9 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   StringRef name = emitter.getOrCreateName(result);
   emitter << " " << name;
   if(space == kokkos::MemorySpace::DualView)
-    emitter << "(\"" << emitter.getOrCreateName(result) << "\"";
+    emitter << "(std::string(\"" << emitter.getOrCreateName(result) << "\")";
   else
-    emitter << "(Kokkos::view_alloc(Kokkos::WithoutInitializing, \"" << name << "\")";
+    emitter << "(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string(\"" << name << "\"))";
   // If ANY dim is dynamic, we use ALL dynamic dimensions for the Kokkos::View.
   // This is because Kokkos/C++ limit the orders that static and dynamic dimensions can go in the type,
   // but MLIR allows all orderings.
@@ -477,7 +477,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     return failure();
   emitter << " " << emitter.getOrCreateName(result);
   if(space == kokkos::MemorySpace::DualView)
-    emitter << "(\"" << emitter.getOrCreateName(result) << "\")";
+    emitter << "(std::string(\"" << emitter.getOrCreateName(result) << "\"))";
   else
     emitter << "(Kokkos::view_alloc(Kokkos::WithoutInitializing, \"" << emitter.getOrCreateName(result) << "\"))";
   return success();
@@ -2550,23 +2550,23 @@ static LogicalResult printFunctionDeviceLevel(KokkosCppEmitter &emitter, func::F
     if(t.isIndex())
       return "numpy.uint64";
     //Note: treating MLIR "signless" integer types as equivalent to unsigned NumPy integers.
-    if(t.isSignlessInteger(1) || t.isUnsignedInteger(1))
+    if(t.isSignlessInteger(1) || t.isSignedInteger(1) || t.isUnsignedInteger(1))
       return "numpy.bool";
-    if(t.isSignlessInteger(8) || t.isUnsignedInteger(8))
+    if(t.isUnsignedInteger(8))
       return "numpy.uint8";
-    if(t.isSignlessInteger(16) || t.isUnsignedInteger(16))
+    if(t.isUnsignedInteger(16))
       return "numpy.uint16";
-    if(t.isSignlessInteger(32) || t.isUnsignedInteger(32))
+    if(t.isUnsignedInteger(32))
       return "numpy.uint32";
-    if(t.isSignlessInteger(64) || t.isUnsignedInteger(64))
+    if(t.isUnsignedInteger(64))
       return "numpy.uint64";
-    if(t.isSignedInteger(8))
+    if(t.isSignlessInteger(8) || t.isSignedInteger(8))
       return "numpy.int8";
-    if(t.isSignedInteger(16))
+    if(t.isSignlessInteger(16) || t.isSignedInteger(16))
       return "numpy.int16";
-    if(t.isSignedInteger(32))
+    if(t.isSignlessInteger(32) || t.isSignedInteger(32))
       return "numpy.int32";
-    if(t.isSignedInteger(64))
+    if(t.isSignlessInteger(64) || t.isSignedInteger(64))
       return "numpy.int64";
     if(t.isF16())
       return "numpy.float16";
@@ -2581,23 +2581,23 @@ static LogicalResult printFunctionDeviceLevel(KokkosCppEmitter &emitter, func::F
     if(t.isIndex())
       return "ctypes.c_ulong";
     //Note: treating MLIR "signless" integer types as equivalent to unsigned NumPy integers.
-    if(t.isSignlessInteger(1) || t.isUnsignedInteger(1))
+    if(t.isSignlessInteger(1) || t.isSignedInteger(1) || t.isUnsignedInteger(1))
       return "ctypes.c_bool";
-    if(t.isSignlessInteger(8) || t.isUnsignedInteger(8))
+    if(t.isUnsignedInteger(8))
       return "ctypes.c_ubyte";
-    if(t.isSignlessInteger(16) || t.isUnsignedInteger(16))
+    if(t.isUnsignedInteger(16))
       return "ctypes.c_ushort";
-    if(t.isSignlessInteger(32) || t.isUnsignedInteger(32))
+    if(t.isUnsignedInteger(32))
       return "ctypes.c_uint";
-    if(t.isSignlessInteger(64) || t.isUnsignedInteger(64))
+    if(t.isUnsignedInteger(64))
       return "ctypes.c_ulong";
-    if(t.isSignedInteger(8))
+    if(t.isSignlessInteger(8) || t.isSignedInteger(8))
       return "ctypes.c_byte";
-    if(t.isSignedInteger(16))
+    if(t.isSignlessInteger(16) || t.isSignedInteger(16))
       return "ctypes.c_short";
-    if(t.isSignedInteger(32))
+    if(t.isSignlessInteger(32) || t.isSignedInteger(32))
       return "ctypes.c_int";
-    if(t.isSignedInteger(64))
+    if(t.isSignlessInteger(64) || t.isSignedInteger(64))
       return "ctypes.c_long";
     if(t.isF16())
       // ctypes doesn't have an fp16/half type
@@ -3954,6 +3954,7 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
   if(isa<arith::ConstantOp, memref::CastOp, memref::GetGlobalOp, kokkos::YieldOp>(&op)) {
     skipPrint = true;
   }
+  // Uncomment to print the op type before each line of C++
   //*this << "// " << op.getName() << '\n';
   LogicalResult status =
       llvm::TypeSwitch<Operation *, LogicalResult>(&op)
@@ -4043,42 +4044,20 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
   if(!skipPrint) {
     *this << (trailingSemicolon ? ";\n" : "\n");
   }
-  // If op produced any DualView typed memrefs,
-  // declare variables for its host and device views 
-  for(auto result : op.getResults()) {
-    if(auto memrefType = dyn_cast<MemRefType>(result.getType())) {
-      if(kokkos::getMemSpace(result) == kokkos::MemorySpace::DualView) {
-        if(skipPrint || !trailingSemicolon) {
-          std::cerr << "skipPrint=" << skipPrint << std::endl;
-          std::cerr << "trailingSemicolon=" << trailingSemicolon << std::endl;
-          return op.emitOpError("op produced at least one DualView, but op was emitted in a context where we can't declare v_d and v_h views");
-        }
-        declareDeviceHostViews(result);
-      }
-    }
-  }
   return success();
 }
 
 LogicalResult KokkosCppEmitter::emitInitAndFinalize(bool finalizeKokkos = true)
 {
-  *this << "extern \"C\" void getHostData(StridedMemRefTypeBase* out, LAPIS::PythonParameterBase* in)\n";
-  *this << "{\n";
-  *this << "  assert(in->wrapper_type == LAPIS::PythonParameterBase::DUALVIEW_TYPE);\n";
-  *this << "  in->view->toStridedMemRef(out);\n";
-  *this << "}\n";
-  *this << "\n";
-
-  *this << "extern \"C\" void freeDualView(LAPIS::DualViewBase* handle)\n";
-  *this << "{\n";
-  *this << "  delete handle;\n";
-  *this << "}\n";
-  *this << "\n";
 
   // Declare the init/finalize in decl file
   selectDeclCppStream();
   *this << "extern \"C\" void lapis_initialize();\n";
   *this << "extern \"C\" void lapis_finalize();\n";
+  if(!emittingTeamLevel()) {
+    *this << "extern \"C\" void getHostData(StridedMemRefTypeBase* out, LAPIS::PythonParameterBase* in);\n";
+    *this << "extern \"C\" void freeDualView(LAPIS::DualViewBase* handle);\n";
+  }
   selectMainCppStream();
   *this << "extern \"C\" void lapis_initialize()\n";
   *this << "{\n";
@@ -4166,12 +4145,25 @@ LogicalResult KokkosCppEmitter::emitInitAndFinalize(bool finalizeKokkos = true)
   }
 
   // Free views returned to Python
-  if(finalizeKokkos)
+  if(finalizeKokkos) {
     *this << "Kokkos::finalize();\n";
+  }
+  this->unindent();
+  *this << "}\n\n";
 
   if(!emittingTeamLevel()) {
-      this->unindent();
-      *this << "}\n\n";
+    *this << "extern \"C\" void getHostData(StridedMemRefTypeBase* out, LAPIS::PythonParameterBase* in)\n";
+    *this << "{\n";
+    *this << "  assert(in->wrapper_type == LAPIS::PythonParameterBase::DUALVIEW_TYPE);\n";
+    *this << "  in->view->toStridedMemRef(out);\n";
+    *this << "}\n";
+    *this << "\n";
+
+    *this << "extern \"C\" void freeDualView(LAPIS::DualViewBase* handle)\n";
+    *this << "{\n";
+    *this << "  delete handle;\n";
+    *this << "}\n";
+    *this << "\n";
   }
 
   return success();
@@ -4715,7 +4707,7 @@ LogicalResult kokkos::translateToKokkosCppTeamLevel(Operation *op, raw_ostream* 
   if(failed(emitter.emitOperation(*op, /*trailingSemicolon=*/false)))
     return failure();
   // Emit the init and finalize function definitions.
-  if (failed(emitter.emitInitAndFinalize()))
+  if (failed(emitter.emitInitAndFinalize(false)))
     return failure();
   if(header_os) {
     *header_os << "#ifndef LAPIS_MODULE_H\n";
