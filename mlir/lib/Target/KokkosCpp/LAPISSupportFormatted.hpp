@@ -361,7 +361,7 @@
 "    }\n"
 "\n"
 "    virtual ~DualView() {\n"
-"      //if(!impl) return;\n"
+"      if(!impl) return;\n"
 "      if(syncHostWhenDestroyed) syncHost();\n"
 "      DualViewImplBase* parent = impl->parent.get();\n"
 "      impl.reset();\n"

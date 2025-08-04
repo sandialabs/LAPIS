@@ -361,7 +361,7 @@ namespace LAPIS
     }
 
     virtual ~DualView() {
-      //if(!impl) return;
+      if(!impl) return;
       if(syncHostWhenDestroyed) syncHost();
       DualViewImplBase* parent = impl->parent.get();
       impl.reset();
