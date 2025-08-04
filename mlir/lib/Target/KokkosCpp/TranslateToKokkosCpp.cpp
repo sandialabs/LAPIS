@@ -443,9 +443,9 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   StringRef name = emitter.getOrCreateName(result);
   emitter << " " << name;
   if(space == kokkos::MemorySpace::DualView)
-    emitter << "(\"" << emitter.getOrCreateName(result) << "\"";
+    emitter << "(std::string(\"" << emitter.getOrCreateName(result) << "\")";
   else
-    emitter << "(Kokkos::view_alloc(Kokkos::WithoutInitializing, \"" << name << "\")";
+    emitter << "(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string(\"" << name << "\"))";
   // If ANY dim is dynamic, we use ALL dynamic dimensions for the Kokkos::View.
   // This is because Kokkos/C++ limit the orders that static and dynamic dimensions can go in the type,
   // but MLIR allows all orderings.
@@ -477,7 +477,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     return failure();
   emitter << " " << emitter.getOrCreateName(result);
   if(space == kokkos::MemorySpace::DualView)
-    emitter << "(\"" << emitter.getOrCreateName(result) << "\")";
+    emitter << "(std::string(\"" << emitter.getOrCreateName(result) << "\"))";
   else
     emitter << "(Kokkos::view_alloc(Kokkos::WithoutInitializing, \"" << emitter.getOrCreateName(result) << "\"))";
   return success();
@@ -1153,6 +1153,20 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
 }
 
 static LogicalResult printOperation(KokkosCppEmitter &emitter,
+                                    arith::RemFOp op) {
+  if(failed(emitter.emitAssignPrefix(*op)))
+    return failure();
+  emitter << "Kokkos::fmod(";
+  if(failed(emitter.emitValue(op.getLhs())))
+    return failure();
+  emitter << ", ";
+  if(failed(emitter.emitValue(op.getRhs())))
+    return failure();
+  emitter << ")";
+  return success();
+}
+
+static LogicalResult printOperation(KokkosCppEmitter &emitter,
                                     arith::FPToUIOp op) {
   //In C, float->unsigned conversion when input is negative is implementation defined, but MLIR says it should convert to the nearest value (0)
   if(failed(emitter.emitType(op.getLoc(), op.getOut().getType())))
@@ -1513,7 +1527,7 @@ static bool isBuiltinReduction(std::string& reduction, kokkos::UpdateReductionOp
   Type type = op2->getOperands()[0].getType();
   // Finally, if op1 has one of the supported types, return true.
   if(isa<arith::AddFOp, arith::AddIOp>(op1)) {
-    reduction = "Kokkos::Sum";
+    reduction = "";
     return true;
   }
   else if(isa<arith::MulFOp, arith::MulIOp>(op1)) {
@@ -1698,10 +1712,14 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::RangePara
       return op.emitError("Do not yet support non-builtin reducers");
     Value result = op.getResults()[0];
     // Pass in reducer arguments to parallel_reduce
-    emitter << ", " << kokkosReducer << "<";
-    if(failed(emitter.emitType(op.getLoc(), result.getType())))
-      return failure();
-    emitter << ">(" << emitter.getOrCreateName(result) << ")";
+    emitter << ", ";
+    if(kokkosReducer != "") {
+      emitter << kokkosReducer << "<";
+      if(failed(emitter.emitType(op.getLoc(), result.getType())))
+        return failure();
+      emitter << ">";
+    }
+    emitter << "(" << emitter.getOrCreateName(result) << ")";
   }
   emitter << ")";
   return success();
@@ -1810,10 +1828,14 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::TeamParal
       return op.emitError("Do not yet support non-builtin reducers");
     Value result = op.getResults()[0];
     // Pass in reducer arguments to parallel_reduce
-    emitter << ", " << kokkosReducer << "<";
-    if(failed(emitter.emitType(op.getLoc(), result.getType())))
-      return failure();
-    emitter << ">(" << emitter.getOrCreateName(result) << ")";
+    emitter << ", ";
+    if(kokkosReducer != "") {
+      emitter << kokkosReducer << "<";
+      if(failed(emitter.emitType(op.getLoc(), result.getType())))
+        return failure();
+      emitter << ">";
+    }
+    emitter << "(" << emitter.getOrCreateName(result) << ")";
   }
   emitter << ")";
   return success();
@@ -1903,10 +1925,14 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::ThreadPar
       return op.emitError("Do not yet support non-builtin reducers");
     Value result = op.getResults()[0];
     // Pass in reducer arguments to parallel_reduce
-    emitter << ", " << kokkosReducer << "<";
-    if(failed(emitter.emitType(op.getLoc(), result.getType())))
-      return failure();
-    emitter << ">(" << emitter.getOrCreateName(result) << ")";
+    emitter << ", ";
+    if(kokkosReducer != "") {
+      emitter << kokkosReducer << "<";
+      if(failed(emitter.emitType(op.getLoc(), result.getType())))
+        return failure();
+      emitter << ">";
+    }
+    emitter << "(" << emitter.getOrCreateName(result) << ")";
   }
   emitter << ")";
   return success();
@@ -2506,12 +2532,16 @@ static LogicalResult printFunctionDeviceLevel(KokkosCppEmitter &emitter, func::F
       emitter << ".host_view());\n";
       // Keep the host view alive until lapis_finalize() is called.
       // Otherwise it would be deallocated as soon as this function returns.
-      emitter << "LAPIS::keepAlive(";
+      std::string resultExpr;
       if(numResults == size_t(1))
-        emitter << "results";
+        resultExpr = "results";
       else
-        emitter << "std::get<" << i << ">(results)";
-      emitter << ".host_view());\n";
+        resultExpr = "std::get<" + std::to_string(i) + ">(results)";
+      // If host and device memory alias each other, one of the views will be an unmanaged
+      // shallow copy of the other. Keep both host and device alive in this case.
+      emitter << "LAPIS::keepAlive(" << resultExpr << ".host_view());\n";
+      emitter << "if(" << resultExpr << ".host_view().data() == " << resultExpr << ".device_view().data()) \n";
+      emitter << "  LAPIS::keepAlive(" << resultExpr << ".device_view());\n";
     }
     else
     {
@@ -2536,23 +2566,23 @@ static LogicalResult printFunctionDeviceLevel(KokkosCppEmitter &emitter, func::F
     if(t.isIndex())
       return "numpy.uint64";
     //Note: treating MLIR "signless" integer types as equivalent to unsigned NumPy integers.
-    if(t.isSignlessInteger(1) || t.isUnsignedInteger(1))
+    if(t.isSignlessInteger(1) || t.isSignedInteger(1) || t.isUnsignedInteger(1))
       return "numpy.bool";
-    if(t.isSignlessInteger(8) || t.isUnsignedInteger(8))
+    if(t.isUnsignedInteger(8))
       return "numpy.uint8";
-    if(t.isSignlessInteger(16) || t.isUnsignedInteger(16))
+    if(t.isUnsignedInteger(16))
       return "numpy.uint16";
-    if(t.isSignlessInteger(32) || t.isUnsignedInteger(32))
+    if(t.isUnsignedInteger(32))
       return "numpy.uint32";
-    if(t.isSignlessInteger(64) || t.isUnsignedInteger(64))
+    if(t.isUnsignedInteger(64))
       return "numpy.uint64";
-    if(t.isSignedInteger(8))
+    if(t.isSignlessInteger(8) || t.isSignedInteger(8))
       return "numpy.int8";
-    if(t.isSignedInteger(16))
+    if(t.isSignlessInteger(16) || t.isSignedInteger(16))
       return "numpy.int16";
-    if(t.isSignedInteger(32))
+    if(t.isSignlessInteger(32) || t.isSignedInteger(32))
       return "numpy.int32";
-    if(t.isSignedInteger(64))
+    if(t.isSignlessInteger(64) || t.isSignedInteger(64))
       return "numpy.int64";
     if(t.isF16())
       return "numpy.float16";
@@ -2567,23 +2597,23 @@ static LogicalResult printFunctionDeviceLevel(KokkosCppEmitter &emitter, func::F
     if(t.isIndex())
       return "ctypes.c_ulong";
     //Note: treating MLIR "signless" integer types as equivalent to unsigned NumPy integers.
-    if(t.isSignlessInteger(1) || t.isUnsignedInteger(1))
+    if(t.isSignlessInteger(1) || t.isSignedInteger(1) || t.isUnsignedInteger(1))
       return "ctypes.c_bool";
-    if(t.isSignlessInteger(8) || t.isUnsignedInteger(8))
+    if(t.isUnsignedInteger(8))
       return "ctypes.c_ubyte";
-    if(t.isSignlessInteger(16) || t.isUnsignedInteger(16))
+    if(t.isUnsignedInteger(16))
       return "ctypes.c_ushort";
-    if(t.isSignlessInteger(32) || t.isUnsignedInteger(32))
+    if(t.isUnsignedInteger(32))
       return "ctypes.c_uint";
-    if(t.isSignlessInteger(64) || t.isUnsignedInteger(64))
+    if(t.isUnsignedInteger(64))
       return "ctypes.c_ulong";
-    if(t.isSignedInteger(8))
+    if(t.isSignlessInteger(8) || t.isSignedInteger(8))
       return "ctypes.c_byte";
-    if(t.isSignedInteger(16))
+    if(t.isSignlessInteger(16) || t.isSignedInteger(16))
       return "ctypes.c_short";
-    if(t.isSignedInteger(32))
+    if(t.isSignlessInteger(32) || t.isSignedInteger(32))
       return "ctypes.c_int";
-    if(t.isSignedInteger(64))
+    if(t.isSignlessInteger(64) || t.isSignedInteger(64))
       return "ctypes.c_long";
     if(t.isF16())
       // ctypes doesn't have an fp16/half type
@@ -3691,6 +3721,18 @@ struct ArithBinaryInfixOperator<arith::DivUIOp>
 };
 
 template<>
+struct ArithBinaryInfixOperator<arith::RemSIOp>
+{
+  static std::string get() {return "%";}
+};
+
+template<>
+struct ArithBinaryInfixOperator<arith::RemUIOp>
+{
+  static std::string get() {return "%";}
+};
+
+template<>
 struct ArithBinaryInfixOperator<arith::AndIOp>
 {
   static std::string get() {return "&";}
@@ -3925,6 +3967,7 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
   if(isa<arith::ConstantOp, memref::CastOp, memref::GetGlobalOp, kokkos::YieldOp>(&op)) {
     skipPrint = true;
   }
+  // Uncomment to print the op type before each line of C++
   //*this << "// " << op.getName() << '\n';
   LogicalResult status =
       llvm::TypeSwitch<Operation *, LogicalResult>(&op)
@@ -3955,11 +3998,16 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
           .Case<scf::ForOp, scf::WhileOp, scf::IfOp, scf::YieldOp>(
               [&](auto op) { return printOperation(*this, op); })
           // Arithmetic ops: general
-          .Case<arith::ConstantOp, arith::FPToUIOp, arith::NegFOp, arith::CmpFOp, arith::CmpIOp, arith::SelectOp, arith::IndexCastOp, arith::SIToFPOp, arith::MinNumFOp, arith::MaxNumFOp>(
+          .Case<arith::ConstantOp, arith::FPToUIOp, arith::NegFOp, arith::CmpFOp, arith::CmpIOp, arith::SelectOp, arith::IndexCastOp, arith::SIToFPOp, arith::MinNumFOp, arith::MaxNumFOp, arith::RemFOp>(
               [&](auto op) { return printOperation(*this, op); })
           // Arithmetic ops: standard binary infix operators. All have the same syntax "result = lhs <operator> rhs;".
           // ArithBinaryInfixOperator<Op>::get() will provide the <operator>.
-          .Case<arith::AddFOp, arith::AddIOp, arith::SubFOp, arith::SubIOp, arith::MulFOp, arith::MulIOp, arith::DivFOp, arith::DivSIOp, arith::DivUIOp, arith::AndIOp, arith::OrIOp, arith::XOrIOp>(
+          .Case<arith::AddFOp, arith::AddIOp,
+                arith::SubFOp, arith::SubIOp,
+                arith::MulFOp, arith::MulIOp,
+                arith::DivFOp, arith::DivSIOp, arith::DivUIOp,
+                arith::RemSIOp, arith::RemUIOp,
+                arith::AndIOp, arith::OrIOp, arith::XOrIOp>(
               [&](auto op) { return printBinaryInfixOperation(*this, op); })
           // Arithmetic ops: scalar type casting that can be done easily with C-style cast
           .Case<arith::UIToFPOp, arith::FPToSIOp, arith::TruncIOp, arith::TruncFOp, arith::ExtFOp, arith::ExtSIOp, arith::ExtUIOp>(
@@ -4008,16 +4056,16 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
     return failure();
   if(!skipPrint) {
     *this << (trailingSemicolon ? ";\n" : "\n");
-  }
-  // If op produced any DualView typed memrefs,
-  // declare variables for its host and device views 
-  for(auto result : op.getResults()) {
-    if(auto memrefType = dyn_cast<MemRefType>(result.getType())) {
-      if(kokkos::getMemSpace(result) == kokkos::MemorySpace::DualView) {
-        if(skipPrint || !trailingSemicolon) {
-          return op.emitOpError("op produced at least one DualView, but op was emitted in a context where we can't declare v_d and v_h views");
+    // If op produced any DualView typed memrefs,
+    // declare variables for its host and device views 
+    for(auto result : op.getResults()) {
+      if(auto memrefType = dyn_cast<MemRefType>(result.getType())) {
+        if(kokkos::getMemSpace(result) == kokkos::MemorySpace::DualView) {
+          if(skipPrint || !trailingSemicolon) {
+            return op.emitOpError("op produced at least one DualView, but op was emitted in a context where we can't declare v_d and v_h views");
+          }
+          declareDeviceHostViews(result);
         }
-        declareDeviceHostViews(result);
       }
     }
   }

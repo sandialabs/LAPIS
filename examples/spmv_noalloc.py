@@ -22,8 +22,6 @@ def main():
     x = np.ones((n), dtype=np.double)
     ykokkos = np.zeros((m), dtype=np.double)
 
-    # Use MPACT/TorchFX to export the torch module while maintaining sparsity
-    # (torchscript, which we use for dense examples, can't do this)
     backend = KokkosBackend.KokkosBackend(decompose_tensors=True)
     module_kokkos = backend.compile(moduleText)
 

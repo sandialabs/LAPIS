@@ -540,7 +540,7 @@ static LogicalResult scfParallelToKokkosTeam(kokkos::TeamParallelOp &newOp,
     // If the original loop was not 1D, use arith.remui and arith.divui to get
     // the original (n-dimensional) induction variables in terms of the single
     // league rank. Treat the last dimension the fastest varying.
-    Value leagueRankRemaining = leagueSize;
+    Value leagueRankRemaining = leagueRank;
     for (int i = n - 1; i >= 0; i--) {
       Value thisLoopSize = origLoopBounds[i];
       // First, use remainder (remui) to get the current induction var
@@ -612,7 +612,7 @@ static LogicalResult scfParallelToKokkosThread(kokkos::ThreadParallelOp &newOp,
   if (n == 1) {
     irMap.map(origInductionVars[0], inductionVar);
   } else {
-    Value iterCountRemaining = numIters;
+    Value iterCountRemaining = inductionVar;
     for (int i = n - 1; i >= 0; i--) {
       Value thisLoopSize = origLoopBounds[i];
       // First, use remainder (remui) to get the current induction var

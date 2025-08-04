@@ -1,0 +1,25 @@
+module {
+  func.func @gemv_trans(%arg0: memref<?x?xf32>, %arg1: memref<?xf32>, %arg2: memref<?xf32>) -> memref<?xf32> {
+    %c1 = arith.constant 1 : index
+    %c0 = arith.constant 0 : index
+    %dim = memref.dim %arg0, %c0 : memref<?x?xf32>
+    %dim_0 = memref.dim %arg0, %c1 : memref<?x?xf32>
+    scf.parallel (%arg3) = (%c0) to (%dim_0) step (%c1) {
+      %0 = memref.load %arg2[%arg3] : memref<?xf32>
+      %1 = scf.parallel (%arg4) = (%c0) to (%dim) step (%c1) init (%0) -> f32 {
+        %2 = memref.load %arg0[%arg4, %arg3] : memref<?x?xf32>
+        %3 = memref.load %arg1[%arg4] : memref<?xf32>
+        %4 = arith.mulf %2, %3 : f32
+        scf.reduce(%4 : f32) {
+        ^bb0(%arg5: f32, %arg6: f32):
+          %5 = arith.addf %arg5, %arg6 : f32
+          scf.reduce.return %5 : f32
+        }
+      }
+      memref.store %1, %arg2[%arg3] : memref<?xf32>
+      scf.reduce 
+    }
+    return %arg2 : memref<?xf32>
+  }
+}
+

@@ -205,6 +205,10 @@ export PYTHONPATH=$PYTHONPATH:$WORKSPACE/build/tools/torch-mlir/python_packages/
 export PYTHONPATH=$PYTHONPATH:$WORKSPACE/build/tools/mpact/python_packages/mpact
 ```
 
+**Note**: the above instructions use the Python packages in the build directories, not the install directories.
+To use an installation, remove the last subdirectory from each path in ``PYTHONPATH``. For example,
+use ``$install/python_packages`` instead of ``$build/python_packages/lapis``.
+
 ### Run Kokkos dialect tests
 Prerequisite: install ``lit`` testing utility
 ```

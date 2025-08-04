@@ -13,6 +13,14 @@ def TransposeConstantFoldPass : Pass<"fold-constant-transpose"> {
   let constructor = "mlir::createTransposeConstantFoldPass()";
 }
 
+def DenseLinalgToParallelLoops : Pass<"dense-linalg-to-parallel-loops"> {
+  let summary = "Rewrite dense linalg.generic operations to scf.parallel loop nests";
+  let dependentDialects = [
+    "scf::SCFDialect", "linalg::LinalgDialect", "memref::MemRefDialect"
+  ];
+  let constructor = "mlir::createDenseLinalgToParallelLoopsPass()";
+}
+
 def MemrefResultsToParams : Pass<"memref-results-to-params", "ModuleOp"> {
   let summary = "Moves memref-type return values to be function parameters instead";
   let description = [{
