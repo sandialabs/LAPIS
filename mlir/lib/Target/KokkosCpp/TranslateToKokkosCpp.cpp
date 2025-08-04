@@ -4044,6 +4044,18 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
   if(!skipPrint) {
     *this << (trailingSemicolon ? ";\n" : "\n");
   }
+  // If op produced any DualView typed memrefs,
+  // declare variables for its host and device views
+  for(auto result : op.getResults()) {
+    if(auto memrefType = dyn_cast<MemRefType>(result.getType())) {
+      if(kokkos::getMemSpace(result) == kokkos::MemorySpace::DualView) {
+        if(skipPrint || !trailingSemicolon) {
+          return op.emitOpError("op produced at least one DualView, but op was emitted in a context where we can't declare v_d and v_h views");
+        }
+        declareDeviceHostViews(result);
+      }
+    }
+  }
   return success();
 }
 
