@@ -1,8 +1,11 @@
 from lapis import KokkosBackend
 import numpy as np
 import sys
+import ctypes
 from utils.NewSparseTensorFactory import newSparseTensorFactory
 from utils.NewSparseTensorFactory import LevelFormat
+from mlir.runtime import ranked_memref_to_numpy
+from mlir.runtime import make_nd_memref_descriptor
 
 moduleText = """
 #map = affine_map<(d0) -> (d0)>
@@ -54,16 +57,48 @@ def check_axpy(module_kokkos, v1_pos, v1_inds, v1_vals, v2_pos, v2_inds, v2_vals
         gold[v1_inds[i]] += 2 * v1_vals[i]
     for i in range(len(v2_inds)):
         gold[v2_inds[i]] += v2_vals[i]
-    v1 = newSparseTensorFactory()([16], np.int64, postype=np.int64, crdtype=np.int64, buffers=[v1_pos, v1_inds, v1_vals])
-    v2 = newSparseTensorFactory()([16], np.int64, postype=np.int64, crdtype=np.int64, buffers=[v2_pos, v2_inds, v2_vals])
+    sparseFact = newSparseTensorFactory()
+    v1 = sparseFact([16], np.int64, postype=np.int64, crdtype=np.int64, buffers=[v1_pos, v1_inds, v1_vals])
+    v2 = sparseFact([16], np.int64, postype=np.int64, crdtype=np.int64, buffers=[v2_pos, v2_inds, v2_vals])
     correct_nnz = sum([1 for val in gold if val != 0])
     [result, actual_nnz] = module_kokkos.sparse_axpy(v1, v2)
+    # Extract buffers from sparse vector "result" as NumPy arrays
+    result_pos = ctypes.pointer(make_nd_memref_descriptor(1, ctypes.c_int64)())
+    # Final argument (index 0) is the storage level
+    sparseFact.lib._mlir_ciface_sparsePositions64(result_pos, result, ctypes.c_int64(0))
+    result_pos = ranked_memref_to_numpy(result_pos)
+    result_crd = []
+    result_val = []
+    print("Result pos:", result_pos)
+    if result_pos[1]:
+        # Vector is nonempty
+        result_crd = ctypes.pointer(make_nd_memref_descriptor(1, ctypes.c_int64)())
+        result_val = ctypes.pointer(make_nd_memref_descriptor(1, ctypes.c_int64)())
+        sparseFact.lib._mlir_ciface_sparseCoordinates64(result_crd, result, ctypes.c_int64(0))
+        sparseFact.lib._mlir_ciface_sparseValuesI64(result_val, result)
+        result_crd = ranked_memref_to_numpy(result_crd)
+        result_val = ranked_memref_to_numpy(result_val)
+        print("Result crd:", result_crd)
+        print("Result val:", result_val)
+    else:
+        # Vector is empty (zero entries): coordinates and values may be null (not allocated at all)
+        print("Result crd:", result_crd)
+        print("Result val:", result_val)
     print("Test case result:")
-    module_kokkos.print_sparse_vec(result)
+    # Alternate way to print sparse vector, using sparse_tensor.print op
+    #module_kokkos.print_sparse_vec(result)
     result = module_kokkos.sparse_to_dense(result)
     if correct_nnz != actual_nnz:
         print("Failed: result nonzero count incorrect")
         return False
+    if correct_nnz != result_pos[1]:
+        print("Failed: result's positions implies incorrect nonzero count")
+        return False
+    for i in range(correct_nnz):
+        # Exact comparison OK because vector is integer-valued
+        goldVal = gold[result_crd[i]]
+        if goldVal != result_val[i]:
+            print("Failed: result value at coord", result_crd[i], "is", result_val[i], "but should be", goldVal)
     if not np.allclose(gold, result):
         print("Failed: result value(s) incorrect")
         return False
@@ -74,7 +109,7 @@ def main():
     # Create two sparse vectors of i64, which have length 16
     v1_pos = np.array([0, 6], dtype=np.int64)
     v1_inds = np.array([0, 1, 5, 6, 7, 15], dtype=np.int64)
-    v1_vals = np.array([-2, 1.2, 3, 3.14159, -10, -20], dtype=np.int64)
+    v1_vals = np.array([-2, 1.2, 3, 3, -10, -20], dtype=np.int64)
     v2_pos = np.array([0, 5], dtype=np.int64)
     v2_inds = np.array([7, 9, 10, 11, 15], dtype=np.int64)
     v2_vals = np.array([1, -2, 3, -4, 5], dtype=np.int64)
