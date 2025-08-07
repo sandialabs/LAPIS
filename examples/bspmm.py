@@ -100,7 +100,7 @@ def main():
         backend = KokkosBackend.KokkosBackend(decompose_tensors=True, parallel_strategy=par, index_instance=instance, num_instances=len(parStrats))
         instance += 1
         module_kokkos = backend.compile(moduleText)
-        C_kokkos = module_kokkos.pte_local_bspmm(rowptrs, colinds, values, ((m, n, b), (m+1, nnz, nnz*b)), B)
+        C_kokkos = module_kokkos.pte_local_bspmm(rowptrs, colinds, values, ((m, n, b), (m+1, nnz, nnz*b)), B).asnumpy()
         # For debugging: print the CSRV formatted matrix
         # module_kokkos.print_csrv(rowptrs, colinds, values, ((m, n, b), (m+1, nnz, nnz*b)))
         if np.allclose(C_gold, C_kokkos):
