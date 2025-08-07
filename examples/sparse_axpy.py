@@ -60,7 +60,7 @@ def check_axpy(module_kokkos, v1_pos, v1_inds, v1_vals, v2_pos, v2_inds, v2_vals
     [result, actual_nnz] = module_kokkos.sparse_axpy(v1, v2)
     print("Test case result:")
     module_kokkos.print_sparse_vec(result)
-    result = module_kokkos.sparse_to_dense(result)
+    result = module_kokkos.sparse_to_dense(result).asnumpy()
     if correct_nnz != actual_nnz:
         print("Failed: result nonzero count incorrect")
         return False
