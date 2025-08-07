@@ -1335,7 +1335,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::ForOp forOp)
   for (OpResult result : results) {
     if (failed(emitter.emitVariableDeclaration(forOp.getLoc(), result,
                                                /*trailingSemicolon=*/true)))
-      return failure();
+      return forOp.emitError("Failed to declare scf.for results");
   }
 
   for (auto pair : llvm::zip(iterArgs, operands)) {
@@ -1379,7 +1379,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::ForOp forOp)
   // loop.
   for (auto it = regionOps.begin(); std::next(it) != regionOps.end(); ++it) {
     if (failed(emitter.emitOperation(*it, /*trailingSemicolon=*/true)))
-      return failure();
+      return it->emitError("Failed to emit scf.for body op");
   }
 
   Operation *yieldOp = forRegion.getBlocks().front().getTerminator();
@@ -2391,16 +2391,11 @@ static LogicalResult printFunctionDeviceLevel(KokkosCppEmitter &emitter, func::F
         return failure();
     }
     for (Operation &op : block.getOperations()) {
-      // When generating code for an scf.if or cf.cond_br op no semicolon needs
-      // to be printed after the closing brace.
-      // When generating code for an scf.for op, printing a trailing semicolon
-      // is handled within the printOperation function.
       bool trailingSemicolon =
           !isa<scf::IfOp, scf::ForOp, cf::CondBranchOp>(op);
 
-      if (failed(emitter.emitOperation(
-              op, /*trailingSemicolon=*/trailingSemicolon)))
-        return failure();
+      if (failed(emitter.emitOperation(op, trailingSemicolon)))
+        return op.emitError("Failed to emit operation in block body");
     }
   }
   emitter.unindent();
@@ -3900,6 +3895,38 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
 }
 
 static LogicalResult printOperation(KokkosCppEmitter &emitter,
+                                    LLVM::InsertValueOp op) {
+  emitter << emitter.getOrCreateName(op.getContainer()) << " = ";
+  Type container = op.getContainer().getType();
+  for(size_t i = 0; i < op.getPosition().size(); i++) {
+    if (auto structType = dyn_cast<LLVM::LLVMStructType>(container)) {
+      emitter << ".m" << op.getPosition()[i];
+      container = structType.getBody()[op.getPosition()[i]];
+    }
+    else if(auto arrayType = dyn_cast<LLVM::LLVMArrayType>(container)) {
+      emitter << "[" << op.getPosition()[i] << "]";
+      container = arrayType.getElementType();
+    }
+    else {
+      return op.emitError("trying to extract value from container that is neither LLVMStructType nor LLVMArrayType");
+    }
+  }
+  emitter << " = ";
+  if(failed(emitter.emitValue(op.getValue())))
+    return failure();
+  return success();
+}
+
+static LogicalResult printOperation(KokkosCppEmitter &emitter,
+                                    LLVM::UndefOp op) {
+  // Declare (but do not initialize) a value of the given type.
+  if(failed(emitter.emitType(op.getLoc(), op.getResult().getType())))
+    return failure();
+  emitter << ' ' << emitter.getOrCreateName(op.getResult());
+  return success();
+}
+
+static LogicalResult printOperation(KokkosCppEmitter &emitter,
                                     vector::PrintOp op) {
   // It's possible that op doesn't print anything
   if(!op.getSource()
@@ -4029,7 +4056,7 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
           .Case<emitc::CallOp, emitc::CallOpaqueOp>(
               [&](auto op) { return printOperation(*this, op); })
           // LLVM ops.
-          .Case<LLVM::ZeroOp, LLVM::ExtractValueOp>(
+          .Case<LLVM::ZeroOp, LLVM::ExtractValueOp, LLVM::InsertValueOp, LLVM::UndefOp>(
               [&](auto op) { return printOperation(*this, op); })
           // Vector ops.
           .Case<vector::PrintOp>(
