@@ -24,8 +24,6 @@ def main():
     x = np.array([1.1, 0.3, 2.2, 3.7, -4, -19, -2, 1], dtype=np.double)
     y = np.array([4.1, -3.3, 2.7, -3.7, 4, 9, -2.4, 10], dtype=np.double)
 
-    # Use MPACT/TorchFX to export the torch module while maintaining sparsity
-    # (torchscript, which we use for dense examples, can't do this)
     backend = KokkosBackend.KokkosBackend(decompose_tensors=True)
     module_kokkos = backend.compile(moduleText)
 

@@ -154,7 +154,7 @@ namespace LAPIS
     using DeviceView = Kokkos::View<DataType, Layout, Kokkos::DefaultExecutionSpace>;
     using HostMemRefType = StridedMemRefType<typename HostView::value_type, HostView::rank>;
 
-    static constexpr bool deviceAccessesHost = Kokkos::SpaceAccessibility<Kokkos::DefaultHostExecutionSpace, typename DeviceView::memory_space>::accessible;
+    static constexpr bool deviceAccessesHost = Kokkos::SpaceAccessibility<Kokkos::DefaultExecutionSpace, Kokkos::HostSpace>::accessible;
     static constexpr bool hostAccessesDevice = Kokkos::SpaceAccessibility<Kokkos::DefaultHostExecutionSpace, typename DeviceView::memory_space>::accessible;
 
     // Default constructor makes empty/non-allocated views
@@ -361,6 +361,7 @@ namespace LAPIS
     }
 
     virtual ~DualView() {
+      if(!impl) return;
       if(syncHostWhenDestroyed) syncHost();
       DualViewImplBase* parent = impl->parent.get();
       impl.reset();
