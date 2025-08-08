@@ -51,10 +51,15 @@ class KokkosBackend:
         cmake.write("add_library(" + self.package_name + "_module SHARED " + self.package_name + "_module.cpp)\n")
         cmake.write("target_link_libraries(" + self.package_name + "_module Kokkos::kokkos)\n")
         if linkSparseSupportLib:
-            if 'SUPPORTLIB' not in os.environ:
-                raise Exception("SUPPORTLIB must be defined as an environment variable, and be an absolute path to libmlir_c_runner_utils.so")
-            supportlib = os.environ['SUPPORTLIB']
-            cmake.write("target_link_libraries(" + self.package_name + "_module " + supportlib + ")\n")
+            if 'SUPPORT_LIB' in os.environ:
+                support_lib = os.environ['SUPPORT_LIB']
+            elif 'SUPPORTLIB' in os.environ:
+                print("SUPPORTLIB (deprecated) is set as env variable but SUPPORT_LIB is not.")
+                print("SUPPORTLIB is will be used for now, but please switch your environment to set SUPPORT_LIB instead")
+                support_lib = os.environ['SUPPORTLIB']
+            else:
+                raise Exception("SUPPORT_LIB must be defined as an environment variable, and be an absolute path to libmlir_c_runner_utils.so")
+            cmake.write("target_link_libraries(" + self.package_name + "_module " + support_lib + ")\n")
         cmake.close()
         # Now configure the project and build the shared library from the build dir
         subprocess.run(['cmake', "-DCMAKE_CXX_EXTENSIONS=OFF", "-DCMAKE_BUILD_TYPE=Debug", moduleRoot], cwd=buildDir)
