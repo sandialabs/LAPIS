@@ -8,6 +8,5 @@ set_property(
 
 file(COPY ${TESTFILES} DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/.)
 
-#add_test(NAME SPMV COMMAND python spmv.py)
 add_subdirectory(Dialect)
 #add_subdirectory(PartTensor)

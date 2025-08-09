@@ -341,7 +341,7 @@ private:
   //   (e.g. "newSparseTensor")
   // Values are pairs.
   //  First:  whether the result(s) is obtained via pointer arg instead of return value
-  //  Second: the actual names of the functions in $SUPPORTLIB
+  //  Second: the actual names of the functions in $SUPPORT_LIB
   //   (e.g. "_mlir_ciface_newSparseTensor")
   std::unordered_map<std::string, std::pair<bool, std::string>> sparseSupportFunctions;
   //This helper function (to be called during constructor) populates sparseSupportFunctions

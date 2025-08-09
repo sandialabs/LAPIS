@@ -160,6 +160,13 @@ export KOKKOS_ROOT=$WORKSPACE/kokkosInstall
 ```
 
 ### Finish setting up environment
+
+> [!NOTE]
+This README previously instructed users to set the environment variable
+``$SUPPORTLIB``. This has been changed to ``$SUPPORT_LIB`` for consistency
+with upstream LLVM. In the Kokkos backend for python, ``$SUPPORTLIB`` is deprecated
+but will still be used if ``$SUPPORT_LIB`` is not set.
+
 #### Recipe A
 ```
 # WORKSPACE is already be set after the above instructions,
@@ -171,9 +178,9 @@ export KOKKOS_ROOT=$WORKSPACE/kokkosInstall
 
 export LLVM_INS=$WORKSPACE/llvmInstall
 # Uncomment this line for Linux:
-# export SUPPORTLIB=${LLVM_INS}/lib/libmlir_c_runner_utils.so
+# export SUPPORT_LIB=${LLVM_INS}/lib/libmlir_c_runner_utils.so
 # Uncomment this line for MacOS:
-# export SUPPORTLIB=${LLVM_INS}/lib/libmlir_c_runner_utils.dylib
+# export SUPPORT_LIB=${LLVM_INS}/lib/libmlir_c_runner_utils.dylib
 
 # Put lapis-opt, lapis-translate in PATH
 export PATH=$PATH:$WORKSPACE/lapisBuild/bin
@@ -192,9 +199,9 @@ export WORKSPACE=`pwd`
 export KOKKOS_ROOT=$WORKSPACE/kokkosInstall
 
 # Uncomment this line for Linux:
-# export SUPPORTLIB=$WORKSPACE/build/lib/libmlir_c_runner_utils.so
+# export SUPPORT_LIB=$WORKSPACE/build/lib/libmlir_c_runner_utils.so
 # Uncomment this line for MacOS:
-# export SUPPORTLIB=$WORKSPACE/build/lib/libmlir_c_runner_utils.dylib
+# export SUPPORT_LIB=$WORKSPACE/build/lib/libmlir_c_runner_utils.dylib
 
 export PATH=$PATH:$WORKSPACE/build/bin
 
