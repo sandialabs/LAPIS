@@ -105,8 +105,8 @@ struct KokkosDualViewManagementPass
         allMemrefs.insert(hostWrites.begin(), hostWrites.end());
         DenseSet<Value> memrefsForChildren;
         for(Value v : allMemrefs) {
-          // Only proceed if v is a DualView
-          if(kokkos::getMemSpace(v) != kokkos::MemorySpace::DualView)
+          // Only proceed if v is a DualView (false means not doing team-level lowering)
+          if(kokkos::getMemSpace(v, false) != kokkos::MemorySpace::DualView)
             continue;
           // Check conditions for inserting sync/modify before op
           bool dr = deviceReads.contains(v);

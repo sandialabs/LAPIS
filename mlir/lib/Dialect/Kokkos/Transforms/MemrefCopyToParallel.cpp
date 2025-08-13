@@ -68,7 +68,6 @@ struct MemrefCopyToParallelPass
 
 std::unique_ptr<Pass> mlir::createMemrefCopyToParallelPass()
 {
-  llvm::outs() << "Hello: creating memref.copy to parallel pass!\n";
   return std::make_unique<MemrefCopyToParallelPass>();
 }
 
