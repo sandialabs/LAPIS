@@ -19,9 +19,9 @@ int main()
       DualV A("A", n, n);
       DualV B("B", n, n);
       DualV C("C", n, n);
-      A.modifiedDevice();
+      A.modifyDevice();
       Kokkos::fill_random(A.device_view(), pool, 0.0, 1.0);
-      B.modifiedDevice();
+      B.modifyDevice();
       Kokkos::fill_random(B.device_view(), pool, 0.0, 1.0);
       A.syncHost();
       B.syncHost();
