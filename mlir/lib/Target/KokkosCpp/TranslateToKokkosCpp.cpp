@@ -3384,9 +3384,9 @@ LogicalResult KokkosCppEmitter::emitVariableDeclaration(
     if (failed(emitType(loc, result.getType())))
       return failure();
   }
-  os << " " << getOrCreateName(result);
+  *this << " " << getOrCreateName(result);
   if (trailingSemicolon)
-    os << ";\n";
+    *this << ";\n";
   return success();
 }
 
@@ -3398,7 +3398,7 @@ LogicalResult KokkosCppEmitter::emitAssignPrefix(Operation &op) {
     OpResult result = op.getResult(0);
     if (failed(emitVariableDeclaration(op.getLoc(), result, /*trailingSemicolon=*/false)))
       return failure();
-    os << " = ";
+    *this << " = ";
     break;
   }
   default:
@@ -3406,10 +3406,10 @@ LogicalResult KokkosCppEmitter::emitAssignPrefix(Operation &op) {
       if (failed(emitVariableDeclaration(op.getLoc(), result, /*trailingSemicolon=*/true)))
         return failure();
     }
-    os << "std::tie(";
-    interleaveComma(op.getResults(), os,
-                    [&](Value result) { os << getOrCreateName(result); });
-    os << ") = ";
+    *this << "std::tie(";
+    interleaveComma(op.getResults(), this->ostream(),
+                    [&](Value result) { *this << getOrCreateName(result); });
+    *this << ") = ";
   }
   return success();
 }
@@ -3419,7 +3419,7 @@ LogicalResult KokkosCppEmitter::emitLabel(Block &block) {
     return block.getParentOp()->emitError("label for block not found");
   // FIXME: Add feature in `raw_indented_ostream` to ignore indent for block
   // label instead of using `getOStream`.
-  os.getOStream() << getOrCreateName(block) << ":\n";
+  *this << getOrCreateName(block) << ":\n";
   return success();
 }
 
@@ -4638,17 +4638,16 @@ LogicalResult kokkos::translateToKokkosCppTeamLevel(Operation *op, raw_ostream* 
   // Emit the init and finalize function definitions.
   if (failed(emitter.emitInitAndFinalize()))
     return failure();
-  if(header_os) {
-    *header_os << "#ifndef LAPIS_MODULE_H\n";
-    *header_os << "#define LAPIS_MODULE_H\n";
-    *header_os << cppDeclBuffer;
-    *header_os << "#endif\n";
-    *os << "#include \"" << header_path << "\"\n";
-    *os << cppBuffer;
+  if(!header_os) {
+    llvm::errs() << "kokkos::translateToKokkosCppTeamLevel: header_os must not be null.\n";
+    return failure();
   }
-  else {
-    *os << cppDeclBuffer << cppBuffer;
-  }
+  *header_os << "#ifndef LAPIS_MODULE_H\n";
+  *header_os << "#define LAPIS_MODULE_H\n";
+  *header_os << cppDeclBuffer;
+  *header_os << "#endif\n";
+  *os << "#include \"" << header_path << "\"\n";
+  *os << cppBuffer;
   return success();
 }
 
