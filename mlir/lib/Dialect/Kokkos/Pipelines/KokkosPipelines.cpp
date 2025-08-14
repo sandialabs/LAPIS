@@ -138,6 +138,7 @@ void mlir::kokkos::buildSparseKokkosCompiler(
   pm.addNestedPass<func::FuncOp>(createDenseLinalgToParallelLoopsPass());
   // The built-in lowering will take care of any remaining linalg ops
   pm.addNestedPass<func::FuncOp>(createConvertLinalgToParallelLoopsPass());
+  pm.addNestedPass<func::FuncOp>(kernel::createKernelDomainFusionPass());
 
   // pm.addNestedPass<func::FuncOp>(arith::createArithExpandOpsPass());
   pm.addPass(memref::createExpandStridedMetadataPass());
@@ -237,7 +238,7 @@ void mlir::kokkos::buildTeamLevelKokkosCompiler(OpPassManager &pm, const TeamLev
   // Ensure all casts are realized.
   pm.addPass(createReconcileUnrealizedCastsPass());
 
-  pm.addNestedPass<func::FuncOp>(kernel::createKernelDomainFusionPass());
+  // pm.addNestedPass<func::FuncOp>(kernel::createKernelDomainFusionPass());
 
   // Finally, lower scf/memref to kokkos
   pm.addPass(createMemrefResultsToParamsPass());

@@ -132,9 +132,7 @@ static LogicalResult verifyDependencies(ParallelOp firstPloop,
 }
 
 static bool isFusionLegal(ParallelOp firstPloop, ParallelOp secondPloop) {
-  return !hasNestedParallelOp(firstPloop) &&
-         !hasNestedParallelOp(secondPloop) &&
-         succeeded(verifyDependencies(firstPloop, secondPloop));
+  return succeeded(verifyDependencies(firstPloop, secondPloop));
 }
 
 /// Prepends operations of firstPloop's body into secondPloop's body.
@@ -149,7 +147,7 @@ static bool fuseIfLegal(ParallelOp firstPloop, ParallelOp &secondPloop,
   // We are fusing first loop into second, make sure there are no users of the
   // first loop results between loops.
   for (Operation *user : firstPloop->getUsers())
-    if (!dom.properlyDominates(secondPloop, user, /*enclosingOpOk*/ false))
+    if (!dom.properlyDominates(secondPloop, user, /*enclosingOpOk*/ true))
       return false;
 
   ValueRange inits1 = firstPloop.getInitVals();
@@ -229,7 +227,7 @@ void naivelyFuseParallelOps(Region &region) {
         continue;
       }
       // TODO: Handle region side effects properly.
-      noSideEffects &= isMemoryEffectFree(&op) && op.getNumRegions() == 0;
+      // noSideEffects &= isMemoryEffectFree(&op) && op.getNumRegions() == 0;
     }
     for (MutableArrayRef<ParallelOp> ploops : ploopChains) {
       for (int i = 0, e = ploops.size(); i + 1 < e; ++i)

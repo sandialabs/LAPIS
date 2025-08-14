@@ -725,8 +725,14 @@ void BruteForceOptimizer::optimize() {
     optimizedEinsumSequence.contractPath.push_back(path);
     smallestTemporary.argIndex = *std::min_element(path.begin(), path.end());
 
-    inputs.erase(inputs.begin() + imin);
-    inputs.erase(inputs.begin() + jmin);
+    if (imin > jmin) {
+      inputs.erase(inputs.begin() + imin);
+      inputs.erase(inputs.begin() + jmin);
+    }
+    else {
+      inputs.erase(inputs.begin() + jmin);
+      inputs.erase(inputs.begin() + imin);
+    }
     inputs.push_back(smallestTemporary);
 
     einsumPart.output = smallestTemporary;

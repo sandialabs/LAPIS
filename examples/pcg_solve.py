@@ -127,7 +127,7 @@ def main():
     reltol = 1e-10
     maxiter = 40
 
-    backend = KokkosBackend.KokkosBackend(decompose_tensors=True)
+    backend = KokkosBackend.KokkosBackend(decompose_tensors=True, dump_mlir=True)
     module_kokkos = backend.compile(moduleText)
 
     print("x exact solution (first 10 elements):", xgold[:10])

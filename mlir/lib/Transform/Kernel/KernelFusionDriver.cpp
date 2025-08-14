@@ -24,15 +24,10 @@ struct KernelFusionDriver : impl::KernelFusionDriverBase<KernelFusionDriver> {
     mlir::ModuleOp module = dyn_cast<ModuleOp>(getOperation());
     OpPassManager driveKernelFusionPass;
 
-    // find and move related calls into a new kernel
     driveKernelFusionPass.addPass(createKernelFusionPass());
-
-    // inline the calls using a custom inlining pass
     driveKernelFusionPass.addPass(createFusedKernelInliningPass());
-
-    // reorder linalg generics to minimize temp size/computational cost
-    // driveKernelFusionPass.addPass(createLinalgGeneralizeNamedOpsPass());
-    // driveKernelFusionPass.addPass(createLinalgGenericReorderingPass());
+    driveKernelFusionPass.addPass(createLinalgGeneralizeNamedOpsPass());
+    driveKernelFusionPass.addPass(createLinalgGenericReorderingPass());
 
     // run the pipeline
     if (failed(runPipeline(driveKernelFusionPass, module)))
