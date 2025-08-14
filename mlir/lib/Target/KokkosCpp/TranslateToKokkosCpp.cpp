@@ -4527,8 +4527,12 @@ LogicalResult KokkosCppEmitter::emitStridedMemrefType(Location loc, MemRefType t
     *this << ", Kokkos::LayoutStride, ";
     if(space == kokkos::MemorySpace::Device)
       *this << "Kokkos::DefaultExecutionSpace";
-    else
+    else if(space == kokkos::MemorySpace::Host)
       *this << "Kokkos::DefaultHostExecutionSpace";
+    else if(space == kokkos::MemorySpace::Scratch)
+      *this << "Kokkos::AnonymousSpace";
+    else
+      return failure();
     *this << ">";
   }
   return success();
