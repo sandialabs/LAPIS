@@ -548,10 +548,20 @@ bool funcHasBody(func::FuncOp op) {
 
 // Tally the memory spaces where v is accessed, without analyzing v's parent memref(s) if any.
 // We already assume that v has no parent (it's not the result of a cast/reshape like op)
-static MemorySpace getMemSpaceImpl(Value v) {
+static MemorySpace getMemSpaceImpl(Value v, bool teamLevel) {
+  if(teamLevel) {
+    // Logic for team-level is simple:
+    // - parameters are Device
+    // - all others (allocations) are Scratch
+    if(getFuncWithParameter(v))
+      return MemorySpace::Device;
+    else
+      return MemorySpace::Scratch;
+  }
   // If v is a function parameter, it's DualView automatically
-  if(getFuncWithParameter(v))
+  if(getFuncWithParameter(v)) {
     return MemorySpace::DualView;
+  }
   // If v is the result of a call to a non-extern function, it's also a DualView automatically
   func::CallOp producingCall = v.getDefiningOp<func::CallOp>();
   if(producingCall && funcHasBody(getCalledFunction(producingCall)))
@@ -601,7 +611,7 @@ static MemorySpace getMemSpaceImpl(Value v) {
     else if(isViewAliasingOp(usingOp) && v == usingOp->getOperand(0)) {
       // usingOp does not directly access v's memory, but its result can be accessed.
       // Recursively find the usages of this result too.
-      MemorySpace childSpace = getMemSpaceImpl(usingOp->getResult(0));
+      MemorySpace childSpace = getMemSpaceImpl(usingOp->getResult(0), teamLevel);
       if(childSpace == MemorySpace::Host || childSpace == MemorySpace::DualView) {
         hostRepresented = true;
       }
@@ -641,16 +651,16 @@ static MemorySpace getMemSpaceImpl(Value v) {
   }
 }
 
-MemorySpace getMemSpace(Value v) {
+MemorySpace getMemSpace(Value v, bool teamLevel) {
   auto op = v.getDefiningOp();
   if(op && isViewAliasingOp(op)) {
     // op's first operand is the "parent" memref of v.
     // Recursively get the memory space of the parent. If it's a DualView then v needs to be one also.
     Value parent = op->getOperand(0);
-    return getMemSpace(parent);
+    return getMemSpace(parent, teamLevel);
   }
   // v has no parent, so we can analyze its space top-down now.
-  return getMemSpaceImpl(v);
+  return getMemSpaceImpl(v, teamLevel);
 }
 
 func::FuncOp getFuncWithParameter(Value v) {
@@ -669,7 +679,9 @@ func::FuncOp getFuncWithParameter(Value v) {
 
 // Overload of getMemSpace for global memref declarations
 // It just iterates over all the memref.get_global ops that reference 
-MemorySpace getMemSpace(memref::GlobalOp global) {
+MemorySpace getMemSpace(memref::GlobalOp global, bool teamLevel) {
+  // Team-level: all globals are Device since there is no host code that can access them
+  if(teamLevel) return MemorySpace::Device;
   // Get the module that encloses global
   ModuleOp module = global->getParentOfType<ModuleOp>();
   // Then walk all the GetGlobal ops within module
@@ -679,7 +691,7 @@ MemorySpace getMemSpace(memref::GlobalOp global) {
     // Check usage of gg, if it references global by name.
     // note: StringRef::compare is like strcmp; 0 means equal.
     if(!global.getSymName().compare(gg.getName())) {
-      MemorySpace usageSpace = getMemSpace(gg.getResult());
+      MemorySpace usageSpace = getMemSpace(gg.getResult(), false);
       if(usageSpace == MemorySpace::DualView || usageSpace == MemorySpace::Host) {
         usedOnHost = true;
       }

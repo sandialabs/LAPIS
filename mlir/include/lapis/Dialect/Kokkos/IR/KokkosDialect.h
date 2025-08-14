@@ -52,12 +52,18 @@ func::FuncOp getFuncWithParameter(Value v);
 bool funcHasBody(func::FuncOp op);
 
 // Determine the correct memory space (Host, Device or DualView)
-// for v based on where it gets accessed.
-MemorySpace getMemSpace(Value v);
+// for v based on where it gets accessed, and whether we are generating
+// team-level code.
+//
+// Arguments and results are always DualView if !teamLevel,
+// and Device if teamLevel.
+MemorySpace getMemSpace(Value v, bool teamLevel);
 
 // Determine the correct memory space (Host, Device or DualView)
 // for the global view.
-MemorySpace getMemSpace(memref::GlobalOp global);
+//
+// If teamLevel, then all code is assumed to be device code so globals are Device space.
+MemorySpace getMemSpace(memref::GlobalOp global, bool teamLevel);
 
 // Is the global memref used by at least one op?
 bool isGlobalUsed(memref::GlobalOp global);
@@ -73,12 +79,12 @@ int getOpParallelDepth(Operation *op);
 // but in that case op itself still counts as Host.
 kokkos::ExecutionSpace getOpExecutionSpace(Operation *op);
 
-// Get a list of the memrefs whose data is read by op, while running on the
+// Get a list of the memrefs whose data may be read by op while running on the
 // provided exec space. This does not include memrefs where op only uses
 // metadata (shape, type, layout).
 DenseSet<Value> getMemrefsRead(Operation *op, kokkos::ExecutionSpace space);
 
-// Get a list of the memrefs (possibly) whose data is written to by op.
+// Get a list of the memrefs that may be written to by op.
 DenseSet<Value> getMemrefsWritten(Operation *op, kokkos::ExecutionSpace space);
 
 bool valueIsIntegerConstantZero(Value v);

@@ -2,6 +2,7 @@ add_mlir_dialect_library(MLIRKokkosTransforms
   TransposeConstantFold.cpp
   DenseLinalgToParallelLoops.cpp
   MemrefResultsToParams.cpp
+  MemrefCopyToParallel.cpp
   MemrefToKokkosScratch.cpp
   ParallelUnitStep.cpp
   KokkosLoopMapping.cpp

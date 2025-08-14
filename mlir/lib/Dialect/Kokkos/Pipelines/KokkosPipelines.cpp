@@ -238,7 +238,8 @@ void mlir::kokkos::buildTeamLevelKokkosCompiler(OpPassManager &pm, const TeamLev
   // Ensure all casts are realized.
   pm.addPass(createReconcileUnrealizedCastsPass());
 
-  // pm.addNestedPass<func::FuncOp>(kernel::createKernelDomainFusionPass());
+  // Replace each memref.copy with parallel loop
+  pm.addPass(createMemrefCopyToParallelPass());
 
   // Finally, lower scf/memref to kokkos
   pm.addPass(createMemrefResultsToParamsPass());

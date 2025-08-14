@@ -79,9 +79,17 @@ int main(int argc, char **argv) {
 
   llvm::cl::ParseCommandLineOptions(argc, argv, "lapis-translate");
 
-  if(pythonFilename.size() && emitTeamLevel) {
-    llvm::errs() << "Cannot emit python wrapper when emitting team-level kernels\n";
-    return 1;
+  // Validate parameters
+  if(emitTeamLevel) {
+    // In team-level mode, python wrappers cannot be generated and the C++ header path is required.
+    if(pythonFilename.size()) {
+      llvm::errs() << "Cannot emit python wrapper when emitting team-level kernels\n";
+      return 1;
+    }
+    if(!cxxHeaderFilename.size()) {
+      llvm::errs() << "When emitting team-level code, the --hpp <path> flag is required\n";
+      return 1;
+    }
   }
 
   std::string errorMessage;

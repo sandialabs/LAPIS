@@ -45,6 +45,15 @@ def MemrefResultsToParams : Pass<"memref-results-to-params", "ModuleOp"> {
   ];
 }
 
+def MemrefCopyToParallel : Pass<"memref-copy-to-parallel"> {
+  let summary = "Lowers memref.copy ops to parallel loops and load/store";
+  let constructor = "mlir::createMemrefCopyToParallelPass()";
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "scf::SCFDialect"
+  ];
+}
+
 def MemrefToKokkosScratch : Pass<"memref-to-kokkos-scratch", "func::FuncOp"> {
   let summary = "Replaces memref-type return values to be function parameters instead";
   let description = [{

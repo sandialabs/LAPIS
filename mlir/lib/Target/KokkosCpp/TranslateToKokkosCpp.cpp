@@ -341,7 +341,7 @@ private:
   //   (e.g. "newSparseTensor")
   // Values are pairs.
   //  First:  whether the result(s) is obtained via pointer arg instead of return value
-  //  Second: the actual names of the functions in $SUPPORTLIB
+  //  Second: the actual names of the functions in $SUPPORT_LIB
   //   (e.g. "_mlir_ciface_newSparseTensor")
   std::unordered_map<std::string, std::pair<bool, std::string>> sparseSupportFunctions;
   //This helper function (to be called during constructor) populates sparseSupportFunctions
@@ -384,7 +384,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   emitter.selectDeclCppStream();
   //NOTE: using the GlobalOp's symbol name instead of a name generated for the current scope,
   //because GlobalOp does not produce a Result.
-  kokkos::MemorySpace space = kokkos::getMemSpace(op);
+  kokkos::MemorySpace space = kokkos::getMemSpace(op, emitter.emittingTeamLevel());
   // Forward-declare the global view in decls
   emitter << "extern ";
   if(failed(emitter.emitMemrefType(op.getLoc(), op.getType(), space)))
@@ -436,7 +436,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
 static LogicalResult printOperation(KokkosCppEmitter &emitter,
                                     memref::AllocOp op) {
   OpResult result = op->getResult(0);
-  kokkos::MemorySpace space = kokkos::getMemSpace(result);
+  kokkos::MemorySpace space = kokkos::getMemSpace(result, emitter.emittingTeamLevel());
   MemRefType type = op.getType();
   if (failed(emitter.emitMemrefType(op.getLoc(), type, space)))
     return failure();
@@ -471,7 +471,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
 static LogicalResult printOperation(KokkosCppEmitter &emitter,
                                     memref::AllocaOp op) {
   OpResult result = op->getResult(0);
-  kokkos::MemorySpace space = kokkos::getMemSpace(result);
+  kokkos::MemorySpace space = kokkos::getMemSpace(result, emitter.emittingTeamLevel());
   MemRefType type = op.getType();
   if (failed(emitter.emitMemrefType(op.getLoc(), type, space)))
     return failure();
@@ -486,7 +486,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
 static LogicalResult printOperation(KokkosCppEmitter &emitter,
                                     memref::DeallocOp op) {
   Value toDealloc = op.getOperand();
-  kokkos::MemorySpace space = kokkos::getMemSpace(toDealloc);
+  kokkos::MemorySpace space = kokkos::getMemSpace(toDealloc, emitter.emittingTeamLevel());
   if(failed(emitter.emitValue(toDealloc)))
     return failure();
   if(space == kokkos::MemorySpace::DualView) {
@@ -524,7 +524,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   auto resultName = emitter.getOrCreateName(result);
   MemRefType resultType = dyn_cast<MemRefType>(result.getType());
   int sourceRank = resultType.getRank();
-  auto space = kokkos::getMemSpace(result);
+  auto space = kokkos::getMemSpace(result, emitter.emittingTeamLevel());
   // An OpFoldResult is just a variant<Value, Attribute>
   // (either a runtime value or a static constant).
   // Need this because op's offset, sizes and strides
@@ -620,8 +620,8 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   MemRefType sourceType = cast<MemRefType>(op.getSource().getType());
   MemRefType destType = cast<MemRefType>(base.getType());
   int rank = sourceType.getRank();
-  auto sourceSpace = kokkos::getMemSpace(op.getSource());
-  auto destSpace = kokkos::getMemSpace(base);
+  auto sourceSpace = kokkos::getMemSpace(op.getSource(), emitter.emittingTeamLevel());
+  auto destSpace = kokkos::getMemSpace(base, emitter.emittingTeamLevel());
   auto loc = op.getLoc();
   if(sourceSpace != destSpace) {
     return op.emitError("Source and base buffer (result) memrefs should have the same Kokkos memory space");
@@ -735,7 +735,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
 static LogicalResult printOperation(KokkosCppEmitter &emitter,
                                     memref::StoreOp op) {
   emitter << emitter.getOrCreateName(op.getMemref());
-  if(!emitter.emittingTeamLevel() && kokkos::getMemSpace(op.getMemref()) == kokkos::MemorySpace::DualView) {
+  if(kokkos::getMemSpace(op.getMemref(), emitter.emittingTeamLevel()) == kokkos::MemorySpace::DualView) {
     // Which view to access depends if we are in host or device context
     if(kokkos::getOpExecutionSpace(op) == kokkos::ExecutionSpace::Device)
       emitter << "_d";
@@ -764,7 +764,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   emitter << ' ' << emitter.getOrCreateName(op.getResult()) << " = ";
   if(failed(emitter.emitValue(op.getMemRef())))
     return op.emitError("Failed to emit the LoadOp's memref value");
-  if(!emitter.emittingTeamLevel() && kokkos::getMemSpace(op.getMemref()) == kokkos::MemorySpace::DualView) {
+  if(kokkos::getMemSpace(op.getMemref(), emitter.emittingTeamLevel()) == kokkos::MemorySpace::DualView) {
     // Which view to access depends if we are in host or device context
     if(kokkos::getOpExecutionSpace(op) == kokkos::ExecutionSpace::Device)
       emitter << "_d";
@@ -786,8 +786,8 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
 static LogicalResult printOperation(KokkosCppEmitter &emitter,
                                     memref::CopyOp op) {
   // TODO: deal with case where source and target have different layouts and different spaces.
-  auto srcSpace = kokkos::getMemSpace(op.getSource());
-  auto dstSpace = kokkos::getMemSpace(op.getTarget());
+  auto srcSpace = kokkos::getMemSpace(op.getSource(), emitter.emittingTeamLevel());
+  auto dstSpace = kokkos::getMemSpace(op.getTarget(), emitter.emittingTeamLevel());
   if(srcSpace != kokkos::MemorySpace::DualView && dstSpace != kokkos::MemorySpace::DualView) {
     // Neither src nor dst are DualView, so just do a standard deep_copy
     // TODO: could use async deep copies unless it's host->host?
@@ -890,7 +890,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   auto resultName = emitter.getOrCreateName(result);
   MemRefType resultType = dyn_cast<MemRefType>(result.getType());
   int sourceRank = resultType.getRank();
-  auto space = kokkos::getMemSpace(result);
+  auto space = kokkos::getMemSpace(result, emitter.emittingTeamLevel());
   const bool useDynamicOffset = !op.getOffsets().empty();
   const bool useDynamicSizes = !op.getSizes().empty();
   const bool useDynamicStrides = !op.getStrides().empty();
@@ -1006,7 +1006,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   Value source = op.getSource();
   // Shape is a statically sized, 1D memref of integers defining result shape
   Value shape = op.getShape();
-  if(kokkos::getMemSpace(shape) != kokkos::MemorySpace::Host) {
+  if(kokkos::getMemSpace(shape, emitter.emittingTeamLevel()) != kokkos::MemorySpace::Host) {
     return op.emitError("shape memref is used in device code, this case must be added to Kokkos emitter");
   }
   // Using that simplifying assumption, can easily read shape values on host
@@ -1016,7 +1016,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     return op.emitError("not supporting unranked result yet, this case must be added to Kokkos emitter");
   }
   int resultRank = resultType.getRank();
-  auto space = kokkos::getMemSpace(result);
+  auto space = kokkos::getMemSpace(result, emitter.emittingTeamLevel());
   if(space == kokkos::MemorySpace::DualView) {
     if(failed(emitter.emitMemrefType(op.getLoc(), resultType, kokkos::MemorySpace::Host))) {
       return failure();
@@ -1215,7 +1215,7 @@ static LogicalResult printSupportCall(KokkosCppEmitter &emitter, func::CallOp ca
   if (hasResult) {
     // Register the space of the result as being HostSpace now
     if (resultIsMemref) {
-      resultSpace = kokkos::getMemSpace(callOp.getResult(0));
+      resultSpace = kokkos::getMemSpace(callOp.getResult(0), emitter.emittingTeamLevel());
       if(failed(emitter.emitMemrefType(callOp.getLoc(), dyn_cast<MemRefType>(callOp.getResult(0).getType()), resultSpace)))
         return failure();
     } else {
@@ -1249,7 +1249,7 @@ static LogicalResult printSupportCall(KokkosCppEmitter &emitter, func::CallOp ca
       os << " " << emitter.getOrCreateName(arg) << "_smr = LAPIS::viewToStridedMemref(";
       os << emitter.getOrCreateName(arg);
       // arg's memory space should be either Host or DualView
-      auto argMemSpace = kokkos::getMemSpace(arg);
+      auto argMemSpace = kokkos::getMemSpace(arg, emitter.emittingTeamLevel());
       if(argMemSpace == kokkos::MemorySpace::DualView) {
         os << "_h";
       }
@@ -1335,7 +1335,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::ForOp forOp)
   for (OpResult result : results) {
     if (failed(emitter.emitVariableDeclaration(forOp.getLoc(), result,
                                                /*trailingSemicolon=*/true)))
-      return failure();
+      return forOp.emitError("Failed to declare scf.for results");
   }
 
   for (auto pair : llvm::zip(iterArgs, operands)) {
@@ -1379,7 +1379,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::ForOp forOp)
   // loop.
   for (auto it = regionOps.begin(); std::next(it) != regionOps.end(); ++it) {
     if (failed(emitter.emitOperation(*it, /*trailingSemicolon=*/true)))
-      return failure();
+      return it->emitError("Failed to emit scf.for body op");
   }
 
   Operation *yieldOp = forRegion.getBlocks().front().getTerminator();
@@ -2313,7 +2313,7 @@ static LogicalResult printFunctionDeviceLevel(KokkosCppEmitter &emitter, func::F
               // Emit normal types (e.g. Kokkos::View<..> or LAPIS::DualView for MemRefType)
               if (MemRefType mrt = dyn_cast<MemRefType>(arg.getType())) {
                 // Get the space based on how this argument gets used
-                kokkos::MemorySpace space = kokkos::getMemSpace(arg);
+                kokkos::MemorySpace space = kokkos::getMemSpace(arg, emitter.emittingTeamLevel());
                 if (failed(emitter.emitMemrefType(loc, mrt, space)))
                   return failure();
                 memrefParams.push_back(arg);
@@ -2342,7 +2342,7 @@ static LogicalResult printFunctionDeviceLevel(KokkosCppEmitter &emitter, func::F
             // Emit normal types (e.g. Kokkos::View<..> or LAPIS::DualView for MemRefType)
             if (MemRefType mrt = dyn_cast<MemRefType>(arg.getType())) {
               // Get the space based on how this argument gets used
-              kokkos::MemorySpace space = kokkos::getMemSpace(arg);
+              kokkos::MemorySpace space = kokkos::getMemSpace(arg, emitter.emittingTeamLevel());
               if (failed(emitter.emitMemrefType(loc, mrt, space)))
                 return failure();
               memrefParams.push_back(arg);
@@ -2391,16 +2391,11 @@ static LogicalResult printFunctionDeviceLevel(KokkosCppEmitter &emitter, func::F
         return failure();
     }
     for (Operation &op : block.getOperations()) {
-      // When generating code for an scf.if or cf.cond_br op no semicolon needs
-      // to be printed after the closing brace.
-      // When generating code for an scf.for op, printing a trailing semicolon
-      // is handled within the printOperation function.
       bool trailingSemicolon =
           !isa<scf::IfOp, scf::ForOp, cf::CondBranchOp>(op);
 
-      if (failed(emitter.emitOperation(
-              op, /*trailingSemicolon=*/trailingSemicolon)))
-        return failure();
+      if (failed(emitter.emitOperation(op, trailingSemicolon)))
+        return op.emitError("Failed to emit operation in block body");
     }
   }
   emitter.unindent();
@@ -3376,12 +3371,12 @@ LogicalResult KokkosCppEmitter::emitVariableDeclaration(
     }
   }
   if (auto mrType = dyn_cast<MemRefType>(type)) {
-    auto space = kokkos::getMemSpace(result);
+    auto space = kokkos::getMemSpace(result, emittingTeamLevel());
     if(failed(emitMemrefType(loc, mrType, space)))
       return failure();
   }
   else if (auto umrType = dyn_cast<UnrankedMemRefType>(type)) {
-    auto space = kokkos::getMemSpace(result);
+    auto space = kokkos::getMemSpace(result, emittingTeamLevel());
     if (failed(emitMemrefType(loc, umrType, space)))
       return failure();
   }
@@ -3389,9 +3384,9 @@ LogicalResult KokkosCppEmitter::emitVariableDeclaration(
     if (failed(emitType(loc, result.getType())))
       return failure();
   }
-  os << " " << getOrCreateName(result);
+  *this << " " << getOrCreateName(result);
   if (trailingSemicolon)
-    os << ";\n";
+    *this << ";\n";
   return success();
 }
 
@@ -3403,7 +3398,7 @@ LogicalResult KokkosCppEmitter::emitAssignPrefix(Operation &op) {
     OpResult result = op.getResult(0);
     if (failed(emitVariableDeclaration(op.getLoc(), result, /*trailingSemicolon=*/false)))
       return failure();
-    os << " = ";
+    *this << " = ";
     break;
   }
   default:
@@ -3411,10 +3406,10 @@ LogicalResult KokkosCppEmitter::emitAssignPrefix(Operation &op) {
       if (failed(emitVariableDeclaration(op.getLoc(), result, /*trailingSemicolon=*/true)))
         return failure();
     }
-    os << "std::tie(";
-    interleaveComma(op.getResults(), os,
-                    [&](Value result) { os << getOrCreateName(result); });
-    os << ") = ";
+    *this << "std::tie(";
+    interleaveComma(op.getResults(), this->ostream(),
+                    [&](Value result) { *this << getOrCreateName(result); });
+    *this << ") = ";
   }
   return success();
 }
@@ -3424,7 +3419,7 @@ LogicalResult KokkosCppEmitter::emitLabel(Block &block) {
     return block.getParentOp()->emitError("label for block not found");
   // FIXME: Add feature in `raw_indented_ostream` to ignore indent for block
   // label instead of using `getOStream`.
-  os.getOStream() << getOrCreateName(block) << ":\n";
+  *this << getOrCreateName(block) << ":\n";
   return success();
 }
 
@@ -3913,6 +3908,38 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
 }
 
 static LogicalResult printOperation(KokkosCppEmitter &emitter,
+                                    LLVM::InsertValueOp op) {
+  emitter << emitter.getOrCreateName(op.getContainer()) << " = ";
+  Type container = op.getContainer().getType();
+  for(size_t i = 0; i < op.getPosition().size(); i++) {
+    if (auto structType = dyn_cast<LLVM::LLVMStructType>(container)) {
+      emitter << ".m" << op.getPosition()[i];
+      container = structType.getBody()[op.getPosition()[i]];
+    }
+    else if(auto arrayType = dyn_cast<LLVM::LLVMArrayType>(container)) {
+      emitter << "[" << op.getPosition()[i] << "]";
+      container = arrayType.getElementType();
+    }
+    else {
+      return op.emitError("trying to extract value from container that is neither LLVMStructType nor LLVMArrayType");
+    }
+  }
+  emitter << " = ";
+  if(failed(emitter.emitValue(op.getValue())))
+    return failure();
+  return success();
+}
+
+static LogicalResult printOperation(KokkosCppEmitter &emitter,
+                                    LLVM::UndefOp op) {
+  // Declare (but do not initialize) a value of the given type.
+  if(failed(emitter.emitType(op.getLoc(), op.getResult().getType())))
+    return failure();
+  emitter << ' ' << emitter.getOrCreateName(op.getResult());
+  return success();
+}
+
+static LogicalResult printOperation(KokkosCppEmitter &emitter,
                                     vector::PrintOp op) {
   // It's possible that op doesn't print anything
   if(!op.getSource()
@@ -4042,7 +4069,7 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
           .Case<emitc::CallOp, emitc::CallOpaqueOp>(
               [&](auto op) { return printOperation(*this, op); })
           // LLVM ops.
-          .Case<LLVM::ZeroOp, LLVM::ExtractValueOp>(
+          .Case<LLVM::ZeroOp, LLVM::ExtractValueOp, LLVM::InsertValueOp, LLVM::UndefOp>(
               [&](auto op) { return printOperation(*this, op); })
           // Vector ops.
           .Case<vector::PrintOp>(
@@ -4060,7 +4087,7 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
     // declare variables for its host and device views 
     for(auto result : op.getResults()) {
       if(auto memrefType = dyn_cast<MemRefType>(result.getType())) {
-        if(kokkos::getMemSpace(result) == kokkos::MemorySpace::DualView) {
+        if(kokkos::getMemSpace(result, emittingTeamLevel()) == kokkos::MemorySpace::DualView) {
           if(skipPrint || !trailingSemicolon) {
             return op.emitOpError("op produced at least one DualView, but op was emitted in a context where we can't declare v_d and v_h views");
           }
@@ -4093,7 +4120,7 @@ LogicalResult KokkosCppEmitter::emitInitAndFinalize(bool finalizeKokkos = true)
   {
     auto maybeValue = op.getInitialValue();
     MemRefType type = op.getType();
-    auto space = kokkos::getMemSpace(op);
+    auto space = kokkos::getMemSpace(op, emittingTeamLevel());
     *this << "{\n";
     indent();
     if(maybeValue) {
@@ -4153,7 +4180,7 @@ LogicalResult KokkosCppEmitter::emitInitAndFinalize(bool finalizeKokkos = true)
   // Free all global views
   for(auto& op : globalViews)
   {
-    auto space = kokkos::getMemSpace(op);
+    auto space = kokkos::getMemSpace(op, emittingTeamLevel());
     if(space == kokkos::MemorySpace::DualView) {
       *this << op.getSymName() << ".deallocate();\n";
     }
@@ -4417,6 +4444,8 @@ LogicalResult KokkosCppEmitter::emitMemrefType(Location loc, MemRefType type, ko
       *this << "Kokkos::DefaultExecutionSpace";
     else if(space == kokkos::MemorySpace::Host)
       *this << "Kokkos::DefaultHostExecutionSpace";
+    else if(space == kokkos::MemorySpace::Scratch)
+      *this << "Kokkos::AnonymousSpace";
     else
       return failure();
     *this << ">";
@@ -4439,8 +4468,12 @@ LogicalResult KokkosCppEmitter::emitMemrefType(Location loc, UnrankedMemRefType 
     *this << "*, Kokkos::LayoutRight, ";
     if(space == kokkos::MemorySpace::Device)
       *this << "Kokkos::DefaultExecutionSpace";
-    else
+    else if(space == kokkos::MemorySpace::Host)
       *this << "Kokkos::DefaultHostExecutionSpace";
+    else if(space == kokkos::MemorySpace::Scratch)
+      *this << "Kokkos::AnonymousSpace";
+    else
+      return failure();
     *this << ">";
   }
   return success();
@@ -4494,8 +4527,12 @@ LogicalResult KokkosCppEmitter::emitStridedMemrefType(Location loc, MemRefType t
     *this << ", Kokkos::LayoutStride, ";
     if(space == kokkos::MemorySpace::Device)
       *this << "Kokkos::DefaultExecutionSpace";
-    else
+    else if(space == kokkos::MemorySpace::Host)
       *this << "Kokkos::DefaultHostExecutionSpace";
+    else if(space == kokkos::MemorySpace::Scratch)
+      *this << "Kokkos::AnonymousSpace";
+    else
+      return failure();
     *this << ">";
   }
   return success();
@@ -4611,17 +4648,16 @@ LogicalResult kokkos::translateToKokkosCppTeamLevel(Operation *op, raw_ostream* 
   // Emit the init and finalize function definitions.
   if (failed(emitter.emitInitAndFinalize()))
     return failure();
-  if(header_os) {
-    *header_os << "#ifndef LAPIS_MODULE_H\n";
-    *header_os << "#define LAPIS_MODULE_H\n";
-    *header_os << cppDeclBuffer;
-    *header_os << "#endif\n";
-    *os << "#include \"" << header_path << "\"\n";
-    *os << cppBuffer;
+  if(!header_os) {
+    llvm::errs() << "kokkos::translateToKokkosCppTeamLevel: header_os must not be null.\n";
+    return failure();
   }
-  else {
-    *os << cppDeclBuffer << cppBuffer;
-  }
+  *header_os << "#ifndef LAPIS_MODULE_H\n";
+  *header_os << "#define LAPIS_MODULE_H\n";
+  *header_os << cppDeclBuffer;
+  *header_os << "#endif\n";
+  *os << "#include \"" << header_path << "\"\n";
+  *os << cppBuffer;
   return success();
 }
 

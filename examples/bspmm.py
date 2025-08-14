@@ -93,11 +93,12 @@ def main():
     failures = []
     parStrats = ['none', 'dense-outer-loop', 'dense-any-loop', 'any-storage-any-loop']
     instance = 0
+    numNonSkipped = 3
     for par in parStrats:
         if par == 'any-storage-any-loop':
             skipped.append(par)
             continue
-        backend = KokkosBackend.KokkosBackend(decompose_tensors=True, parallel_strategy=par, index_instance=instance, num_instances=len(parStrats))
+        backend = KokkosBackend.KokkosBackend(decompose_tensors=True, parallel_strategy=par, index_instance=instance, num_instances=numNonSkipped)
         instance += 1
         module_kokkos = backend.compile(moduleText)
         C_kokkos = module_kokkos.pte_local_bspmm(rowptrs, colinds, values, ((m, n, b), (m+1, nnz, nnz*b)), B)
