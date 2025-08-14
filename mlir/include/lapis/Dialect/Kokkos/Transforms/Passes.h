@@ -26,6 +26,8 @@ std::unique_ptr<Pass> createDenseLinalgToParallelLoopsPass();
 
 std::unique_ptr<Pass> createMemrefResultsToParamsPass();
 
+std::unique_ptr<Pass> createMemrefCopyToParallelPass();
+
 std::unique_ptr<Pass> createMemrefToKokkosScratchPass();
 
 std::unique_ptr<Pass> createParallelUnitStepPass();
