@@ -11,8 +11,8 @@ from torch_mlir.compiler_utils import TensorPlaceholder
 def main():
     N = 2
     C = 3
-    W = 30
     H = 20
+    W = 30
 
     T = torch.rand(N,C,H,W)
 
@@ -25,14 +25,16 @@ def main():
     m = nn.MaxPool2d(3, stride=None, padding=1, dilation=2)
     m.train(False)
 
-    ph = TensorPlaceholder([-1, C, H, W], torch.float32)
+    ph = TensorPlaceholder([1, C, H, W], torch.float32)
     mlir_module = torchscript.compile(m, ph, output_type='linalg-on-tensors')
 
-    backend = KokkosBackend.KokkosBackend(dump_mlir=False)
+    backend = KokkosBackend.KokkosBackend(dump_mlir=True)
     k_backend = backend.compile(mlir_module)
 
     mpTorch = m(T).numpy()
     mpKokkos = k_backend.forward(T)
+
+    print("Result shape:", mpKokkos.shape)
 
     if allclose(mpTorch, mpKokkos):
         print("Success, results match with torch")
