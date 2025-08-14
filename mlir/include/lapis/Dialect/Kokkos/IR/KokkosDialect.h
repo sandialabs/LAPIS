@@ -79,9 +79,9 @@ int getOpParallelDepth(Operation *op);
 // but in that case op itself still counts as Host.
 kokkos::ExecutionSpace getOpExecutionSpace(Operation *op);
 
-// Get a list of the memrefs whose data may be read by op, while running on the
-// provided exec space. This does not include memrefs whose metadata (shape, type, layout
-// is used but data is not.
+// Get a list of the memrefs whose data may be read by op while running on the
+// provided exec space. This does not include memrefs where op only uses
+// metadata (shape, type, layout).
 DenseSet<Value> getMemrefsRead(Operation *op, kokkos::ExecutionSpace space);
 
 // Get a list of the memrefs that may be written to by op.
