@@ -4,8 +4,12 @@
 #include <unistd.h>
 #include <iostream>
 
+struct StridedMemRefTypeBase
+{
+};
+
 template <typename T, int N>
-struct StridedMemRefType {
+struct StridedMemRefType : public StridedMemRefTypeBase {
   T *basePtr;
   T *data;
   int64_t offset;
@@ -15,24 +19,6 @@ struct StridedMemRefType {
 
 namespace LAPIS
 {
-  using TeamPolicy = Kokkos::TeamPolicy<>;
-  using TeamMember = typename TeamPolicy::member_type;
-
-  template<typename V>
-  StridedMemRefType<typename V::value_type, V::rank> viewToStridedMemref(const V& v)
-  {
-    StridedMemRefType<typename V::value_type, V::rank> smr;
-    smr.basePtr = v.data();
-    smr.data = v.data();
-    smr.offset = 0;
-    for(int i = 0; i < int(V::rank); i++)
-    {
-      smr.sizes[i] = v.extent(i);
-      smr.strides[i] = v.stride(i);
-    }
-    return smr;
-  }
-
   template<typename V>
   V stridedMemrefToView(const StridedMemRefType<typename V::value_type, V::rank>& smr)
   {
@@ -90,33 +76,39 @@ namespace LAPIS
     return V(&smr.data[smr.offset], layout);
   }
 
-  // KeepAlive structure keeps a reference to Kokkos::Views which
-  // are returned to Python. Since it's difficult to transfer ownership of a
-  // Kokkos::View's memory to numpy, we just have the Kokkos::View maintain ownership
-  // and return an unmanaged numpy array to Python.
-  //
-  // All these views will be deallocated during lapis_finalize to avoid leaking.
-  // The downside is that if a function is called many times,
-  // all its results are kept in memory at the same time.
-  struct KeepAlive
+  struct PythonParameterBase
   {
-    virtual ~KeepAlive() {}
+    enum WrapperType : int32_t {
+      EMPTY_TYPE = 0,
+      STRIDED_MEMREF_TYPE = 1,
+      DUALVIEW_TYPE = 2
+    };
+
+    WrapperType wrapper_type;
+    int32_t rank;
+
+    union {
+      struct StridedMemRefTypeBase* smr;
+      struct DualViewBase* view;
+    };
   };
 
-  template<typename T>
-  struct KeepAliveT : public KeepAlive
-  {
-    // Make a shallow-copy of val
-    KeepAliveT(const T& val) : p(new T(val)) {}
-    std::unique_ptr<T> p;
-  };
+  using TeamPolicy = Kokkos::TeamPolicy<>;
+  using TeamMember = typename TeamPolicy::member_type;
 
-  static std::vector<std::unique_ptr<KeepAlive>> alives;
-
-  template<typename T>
-  void keepAlive(const T& val)
+  template<typename V>
+  StridedMemRefType<typename V::value_type, V::rank> viewToStridedMemref(const V& v)
   {
-    alives.emplace_back(new KeepAliveT(val));
+    StridedMemRefType<typename V::value_type, V::rank> smr;
+    smr.basePtr = v.data();
+    smr.data = v.data();
+    smr.offset = 0;
+    for(int i = 0; i < int(V::rank); i++)
+    {
+      smr.sizes[i] = v.extent(i);
+      smr.strides[i] = v.stride(i);
+    }
+    return smr;
   }
 
   // DualView design
@@ -130,30 +122,37 @@ namespace LAPIS
   // - Assume that any DualView's parent is contiguous, and can be deep-copied between h and d
   // - All DualViews with the same parent share the parent's modify flags
   //
-  //  DualViewBase can also "keepAliveHost" to keep its host view alive until lapis_finalize is called.
-  //  This is used to safely return host views to python for numpy arrays to alias.
-
-  struct DualViewBase
+  struct DualViewImplBase
   {
-    virtual ~DualViewBase() {}
+    enum AliasStatus
+    {
+        ALIAS_STATUS_UNKNOWN = 0,
+        HOST_IS_ALIAS = 1,
+        DEVICE_IS_ALIAS = 2,
+        NEITHER_IS_ALIAS = 3
+    };
+
+    virtual ~DualViewImplBase() {}
     virtual void syncHost() = 0;
     virtual void syncDevice() = 0;
-    virtual void keepAliveHost() = 0;
+    virtual void toStridedMemRef(StridedMemRefTypeBase* vp_out) = 0;
     bool modified_host = false;
     bool modified_device = false;
-    std::shared_ptr<DualViewBase> parent;
+    std::shared_ptr<DualViewImplBase> parent;
+    AliasStatus alias_status;
 
-    void setParent(const std::shared_ptr<DualViewBase>& parent_)
+    void setParent(const std::shared_ptr<DualViewImplBase>& parent_)
     {
       this->parent = parent_;
     }
   };
 
   template<typename DataType, typename Layout>
-    struct DualViewImpl : public DualViewBase
+    struct DualViewImpl : public DualViewImplBase
   {
     using HostView = Kokkos::View<DataType, Layout, Kokkos::DefaultHostExecutionSpace>;
     using DeviceView = Kokkos::View<DataType, Layout, Kokkos::DefaultExecutionSpace>;
+    using HostMemRefType = StridedMemRefType<typename HostView::value_type, HostView::rank>;
 
     static constexpr bool deviceAccessesHost = Kokkos::SpaceAccessibility<Kokkos::DefaultExecutionSpace, Kokkos::HostSpace>::accessible;
     static constexpr bool hostAccessesDevice = Kokkos::SpaceAccessibility<Kokkos::DefaultHostExecutionSpace, typename DeviceView::memory_space>::accessible;
@@ -202,9 +201,11 @@ namespace LAPIS
         modified_device = true;
         if constexpr(deviceAccessesHost) {
           host_view = HostView(v.data(), v.layout());
+          alias_status = AliasStatus::HOST_IS_ALIAS;
         }
         else {
           host_view = HostView(Kokkos::view_alloc(Kokkos::WithoutInitializing, v.label() + "_host"), v.layout());
+          alias_status = AliasStatus::NEITHER_IS_ALIAS;
         }
         device_view = v;
       }
@@ -212,9 +213,11 @@ namespace LAPIS
         modified_host = true;
         if constexpr(deviceAccessesHost) {
           device_view = DeviceView(v.data(), v.layout());
+          alias_status = AliasStatus::DEVICE_IS_ALIAS;
         }
         else {
           device_view = DeviceView(Kokkos::view_alloc(Kokkos::WithoutInitializing, v.label() + "_dev"), v.layout());
+          alias_status = AliasStatus::NEITHER_IS_ALIAS;
         }
         host_view = v;
       }
@@ -281,15 +284,6 @@ namespace LAPIS
       }
     }
 
-    void keepAliveHost() override
-    {
-      // keep the parent's host view alive.
-      // It is assumed to be either managed,
-      // or unmanaged but references memory (e.g. from numpy)
-      // with a longer lifetime that any result from the current LAPIS function.
-      keepAlive(host_view);
-    }
-
     void deallocate() {
       device_view = DeviceView();
       host_view = HostView();
@@ -303,16 +297,28 @@ namespace LAPIS
       return device_view.stride(dim);
     }
 
+    void toStridedMemRef(StridedMemRefTypeBase* out) {
+      syncHost();
+      *static_cast<HostMemRefType*>(out) = viewToStridedMemref(host_view);
+    }
+
     DeviceView device_view;
     HostView host_view;
   };
 
+  struct DualViewBase
+  {
+    virtual void toStridedMemRef(StridedMemRefTypeBase* out) = 0;
+    virtual ~DualViewBase() {}
+  };
+
   template<typename DataType, typename Layout>
-  struct DualView
+  struct DualView : public DualViewBase
   {
     using ImplType = DualViewImpl<DataType, Layout>;
     using DeviceView = typename ImplType::DeviceView;
     using HostView = typename ImplType::HostView;
+    using HostMemRefType = typename ImplType::HostMemRefType;
 
     std::shared_ptr<ImplType> impl;
     bool syncHostWhenDestroyed = false;
@@ -332,6 +338,11 @@ namespace LAPIS
       impl->setParent(impl);
     }
 
+    void toStridedMemRef(StridedMemRefTypeBase* out)
+    {
+      impl->toStridedMemRef(out);
+    }
+
     template<typename V>
     DualView(const V& v) {
       static_assert(std::is_same_v<typename V::data_type, DataType>,
@@ -349,12 +360,12 @@ namespace LAPIS
       impl->setParent(parent.impl->parent);
     }
 
-    ~DualView() {
+    virtual ~DualView() {
       if(!impl) return;
       if(syncHostWhenDestroyed) syncHost();
-      DualViewBase* parent = impl->parent.get();
+      DualViewImplBase* parent = impl->parent.get();
       impl.reset();
-      // All DualViewBases keep a shared reference to themselves, so
+      // All DualViewImplBases keep a shared reference to themselves, so
       // parent always keeps a shared_ptr to itself. This would normally
       // prevent the parent destructor ever being called.
       //
@@ -416,12 +427,60 @@ namespace LAPIS
       return impl->stride(dim);
     }
 
-    void keepAliveHost() const {
-      impl->parent->keepAliveHost();
-    }
-
     void syncHostOnDestroy() {
       syncHostWhenDestroyed = true;
+    }
+  };
+
+  template<typename DV>
+  struct PythonParameter : public PythonParameterBase
+  {
+    DV toView() {
+      switch(wrapper_type)
+      {
+        case STRIDED_MEMREF_TYPE:
+          return stridedMemrefToView<typename DV::HostView>(*static_cast<typename DV::HostMemRefType*>(smr));
+          break;
+
+        case DUALVIEW_TYPE:
+          return *dynamic_cast<DV*>(view);
+          break;
+
+        default:
+          assert(false);
+
+          // In case asserts are turned off, initialize to nullptr to make it easier to debug
+          DV* ret = nullptr;
+          return *ret;
+      };
+    }
+
+    PythonParameter(const DV& dv)
+    {
+      wrapper_type = DUALVIEW_TYPE;
+      rank = DV::HostView::rank;
+      view = new DV(dv);
+    }
+
+    PythonParameter(const PythonParameter& other)
+    {
+      wrapper_type = other.wrapper_type;
+      rank = other.rank;
+      if(wrapper_type == DUALVIEW_TYPE) {
+        view = new DV(other.view);
+      }else if(wrapper_type == STRIDED_MEMREF_TYPE) {
+        smr = new typename DV::HostMemRefType(static_cast<typename DV::HostMemRefType*>(other.smr));
+      }
+    }
+
+    ~PythonParameter()
+    {
+      if(wrapper_type == DUALVIEW_TYPE)
+      {
+        delete static_cast<DV*>(view);
+      }else if(wrapper_type == STRIDED_MEMREF_TYPE) {
+        delete static_cast<typename DV::HostMemRefType*>(smr);
+      }
     }
   };
 

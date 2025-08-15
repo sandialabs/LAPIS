@@ -155,7 +155,7 @@ def main():
         # For debugging: print the CSRV formatted matrix
         #module_kokkos.print_csrv(A)
         result = module_kokkos.pte_softmax(A)
-        resultDense = module_kokkos.csrv_to_dense(result)
+        resultDense = module_kokkos.csrv_to_dense(result).asnumpy()
         print("Result (converted to dense): ")
         print(resultDense)
         if checkResult is None:

@@ -66,10 +66,7 @@ class KokkosBackend:
         buildOut = subprocess.run(['make'], cwd=buildDir, shell=True)
         sys.path.insert(0, moduleRoot)
         lapis = __import__(self.package_name)
-        if os.path.isfile(buildDir + "/lib" + self.package_name + "_module.so"):
-            return lapis.LAPISModule(buildDir + "/lib" + self.package_name + "_module.so")
-        if os.path.isfile(buildDir + "/lib" + self.package_name + "_module.dylib"):
-            return lapis.LAPISModule(buildDir + "/lib" + self.package_name + "_module.dylib")
+        return lapis
 
     def run_cli(self, app, flags, stdin):
         appAbsolute = which(app)
