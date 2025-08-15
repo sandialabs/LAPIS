@@ -1493,7 +1493,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::WhileOp whil
 }
 
 // If the join represented by op is a built-in reducer in Kokkos, return true and set reduction to its
-// name in C++ (e.g. "Kokkos:Min"). Otherwise return false.
+// type in C++ (Kokkos::Prod, Kokkos::Min, etc). Otherwise return false.
 static bool isBuiltinReduction(std::string& reduction, kokkos::UpdateReductionOp op) {
   // Built-in joins should have only two ops in the body: a binary arithmetic op of the two arguments, and a yield of that result.
   // Note: all Kokkos built in reductions have commutative joins, so here we test for both permutations of the arguments as operands.
@@ -1546,16 +1546,11 @@ static bool isBuiltinReduction(std::string& reduction, kokkos::UpdateReductionOp
     reduction = "Kokkos::BOr";
     return true;
   }
-  // TODO for when LLVM gets updated. They have split arith.maxf into arith.maximumf and arith.maxnumf (same with minf)
-  // These have different behavior with respect to NaNs: maximumf(nan, a) = nan, but maxnumf(nan, a) = a.
-  // The latter is not what Kokkos::Max will do, so it would have to use a custom reducer.
-  //else if(isa<arith::MaximumFOp>(op1) {
   else if(isa<arith::MaximumFOp>(op1)) {
     reduction = "Kokkos::Max";
     return true;
   }
   else if(isa<arith::MinimumFOp>(op1)) {
-  //else if(isa<arith::MinimumFOp>(op1)) {
     reduction = "Kokkos::Min";
     return true;
   }
