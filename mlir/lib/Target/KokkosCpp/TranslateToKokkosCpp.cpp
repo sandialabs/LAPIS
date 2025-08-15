@@ -178,6 +178,12 @@ struct KokkosCppEmitter {
     *this << "auto " << name << "_h = " << name << ".host_view();\n";
   }
 
+  /// Given a reduction result, join it with the initial value.
+  /// Since Kokkos always initializes reduction results with the
+  /// identity, we have to do this after the reduction is computed.
+  /// Precondition: result already contains the result of parallel_reduce.
+  LogicalResult joinReductionInit(Value result, kokkos::UpdateReductionOp);
+
   /// Whether to map an mlir integer to a unsigned integer in C++.
   bool shouldMapToUnsigned(IntegerType::SignednessSemantics val);
 
@@ -1568,6 +1574,27 @@ static bool isBuiltinReduction(std::string& reduction, kokkos::UpdateReductionOp
   return false;
 }
 
+LogicalResult KokkosCppEmitter::joinReductionInit(Value result, kokkos::UpdateReductionOp op)
+{
+  Type type = result.getType();
+  std::string kokkosReducer;
+  (void) isBuiltinReduction(kokkosReducer, op);
+  // Name Sum explicitly here, since we have to declare a reducer instance
+  if(kokkosReducer == "")
+    kokkosReducer = "Kokkos::Sum";
+  auto resultName = getOrCreateName(result);
+  Value init = op.getIdentity();
+  *this << kokkosReducer << "<";
+  if(failed(emitType(op.getLoc(), type)))
+    return failure();
+  *this << "> " << resultName << "_joiner(" << resultName << ");\n";
+  *this << resultName << "_joiner.join(" << resultName << ", ";
+  if(failed(emitValue(init)))
+    return failure();
+  *this << ");\n";
+  return success();
+}
+
 static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::RangeParallelOp op) {
   // Declare any results (which can only be produced by reductions).
   // These don't need to be initialized.
@@ -1714,9 +1741,12 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::RangePara
         return failure();
       emitter << ">";
     }
-    emitter << "(" << emitter.getOrCreateName(result) << ")";
+    emitter << "(" << emitter.getOrCreateName(result) << "));\n";
+    if(failed(emitter.joinReductionInit(result, op.getReduction())))
+      return failure();
   }
-  emitter << ")";
+  else
+    emitter << ")";
   return success();
 }
 
@@ -1830,9 +1860,12 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::TeamParal
         return failure();
       emitter << ">";
     }
-    emitter << "(" << emitter.getOrCreateName(result) << ")";
+    emitter << "(" << emitter.getOrCreateName(result) << "));\n";
+    if(failed(emitter.joinReductionInit(result, op.getReduction())))
+      return failure();
   }
-  emitter << ")";
+  else
+    emitter << ")";
   return success();
 }
 
@@ -1927,9 +1960,12 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::ThreadPar
         return failure();
       emitter << ">";
     }
-    emitter << "(" << emitter.getOrCreateName(result) << ")";
+    emitter << "(" << emitter.getOrCreateName(result) << "));\n";
+    if(failed(emitter.joinReductionInit(result, op.getReduction())))
+      return failure();
   }
-  emitter << ")";
+  else
+    emitter << ")";
   return success();
 }
 
