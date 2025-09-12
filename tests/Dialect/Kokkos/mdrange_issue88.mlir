@@ -1,3 +1,4 @@
+// RUN: %lapis-opt %s --kokkos-mdrange-iteration | diff %s.gold -
 module {
   func.func private @sparseCoordinates32(!llvm.ptr, index) -> memref<?xi32> attributes {llvm.emit_c_interface}
   func.func private @sparsePositions32(!llvm.ptr, index) -> memref<?xi32> attributes {llvm.emit_c_interface}

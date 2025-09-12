@@ -198,7 +198,7 @@ OS & operator<<(OS &os, const std::shared_ptr<Expr> &e) {
 struct KokkosMdrangeIterationPass
     : public impl::KokkosMdrangeIterationBase<KokkosMdrangeIterationPass> {
 
-#if 1
+#if 0
 #define MDRANGE_DEBUG(x) \
   llvm::outs() << x;
 #else
