@@ -677,8 +677,9 @@ void BruteForceOptimizer::optimize() {
   SmallVector<EinsumArg> inputs = einsum.inputs;
   EinsumArg output = einsum.output;
 
+  double bestCost;
   while (inputs.size() > 1) {
-    double bestCost = std::numeric_limits<double>::max();
+    bestCost = std::numeric_limits<double>::max();
     EinsumArg smallestTemporary;
 
     int imin = -1;

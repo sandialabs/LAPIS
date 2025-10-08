@@ -27,7 +27,6 @@ struct KernelFusionDriver : impl::KernelFusionDriverBase<KernelFusionDriver> {
     driveKernelFusionPass.addPass(createKernelFusionPass());
     driveKernelFusionPass.addPass(createFusedKernelInliningPass());
     driveKernelFusionPass.addPass(createLinalgGeneralizeNamedOpsPass());
-    driveKernelFusionPass.addPass(createLinalgGenericReorderingPass());
 
     // run the pipeline
     if (failed(runPipeline(driveKernelFusionPass, module)))

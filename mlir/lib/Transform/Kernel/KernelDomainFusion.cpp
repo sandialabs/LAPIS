@@ -5,12 +5,11 @@
  * vanilla SCF parallel loop fusion.
  */
 
-#include "Transform/Kernel/KernelPasses.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
-#include "mlir/Transforms/Passes.h"
-#include <algorithm>
+
+#include "Transform/Kernel/KernelPasses.h"
 
 namespace mlir {
 
@@ -21,28 +20,10 @@ namespace kernel {
 using ParallelOp = scf::ParallelOp;
 using ReduceOp = scf::ReduceOp;
 
-//===----------------------------------------------------------------------===//
-// ParallelLoopFusion (modified version of upstream SCF parallel loop fusion) 
-// NOTE: most of the functions here are from SCF parallel loop fusion and are
-// either slightly modified or left entirely the same as they appear in that
-// file.
-//===----------------------------------------------------------------------===//
-
-/// Verify there are no nested ParallelOps.
-static bool hasNestedParallelOp(ParallelOp ploop) {
-  auto walkResult =
-      ploop.getBody()->walk([](ParallelOp) { return WalkResult::interrupt(); });
-  return walkResult.wasInterrupted();
-}
-
-/// Retrieve loop bounds/steps as constants
 std::optional<SmallVector<int64_t>> getConstBounds(OperandRange bounds) {
   return getConstantIntValues(getAsOpFoldResult(SmallVector<Value>(bounds)));
 }
 
-/// Checks if the parallel loops have mixed access to the same buffers. Returns
-/// `true` if the first parallel loop writes to the same indices that the second
-/// loop reads.
 static bool haveNoReadsAfterWriteExceptSameIndex(
     ParallelOp firstPloop, ParallelOp secondPloop,
     const IRMapping &firstToSecondPloopIndices) {
@@ -54,8 +35,6 @@ static bool haveNoReadsAfterWriteExceptSameIndex(
   });
   auto walkResult = secondPloop.getBody()->walk([&](memref::LoadOp load) {
     Value loadMem = load.getMemRef();
-    // Stop if the memref is defined in secondPloop body. Careful alias analysis
-    // is needed.
     auto *memrefDef = loadMem.getDefiningOp();
     if (memrefDef && memrefDef->getBlock() == load->getBlock())
       return WalkResult::interrupt();
@@ -64,20 +43,16 @@ static bool haveNoReadsAfterWriteExceptSameIndex(
     if (write == bufferStores.end())
       return WalkResult::advance();
 
-    // Check that at last one store was retrieved
     if (!write->second.size())
       return WalkResult::interrupt();
 
     auto storeIndices = write->second.front();
 
-    // Multiple writes to the same memref are allowed only on the same indices
     for (const auto &othStoreIndices : write->second) {
       if (othStoreIndices != storeIndices)
         return WalkResult::interrupt();
     }
 
-    // Check that the load indices of secondPloop coincide with store indices of
-    // firstPloop for the same memrefs.
     auto loadIndices = load.getIndices();
     if (storeIndices.size() != loadIndices.size())
       return WalkResult::interrupt();
@@ -113,8 +88,6 @@ static bool haveNoReadsAfterWriteExceptSameIndex(
   return !walkResult.wasInterrupted();
 }
 
-/// Analyzes dependencies in the most primitive way by checking simple read and
-/// write patterns.
 static LogicalResult verifyDependencies(ParallelOp firstPloop,
                                         ParallelOp secondPloop) {
   IRMapping firstToSecondPloopIndices;
@@ -135,8 +108,6 @@ static bool isFusionLegal(ParallelOp firstPloop, ParallelOp secondPloop) {
   return succeeded(verifyDependencies(firstPloop, secondPloop));
 }
 
-/// Prepends operations of firstPloop's body into secondPloop's body.
-/// Updates secondPloop with new loop.
 static bool fuseIfLegal(ParallelOp firstPloop, ParallelOp &secondPloop,
                         OpBuilder builder) {
 
@@ -144,8 +115,6 @@ static bool fuseIfLegal(ParallelOp firstPloop, ParallelOp &secondPloop,
     return false;
 
   DominanceInfo dom;
-  // We are fusing first loop into second, make sure there are no users of the
-  // first loop results between loops.
   for (Operation *user : firstPloop->getUsers())
     if (!dom.properlyDominates(secondPloop, user, /*enclosingOpOk*/ true))
       return false;
@@ -206,15 +175,11 @@ static bool fuseIfLegal(ParallelOp firstPloop, ParallelOp &secondPloop,
 
 void naivelyFuseParallelOps(Region &region) {
   OpBuilder b(region);
-  // Consider every single block and attempt to fuse adjacent loops.
   SmallVector<SmallVector<ParallelOp>, 1> ploopChains;
   for (auto &block : region) {
     ploopChains.clear();
     ploopChains.push_back({});
 
-    // Not using `walk()` to traverse only top-level parallel loops and also
-    // make sure that there are no side-effecting ops between the parallel
-    // loops.
     bool noSideEffects = true;
     for (auto &op : block) {
       if (auto ploop = dyn_cast<ParallelOp>(op)) {
@@ -226,8 +191,6 @@ void naivelyFuseParallelOps(Region &region) {
         }
         continue;
       }
-      // TODO: Handle region side effects properly.
-      // noSideEffects &= isMemoryEffectFree(&op) && op.getNumRegions() == 0;
     }
     for (MutableArrayRef<ParallelOp> ploops : ploopChains) {
       for (int i = 0, e = ploops.size(); i + 1 < e; ++i)
