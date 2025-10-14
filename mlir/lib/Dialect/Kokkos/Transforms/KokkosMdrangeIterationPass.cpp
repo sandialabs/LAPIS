@@ -1070,29 +1070,63 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
 
   // modify `parallelOp` so that its induction variables are permuted according to `permutation`
   static void permute_parallel_op(scf::ParallelOp parallelOp, const Permutation &permutation) {
+    // Create a builder at the location of the original parallel op
     OpBuilder builder(parallelOp);
     SmallVector<Value, 4> newLowerBounds, newUpperBounds, newSteps;
 
+    // permuted bounds
     for (int index : permutation) {
       newLowerBounds.push_back(parallelOp.getLowerBound()[index]);
       newUpperBounds.push_back(parallelOp.getUpperBound()[index]);
       newSteps.push_back(parallelOp.getStep()[index]);
     }
 
+    MDRANGE_DEBUG("builder.create...\n");
     auto newParallelOp = builder.create<scf::ParallelOp>(
-        parallelOp.getLoc(), newLowerBounds, newUpperBounds, newSteps);
+        parallelOp.getLoc(), newLowerBounds, newUpperBounds, newSteps, parallelOp.getInitVals());
 
-    // Move the body of the original parallelOp to the new parallelOp.
-    newParallelOp.getBody()->getTerminator()->erase(); // splicing in the new body has a terminator already
-    newParallelOp.getBody()->getOperations().splice(
-        newParallelOp.getBody()->begin(), parallelOp.getBody()->getOperations());
+    // splicing will bring the old body terminator
+    // TODO: this seems to be a crash now
+    if (auto body = newParallelOp.getBody()) {
+      if (body->mightHaveTerminator()) {
+
+        if (auto term = body->getTerminator()) {
+          MDRANGE_DEBUG("erase terminator: " << *term << "\n");
+          term->erase();
+        } else {
+          MDRANGE_DEBUG("null terminator\n");
+        }
+      } else {
+        MDRANGE_DEBUG("body doesn't have terminator\n");
+      }
+    } else {
+      MDRANGE_DEBUG("no body\n");
+    }
 
     // replace uses of original induction variable perm[i] with new induction variable [i]
+    MDRANGE_DEBUG("replaced indvar uses...\n");
     for (size_t i = 0; i < permutation.size(); ++i) {
       parallelOp.getInductionVars()[permutation[i]].replaceAllUsesWith(newParallelOp.getInductionVars()[i]);
     }
 
+    // Move the body of the original parallelOp to the new parallelOp.
+    MDRANGE_DEBUG("splice...\n");
+    newParallelOp.getBody()->getOperations().splice(
+        newParallelOp.getBody()->begin(), parallelOp.getBody()->getOperations());
+
+
+
+    // replace uses of the old parallel op with the new one
+    MDRANGE_DEBUG("replace uses of original op with permuted one...\n");
+    parallelOp.replaceAllUsesWith(newParallelOp.getResults());
+
+    MDRANGE_DEBUG("erase original op\n");
     parallelOp.erase();
+
+    // MDRANGE_DEBUG("newParallelOp after erase...\n");
+    // newParallelOp.walk([&](Operation *op) {
+    //   MDRANGE_DEBUG(*op << "\n");
+    // });
   }
 
 
@@ -1249,8 +1283,8 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
 
     MDRANGE_DEBUG("====\nbuild new module\n====\n");
     // modify the parallel ops in the module
-    mod.walk([&bestCfg = bestCfg](scf::ParallelOp parallelOp) {
-      MDRANGE_DEBUG("modifying " << parallelOp << "\n");
+    mod.walk([&](scf::ParallelOp parallelOp) {
+      MDRANGE_DEBUG("modifying:v\n" << parallelOp << "\n");
       if (auto it = bestCfg.perms_.find(parallelOp); it != bestCfg.perms_.end()) {
         const Permutation &permutation = it->second;
         MDRANGE_DEBUG("applying permutation ");
@@ -1259,6 +1293,8 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
           MDRANGE_DEBUG(i << " ");
         }
         MDRANGE_DEBUG("\n");
+
+        // this call erases parallelOp, so it's no good anymore
         permute_parallel_op(parallelOp, permutation);
       } else {
         llvm::report_fatal_error("no configuration for scf.parallel in configuration");

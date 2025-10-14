@@ -10,7 +10,11 @@ moduleText="""
 #idmap = affine_map<(d0) -> (d0)>
 module {
   func.func private @spmv(%A: tensor<?x?xf64, #sparse>, %x: tensor<?xf64>, %ydst: tensor<?xf64>) -> tensor<?xf64> {
-    %y = linalg.matvec ins(%A, %x: tensor<?x?xf64, #sparse>, tensor<?xf64>) outs(%ydst : tensor<?xf64>) -> tensor<?xf64>
+    // Have to manually zero out the output tensor,
+    // since linalg.matvec always adds A*x to the output.
+    %zero = arith.constant 0.0 : f64
+    %ydst_zeroed = linalg.fill ins(%zero : f64) outs(%ydst : tensor<?xf64>) -> tensor<?xf64>
+    %y = linalg.matvec ins(%A, %x: tensor<?x?xf64, #sparse>, tensor<?xf64>) outs(%ydst_zeroed : tensor<?xf64>) -> tensor<?xf64>
     return %y : tensor<?xf64>
   }
 

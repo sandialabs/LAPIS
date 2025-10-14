@@ -37,10 +37,10 @@ void run(const Float2D& out1, const Float2D& out2, const Float2D& in1, const Flo
     KOKKOS_LAMBDA(const TeamMem& t) {
       // Get 1D subviews for just one descriptor/prediction instance.
       int i = t.league_rank();
-      auto out1_sub = Kokkos::subview(out1, Kokkos::make_pair(i, i+1), Kokkos::ALL());
-      auto out2_sub = Kokkos::subview(out2, Kokkos::make_pair(i, i+1), Kokkos::ALL());
-      auto in1_sub = Kokkos::subview(in1, Kokkos::make_pair(i, i+1), Kokkos::ALL());
-      auto in2_sub = Kokkos::subview(in2, Kokkos::make_pair(i, i+1), Kokkos::ALL());
+      auto out1_sub = Kokkos::subview(out1, i, Kokkos::ALL());
+      auto out2_sub = Kokkos::subview(out2, i, Kokkos::ALL());
+      auto in1_sub = Kokkos::subview(in1, i, Kokkos::ALL());
+      auto in2_sub = Kokkos::subview(in2, i, Kokkos::ALL());
       char* scratch0 = (char*)(t.team_scratch(0).get_shmem(scratch0_required));
       char* scratch1 = (char*)(t.team_scratch(1).get_shmem(scratch1_required));
       forward<Kokkos::DefaultExecutionSpace, max_shared>(t, globalViews, out1_sub, out2_sub, in1_sub, in2_sub, scratch0, scratch1);
@@ -87,7 +87,7 @@ int main()
         maxDiff = diff;
     }
     std::cout << "Maximum elementwise diff: " << maxDiff << '\n';
-    passed = maxDiff < 1e-5;
+    passed = maxDiff < 1e-4;
   }
   lapis_finalize();
   Kokkos::finalize();

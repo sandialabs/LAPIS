@@ -178,6 +178,12 @@ struct KokkosCppEmitter {
     *this << "auto " << name << "_h = " << name << ".host_view();\n";
   }
 
+  /// Given a reduction result, join it with the initial value.
+  /// Since Kokkos always initializes reduction results with the
+  /// identity, we have to do this after the reduction is computed.
+  /// Precondition: result already contains the result of parallel_reduce.
+  LogicalResult joinReductionInit(Value result, kokkos::UpdateReductionOp);
+
   /// Whether to map an mlir integer to a unsigned integer in C++.
   bool shouldMapToUnsigned(IntegerType::SignednessSemantics val);
 
@@ -1493,7 +1499,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::WhileOp whil
 }
 
 // If the join represented by op is a built-in reducer in Kokkos, return true and set reduction to its
-// name in C++ (e.g. "Kokkos:Min"). Otherwise return false.
+// type in C++ (Kokkos::Prod, Kokkos::Min, etc). Otherwise return false.
 static bool isBuiltinReduction(std::string& reduction, kokkos::UpdateReductionOp op) {
   // Built-in joins should have only two ops in the body: a binary arithmetic op of the two arguments, and a yield of that result.
   // Note: all Kokkos built in reductions have commutative joins, so here we test for both permutations of the arguments as operands.
@@ -1546,16 +1552,11 @@ static bool isBuiltinReduction(std::string& reduction, kokkos::UpdateReductionOp
     reduction = "Kokkos::BOr";
     return true;
   }
-  // TODO for when LLVM gets updated. They have split arith.maxf into arith.maximumf and arith.maxnumf (same with minf)
-  // These have different behavior with respect to NaNs: maximumf(nan, a) = nan, but maxnumf(nan, a) = a.
-  // The latter is not what Kokkos::Max will do, so it would have to use a custom reducer.
-  //else if(isa<arith::MaximumFOp>(op1) {
   else if(isa<arith::MaximumFOp>(op1)) {
     reduction = "Kokkos::Max";
     return true;
   }
   else if(isa<arith::MinimumFOp>(op1)) {
-  //else if(isa<arith::MinimumFOp>(op1)) {
     reduction = "Kokkos::Min";
     return true;
   }
@@ -1571,6 +1572,27 @@ static bool isBuiltinReduction(std::string& reduction, kokkos::UpdateReductionOp
   }
   // The reduction is some binary operation, but not one that Kokkos has as a built-in reducer.
   return false;
+}
+
+LogicalResult KokkosCppEmitter::joinReductionInit(Value result, kokkos::UpdateReductionOp op)
+{
+  Type type = result.getType();
+  std::string kokkosReducer;
+  (void) isBuiltinReduction(kokkosReducer, op);
+  // Name Sum explicitly here, since we have to declare a reducer instance
+  if(kokkosReducer == "")
+    kokkosReducer = "Kokkos::Sum";
+  auto resultName = getOrCreateName(result);
+  Value init = op.getIdentity();
+  *this << kokkosReducer << "<";
+  if(failed(emitType(op.getLoc(), type)))
+    return failure();
+  *this << "> " << resultName << "_joiner(" << resultName << ");\n";
+  *this << resultName << "_joiner.join(" << resultName << ", ";
+  if(failed(emitValue(init)))
+    return failure();
+  *this << ");\n";
+  return success();
 }
 
 static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::RangeParallelOp op) {
@@ -1719,9 +1741,12 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::RangePara
         return failure();
       emitter << ">";
     }
-    emitter << "(" << emitter.getOrCreateName(result) << ")";
+    emitter << "(" << emitter.getOrCreateName(result) << "));\n";
+    if(failed(emitter.joinReductionInit(result, op.getReduction())))
+      return failure();
   }
-  emitter << ")";
+  else
+    emitter << ")";
   return success();
 }
 
@@ -1835,9 +1860,12 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::TeamParal
         return failure();
       emitter << ">";
     }
-    emitter << "(" << emitter.getOrCreateName(result) << ")";
+    emitter << "(" << emitter.getOrCreateName(result) << "));\n";
+    if(failed(emitter.joinReductionInit(result, op.getReduction())))
+      return failure();
   }
-  emitter << ")";
+  else
+    emitter << ")";
   return success();
 }
 
@@ -1932,9 +1960,12 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::ThreadPar
         return failure();
       emitter << ">";
     }
-    emitter << "(" << emitter.getOrCreateName(result) << ")";
+    emitter << "(" << emitter.getOrCreateName(result) << "));\n";
+    if(failed(emitter.joinReductionInit(result, op.getReduction())))
+      return failure();
   }
-  emitter << ")";
+  else
+    emitter << ")";
   return success();
 }
 
