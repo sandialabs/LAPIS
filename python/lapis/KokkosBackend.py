@@ -120,3 +120,5 @@ class KokkosBackend:
         # And compile + load the module
         return self.compile_kokkos_to_native(moduleRoot, True)
 
+    def fwd_diff_compile(self, module, 
+
