@@ -120,5 +120,140 @@ class KokkosBackend:
         # And compile + load the module
         return self.compile_kokkos_to_native(moduleRoot, True)
 
-    def fwd_diff_compile(self, module, 
+    def validate_activities(self, activities):
+        pass
+        #for a in activities:
+        #    if a not in ['out', 'dup', 'dupnoneed', 'const', 'inactive']:
+        #        raise Exception("Invalid argument activity: each must be one of 'out', 'dup', 'dupnoneed', 'const', 'inactive'.")
 
+    def forward_diff_compile(self, module, fn, d_fn, returnActivities, argActivities):
+        # Make sure $ENZYME_OPT is defined
+        if 'ENZYME_OPT' not in os.environ:
+            raise Exception("AD requires $ENZYME_OPT to be the absolute path to enzymemlir-opt")
+
+        # First, lower the module to SCF
+        moduleText = str(module)
+        if self.dump_mlir:
+            print("== High-Level ==")
+            print(moduleText)
+
+        moduleRoot = self.ws + "/" + self.package_name
+        os.makedirs(moduleRoot, exist_ok=True)
+        cppOut = moduleRoot + "/" + self.package_name + "_module.cpp"
+        pyOut = moduleRoot + "/" + self.package_name + ".py"
+
+        # First lower to Kokkos dialect
+        par = self.parallel_strategy
+        dst = ""
+        if self.decompose_tensors:
+            pipeline = f'--sparse-compiler-kokkos-pre-ad=parallelization-strategy={par} decompose-sparse-tensors'
+        else:
+            pipeline = f'--sparse-compiler-kokkos-pre-ad=parallelization-strategy={par}'
+        try:
+            moduleText = self.run_cli("lapis-opt", [pipeline], moduleText)
+        except:
+            raise Exception("Pre-AD lowering pipeline failed.")
+
+        if self.dump_mlir:
+            print("== Lowered (Pre-AD) ==")
+            print(moduleText)
+
+        # Generate derivative function declarations
+        self.validate_activities(returnActivities)
+        self.validate_activities(argActivities)
+        retTys = ','.join(['enzyme_' + a for a in returnActivities])
+        argTys = ','.join(['enzyme_' + a for a in argActivities])
+        enzymeWrapArgs = f'--enzyme-wrap=infn={fn} outfn={d_fn} retTys={retTys} argTys={argTys} mode=ForwardMode'
+        try:
+            moduleText = self.run_cli(os.environ['ENZYME_OPT'], [enzymeWrapArgs, '--canonicalize', '--remove-unnecessary-enzyme-ops', '--canonicalize', '--enzyme-simplify-math'], moduleText)
+        except:
+            raise Exception("Failed to perform Enzyme forward mode differentiation.")
+        if self.dump_mlir:
+            print("== After forward mode AD: ==")
+            print(moduleText)
+        # Finish lowering to Kokkos
+        try:
+            moduleText = self.run_cli("lapis-opt", ['--sparse-compiler-kokkos-post-ad'], moduleText)
+        except:
+            raise Exception("Lowering to Kokkos dialect failed.")
+        if self.dump_mlir:
+            print("== After lowering to Kokkos dialect: ==")
+            print(moduleText)
+
+        # Then emit C++
+        args = ["-o", cppOut, "--py=" + pyOut]
+        if self.num_instances == 0 or (self.index_instance == self.num_instances - 1):
+            args.append("--finalize")
+        try:
+            self.run_cli("lapis-translate", args, moduleText)
+        except:
+            raise Exception("Emitting Kokkos C++ failed.")
+
+        # And compile + load the module
+        return self.compile_kokkos_to_native(moduleRoot, True)
+
+    def reverse_diff_compile(self, module, fn, d_fn, returnActivities, argActivities):
+        # Make sure $ENZYME_OPT is defined
+        if 'ENZYME_OPT' not in os.environ:
+            raise Exception("AD requires $ENZYME_OPT to be the absolute path to enzymemlir-opt")
+
+        # First, lower the module to SCF
+        moduleText = str(module)
+        if self.dump_mlir:
+            print("== High-Level ==")
+            print(moduleText)
+
+        moduleRoot = self.ws + "/" + self.package_name
+        os.makedirs(moduleRoot, exist_ok=True)
+        cppOut = moduleRoot + "/" + self.package_name + "_module.cpp"
+        pyOut = moduleRoot + "/" + self.package_name + ".py"
+
+        # First lower to Kokkos dialect
+        par = self.parallel_strategy
+        dst = ""
+        if self.decompose_tensors:
+            pipeline = f'--sparse-compiler-kokkos-pre-ad=parallelization-strategy={par} decompose-sparse-tensors'
+        else:
+            pipeline = f'--sparse-compiler-kokkos-pre-ad=parallelization-strategy={par}'
+        try:
+            moduleText = self.run_cli("lapis-opt", [pipeline], moduleText)
+        except:
+            raise Exception("Pre-AD lowering pipeline failed.")
+
+        if self.dump_mlir:
+            print("== Lowered (Pre-AD) ==")
+            print(moduleText)
+
+        # Generate derivative function declarations
+        self.validate_activities(returnActivities)
+        self.validate_activities(argActivities)
+        retTys = ','.join(['enzyme_' + a for a in returnActivities])
+        argTys = ','.join(['enzyme_' + a for a in argActivities])
+        enzymeWrapArgs = f'--enzyme-wrap=infn={fn} outfn={d_fn} retTys={retTys} argTys={argTys} mode=ReverseModeCombined'
+        try:
+            moduleText = self.run_cli(os.environ['ENZYME_OPT'], [enzymeWrapArgs, '--canonicalize', '--remove-unnecessary-enzyme-ops', '--canonicalize', '--enzyme-simplify-math'], moduleText)
+        except:
+            raise Exception("Failed to perform Enzyme reverse mode differentiation.")
+        if self.dump_mlir:
+            print("== After reverse mode AD: ==")
+            print(moduleText)
+        # Finish lowering to Kokkos
+        try:
+            moduleText = self.run_cli("lapis-opt", ['--sparse-compiler-kokkos-post-ad'], moduleText)
+        except:
+            raise Exception("Lowering to Kokkos dialect failed.")
+        if self.dump_mlir:
+            print("== After lowering to Kokkos dialect: ==")
+            print(moduleText)
+
+        # Then emit C++
+        args = ["-o", cppOut, "--py=" + pyOut]
+        if self.num_instances == 0 or (self.index_instance == self.num_instances - 1):
+            args.append("--finalize")
+        try:
+            self.run_cli("lapis-translate", args, moduleText)
+        except:
+            raise Exception("Emitting Kokkos C++ failed.")
+
+        # And compile + load the module
+        return self.compile_kokkos_to_native(moduleRoot, True)
