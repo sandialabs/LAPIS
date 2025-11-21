@@ -3,7 +3,7 @@
 set -e
 
 echo "Lowering with team-level pipeline..."
-lapis-opt --team-compiler-kokkos cloudfrac.mlir -o cloudfrac_lowered.mlir
+lapis-opt --team-compiler-kokkos cloudfrac_torchscript.mlir -o cloudfrac_lowered.mlir
 echo "Emitting Kokkos..."
 lapis-translate cloudfrac_lowered.mlir --team-level -o cloudfrac.cpp --hpp cloudfrac.hpp
 
