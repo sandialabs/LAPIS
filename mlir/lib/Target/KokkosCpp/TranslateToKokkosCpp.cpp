@@ -3155,7 +3155,7 @@ void KokkosCppEmitter::registerRuntimeSupportFunctions()
     registerCIface(true, funcName);
   }
   for (std::string funcName :
-      { "newSparseTensor", "lexInsertI8", "lexInsertI16", "lexInsertI32",
+      {"newSparseTensor", "lexInsertI8", "lexInsertI16", "lexInsertI32",
       "lexInsertI64", "lexInsertF32", "lexInsertF64",
       "expInsertF32", "expInsertF64", "expInsertI8",
       "expInsertI16", "expInsertI32", "expInsertI64"
@@ -3220,6 +3220,34 @@ bool KokkosCppEmitter::hasValueInScope(Value val) { return valueMapper.count(val
 
 bool KokkosCppEmitter::hasBlockLabel(Block &block) {
   return blockMapper.count(&block);
+}
+
+template<typename T>
+LogicalResult printDenseResource(KokkosCppEmitter& emitter, Location loc, T attr) {
+  ShapedType type = attr.getType();
+  auto data = attr.tryGetAsArrayRef();
+  if(!data)
+    return emitError(loc, "Could not get data from DenseResourceElementsAttr.");
+  // Dense resources appear to use LayoutLeft, so we have to transpose the data
+  emitter << "{";
+  char str[64];
+  for(int64_t i = 0; i < type.getNumElements(); i++) {
+    if(i)
+      emitter << ", ";
+    auto val = (*data)[i];
+    if constexpr (std::is_same_v<decltype(val), float>) {
+      snprintf(str, 64, "%.9e", (*data)[i]);
+      emitter << str;
+    }
+    else if constexpr(std::is_same_v<decltype(val), double>) {
+      snprintf(str, 64, "%.16e", (*data)[i]);
+      emitter << str;
+    }
+    else
+      emitter << (*data)[i];
+  }
+  emitter << "}";
+  return success();
 }
 
 LogicalResult KokkosCppEmitter::emitAttribute(Location loc, Attribute attr) {
@@ -3301,6 +3329,23 @@ LogicalResult KokkosCppEmitter::emitAttribute(Location loc, Attribute attr) {
       return success();
     }
   }
+  // TorchFX-style resource blobs (for constant model parameters etc.)
+  #define DENSEATTR_CASE(T) \
+    if(auto dense = dyn_cast<T>(attr)) { \
+      return printDenseResource(*this, loc, dense); \
+    }
+  DENSEATTR_CASE(DenseBoolResourceElementsAttr)
+  DENSEATTR_CASE(DenseI8ResourceElementsAttr)
+  DENSEATTR_CASE(DenseI16ResourceElementsAttr)
+  DENSEATTR_CASE(DenseI32ResourceElementsAttr)
+  DENSEATTR_CASE(DenseI64ResourceElementsAttr)
+  DENSEATTR_CASE(DenseUI8ResourceElementsAttr)
+  DENSEATTR_CASE(DenseUI16ResourceElementsAttr)
+  DENSEATTR_CASE(DenseUI32ResourceElementsAttr)
+  DENSEATTR_CASE(DenseUI64ResourceElementsAttr)
+  DENSEATTR_CASE(DenseF32ResourceElementsAttr)
+  DENSEATTR_CASE(DenseF64ResourceElementsAttr)
+  #undef DENSEATTR_CASE
 
   // Print symbolic reference attributes.
   if (auto sAttr = dyn_cast<SymbolRefAttr>(attr)) {
