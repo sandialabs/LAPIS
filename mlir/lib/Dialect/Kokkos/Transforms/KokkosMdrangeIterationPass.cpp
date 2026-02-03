@@ -610,7 +610,7 @@ static std::shared_ptr<Expr> df_dx(Value &f, Value &x) {
 
         // Get the size in bits of the element type
         mlir::Type elementType = memrefType.getElementType();
-        const unsigned sizeInBytes = elementType.getIntOrFloatBitWidth() / CHAR_BIT;
+        const unsigned sizeInBytes = kokkos::getBuiltinTypeSize(elementType, memrefOp);
 
         std::shared_ptr<Expr> res = std::make_shared<Constant>(sizeInBytes);
         
