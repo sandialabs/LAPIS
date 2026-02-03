@@ -60,6 +60,12 @@ static int getNumUses(Value v) {
 //   (for example, see https://kokkos.org/kokkos-core-wiki/API/core/policies/TeamVectorMDRange.html#restrictions).
 // Otherwise, yes.
 static bool canBeParallelized(LinalgOp op) {
+  if(!op.getIteratorTypesArray().size()) {
+    // op has no iterators at all (e.g. rank-0 output).
+    // scf.parallel must have at least one induction var, so this breaks
+    // the pattern. Let the builtin pass handle it.
+    return false;
+  }
   // if op has no reduction iterators, then it can't have complex reductions
   int numParallelIters = 0;
   int numReductionIters = 0;

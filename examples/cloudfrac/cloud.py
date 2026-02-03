@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch_mlir
 from torch_mlir.compiler_utils import TensorPlaceholder
 from torch_mlir import torchscript
+from torch_mlir import fx
 from lapis import KokkosBackend
 
 class CldFracNet(nn.Module):
@@ -21,10 +22,10 @@ class CldFracNet(nn.Module):
     # sigmoid for categorical ice output
     self.sigmoid = nn.Sigmoid()
     # Random weights
-    nn.init.normal_(self.ice1.weight, mean=0, std=1)
-    nn.init.normal_(self.ice2.weight, mean=0, std=1)
-    nn.init.normal_(self.tot1.weight, mean=0, std=1)
-    nn.init.normal_(self.tot2.weight, mean=0, std=1)
+    nn.init.normal_(self.ice1.weight, mean=0, std=100)
+    nn.init.normal_(self.ice2.weight, mean=0, std=100)
+    nn.init.normal_(self.tot1.weight, mean=0, std=100)
+    nn.init.normal_(self.tot2.weight, mean=0, std=100)
 
   def forward(self, qi, liq):
     # First, compute cld_ice from qi
@@ -38,7 +39,7 @@ class CldFracNet(nn.Module):
     y13_categorical = (y13_probabilities > 0.5).float()
 
     # Now compute cld_tot from cld_ice and cld_liq
-    y21 = self.tot1(torch.cat((liq, y13_categorical), dim=0))
+    y21 = self.tot1(torch.cat((liq, y13_categorical), dim=-1))
     y22 = self.relu(y21)
     y23 = self.tot2(y22)
     return y13_categorical, y23
@@ -61,10 +62,10 @@ def main ():
 
     dtype=torch.float32
 
-    col = torch.ones((1,nlevs))
+    #col = torch.ones((1,nlevs))
 
-    qi = col
-    liq = col
+    #qi = col
+    #liq = col
 
     # Sample random inputs, compute outputs, write both to file
     batch = 16
@@ -76,7 +77,8 @@ def main ():
     for i in range(batch):
         (out1[i, :], out2[i, :]) = model.forward(in1[i, :], in2[i, :])
 
-    ph = TensorPlaceholder([nlevs], torch.float32)
+    ph = TensorPlaceholder([1, nlevs], torch.float32)
+    dummy = torch.zeros((1, nlevs))
     #ph = TensorPlaceholder([batch, nlevs], torch.float32)
 
     writeTensor('../data/cloudfrac_in1.txt', in1)
@@ -84,9 +86,12 @@ def main ():
     writeTensor('../data/cloudfrac_out1.txt', out1)
     writeTensor('../data/cloudfrac_out2.txt', out2)
 
-    mlir_module = torchscript.compile(model, (ph, ph), output_type='linalg-on-tensors')
-    with open("cloudfrac.mlir",'w') as fd:
-        fd.write(str(mlir_module))
+    mlir_module_ts = torchscript.compile(model, (ph, ph), output_type='linalg-on-tensors')
+    with open("cloudfrac_torchscript.mlir",'w') as fd:
+        fd.write(str(mlir_module_ts))
+    mlir_module_fx = fx.export_and_import(model, dummy, dummy, output_type="linalg-on-tensors", func_name='forward',)
+    with open("cloudfrac_torchfx.mlir",'w') as fd:
+        fd.write(str(mlir_module_fx))
 
 if __name__ == "__main__":
     main()

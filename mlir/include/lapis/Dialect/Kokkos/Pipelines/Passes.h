@@ -87,6 +87,9 @@ struct TeamLevelCompilerOptions
 /// representations and algorithms for sparse tensors.
 void buildSparseKokkosCompiler(OpPassManager &pm, const LapisCompilerOptions &options);
 
+void buildSparseKokkosCompilerPreAD(OpPassManager &pm, const LapisCompilerOptions &options);
+void buildSparseKokkosCompilerPostAD(OpPassManager &pm);
+
 void buildTeamLevelKokkosCompiler(OpPassManager &pm, const TeamLevelCompilerOptions &options);
 
 /// Registers all pipelines for the `kokkos` dialect.
