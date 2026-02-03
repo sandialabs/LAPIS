@@ -231,6 +231,7 @@ class KokkosBackend:
         argTys = ','.join(['enzyme_' + a for a in argActivities])
         enzymeWrapArgs = f'--enzyme-wrap=infn={fn} outfn={d_fn} retTys={retTys} argTys={argTys} mode=ReverseModeCombined'
         try:
+            print("Full command:", os.environ['ENZYME_OPT'], '"' + enzymeWrapArgs + '"', '--canonicalize', '--remove-unnecessary-enzyme-ops', '--canonicalize', '--enzyme-simplify-math')
             moduleText = self.run_cli(os.environ['ENZYME_OPT'], [enzymeWrapArgs, '--canonicalize', '--remove-unnecessary-enzyme-ops', '--canonicalize', '--enzyme-simplify-math'], moduleText)
         except:
             raise Exception("Failed to perform Enzyme reverse mode differentiation.")
