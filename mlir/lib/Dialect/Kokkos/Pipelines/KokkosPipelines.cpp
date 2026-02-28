@@ -264,7 +264,8 @@ void mlir::kokkos::buildSparseKokkosCompilerPostAD(
   // Finally, lower scf/memref to kokkos
   pm.addPass(createParallelUnitStepPass());
   pm.addPass(createKokkosLoopMappingPass());
-  //pm.addPass(createKokkosMemorySpaceAssignmentPass()); pm.addPass(createKokkosDualViewManagementPass());
+  //pm.addPass(createKokkosMemorySpaceAssignmentPass());
+  pm.addPass(createKokkosDualViewManagementPass());
 }
 
 void mlir::kokkos::buildTeamLevelKokkosCompiler(OpPassManager &pm, const TeamLevelCompilerOptions& /*options*/) {

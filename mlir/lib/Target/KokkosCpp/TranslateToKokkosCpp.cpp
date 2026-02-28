@@ -764,7 +764,6 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
 
 static LogicalResult printOperation(KokkosCppEmitter &emitter,
                                     memref::LoadOp op) {
-  //TODO: if in host code, use a mirror view?
   if(failed(emitter.emitType(op.getLoc(), op.getResult().getType())))
     return op.emitError("Failed to emit LoadOp result type");
   emitter << ' ' << emitter.getOrCreateName(op.getResult()) << " = ";
@@ -785,6 +784,101 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
     if(failed(emitter.emitValue(*iter)))
       return op.emitError("Failed to emit a LoadOp index");
   }
+  emitter << ")";
+  return success();
+}
+
+static LogicalResult printOperation(KokkosCppEmitter &emitter,
+                                    memref::AtomicRMWOp op) {
+  using arith::AtomicRMWKind;
+  // If op's result has no uses, use Kokkos::atomic_[op].
+  // Otherwise use Kokkos::atomic_fetch_[op].
+  bool keepResult = !op.getResult().use_empty();
+  if(keepResult) {
+    if(failed(emitter.emitType(op.getLoc(), op.getResult().getType())))
+      return op.emitError("Failed to emit LoadOp result type");
+    emitter << ' ' << emitter.getOrCreateName(op.getResult()) << " = ";
+  }
+  if(op.getKind() == AtomicRMWKind::maxnumf) {
+    emitter << "LAPIS::atomic_maxnum";
+  }
+  else if(op.getKind() == AtomicRMWKind::minnumf) {
+    emitter << "LAPIS::atomic_minnum";
+  }
+  else {
+    emitter << "Kokkos::atomic_";
+    if(keepResult && op.getKind() != AtomicRMWKind::assign)
+      emitter << "fetch_";
+    switch(op.getKind()) {
+      case AtomicRMWKind::addf:
+      case AtomicRMWKind::addi:
+      {
+        emitter << "add";
+        break;
+      }
+      case AtomicRMWKind::minimumf:
+      case AtomicRMWKind::mins:
+      case AtomicRMWKind::minu:
+      {
+        emitter << "min";
+        break;
+      }
+      case AtomicRMWKind::maximumf:
+      case AtomicRMWKind::maxs:
+      case AtomicRMWKind::maxu:
+      {
+        emitter << "max";
+        break;
+      }
+      case AtomicRMWKind::assign:
+      {
+        if(keepResult)
+          emitter << "exchange";
+        else
+          emitter << "store";
+        break;
+      }
+      case AtomicRMWKind::mulf:
+      case AtomicRMWKind::muli:
+      {
+        emitter << "mul";
+        break;
+      }
+      case AtomicRMWKind::ori:
+      {
+        emitter << "or";
+        break;
+      }
+      case AtomicRMWKind::andi:
+      {
+        emitter << "and";
+        break;
+      }
+      default:
+      return op.emitError("Unhandled memref.atomic_rmw kind");
+    }
+  }
+  emitter << "(&";
+  if(failed(emitter.emitValue(op.getMemref())))
+    return op.emitError("Failed to emit the atomic_rmw's memref value");
+  if(kokkos::getMemSpace(op.getMemref(), emitter.emittingTeamLevel()) == kokkos::MemorySpace::DualView) {
+    // Which view to access depends if we are in host or device context
+    if(kokkos::getOpExecutionSpace(op) == kokkos::ExecutionSpace::Device)
+      emitter << "_d";
+    else
+      emitter << "_h";
+  }
+  emitter << "(";
+  for(auto iter = op.getIndices().begin(); iter != op.getIndices().end(); iter++)
+  {
+    if(iter != op.getIndices().begin())
+      emitter << ", ";
+    if(failed(emitter.emitValue(*iter)))
+      return op.emitError("Failed to emit an atomic_rmw index");
+  }
+  emitter << "), ";
+  if(failed(emitter.emitValue(op.getValue())))
+    return op.emitError("Failed to emit the atomic_rmw's memref value");
   emitter << ")";
   return success();
 }
@@ -4136,7 +4230,7 @@ LogicalResult KokkosCppEmitter::emitOperation(Operation &op, bool trailingSemico
               [&](auto op) { return printMathOperation(*this, op); })
           // Memref ops.
           .Case<memref::GlobalOp, memref::GetGlobalOp, memref::AllocOp,
-                memref::AllocaOp, memref::StoreOp, memref::LoadOp,
+                memref::AllocaOp, memref::StoreOp, memref::LoadOp, memref::AtomicRMWOp,
                 memref::CopyOp, memref::SubViewOp, memref::ReshapeOp,
                 memref::CastOp, memref::DeallocOp, memref::DimOp,
                 memref::ReinterpretCastOp, memref::ExtractStridedMetadataOp>(
