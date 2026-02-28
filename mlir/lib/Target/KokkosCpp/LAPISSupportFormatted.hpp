@@ -448,7 +448,7 @@
 "  }\n"
 "\n"
 "  template<typename T>\n"
-"  T atomic_maxnum(T* ptr, T val) {\n"
+"  T atomic_maxnum(T* ptr, T update) {\n"
 "    bool done = false;\n"
 "    T oldval;\n"
 "    do {\n"

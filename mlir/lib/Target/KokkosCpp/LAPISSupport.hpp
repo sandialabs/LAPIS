@@ -448,7 +448,7 @@ namespace LAPIS
   }
 
   template<typename T>
-  T atomic_maxnum(T* ptr, T val) {
+  T atomic_maxnum(T* ptr, T update) {
     bool done = false;
     T oldval;
     do {
