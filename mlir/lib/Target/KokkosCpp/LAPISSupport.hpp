@@ -433,5 +433,32 @@ namespace LAPIS
     while(vector_length < max_vector_length && vector_length * 6 < par) vector_length *= 2;
     return vector_length;
   }
+
+  template<typename T>
+  T atomic_minnum(T* ptr, T update) {
+    bool done = false;
+    T oldval;
+    do {
+      oldval = Kokkos::atomic_load(ptr);
+      T newval = Kokkos::isnan(oldval) ? update : Kokkos::min(oldval, update);
+      done = (oldval == Kokkos::atomic_compare_exchange(ptr, oldval, newval));
+    }
+    while(!done);
+    return oldval;
+  }
+
+  template<typename T>
+  T atomic_maxnum(T* ptr, T val) {
+    bool done = false;
+    T oldval;
+    do {
+      oldval = Kokkos::atomic_load(ptr);
+      T newval = Kokkos::isnan(oldval) ? update : Kokkos::max(oldval, update);
+      done = (oldval == Kokkos::atomic_compare_exchange(ptr, oldval, newval));
+    }
+    while(!done);
+    return oldval;
+  }
+
 } // namespace LAPIS
 
