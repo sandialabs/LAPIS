@@ -1,0 +1,130 @@
+#map = affine_map<(d0) -> (d0)>
+#map1 = affine_map<(d0, d1) -> (d0, d1)>
+#map2 = affine_map<(d0, d1) -> (d1)>
+#map3 = affine_map<(d0, d1) -> (d0)>
+#map4 = affine_map<(d0) -> ()>
+#sparse = #sparse_tensor.encoding<{ map = (d0, d1) -> (d0 : dense, d1 : compressed), posWidth = 32, crdWidth = 32 }>
+module {
+  func.func @axpby_axpby_0(%arg0: f64, %arg1: tensor<?xf64>, %arg2: f64, %arg3: tensor<?xf64>, %arg4: tensor<?xf64>, %arg5: f64, %arg6: tensor<?xf64>) -> (tensor<?xf64>, tensor<?xf64>) {
+    %0 = linalg.generic {indexing_maps = [#map, #map, #map], iterator_types = ["parallel"]} ins(%arg1, %arg3 : tensor<?xf64>, tensor<?xf64>) outs(%arg1 : tensor<?xf64>) {
+    ^bb0(%in: f64, %in_0: f64, %out: f64):
+      %2 = arith.mulf %in, %arg0 : f64
+      %3 = arith.mulf %in_0, %arg2 : f64
+      %4 = arith.addf %2, %3 : f64
+      linalg.yield %4 : f64
+    } -> tensor<?xf64>
+    %1 = linalg.generic {indexing_maps = [#map, #map, #map], iterator_types = ["parallel"]} ins(%arg4, %arg6 : tensor<?xf64>, tensor<?xf64>) outs(%arg4 : tensor<?xf64>) {
+    ^bb0(%in: f64, %in_0: f64, %out: f64):
+      %2 = arith.mulf %in, %arg0 : f64
+      %3 = arith.mulf %in_0, %arg5 : f64
+      %4 = arith.addf %2, %3 : f64
+      linalg.yield %4 : f64
+    } -> tensor<?xf64>
+    return %0, %1 : tensor<?xf64>, tensor<?xf64>
+  }
+  func.func @spmv_dot_0(%arg0: tensor<?x?xf64, #sparse>, %arg1: tensor<?xf64>, %arg2: tensor<?xf64>) -> (tensor<?xf64>, f64) {
+    %0 = linalg.generic {indexing_maps = [#map1, #map2, #map3], iterator_types = ["parallel", "reduction"]} ins(%arg0, %arg1 : tensor<?x?xf64, #sparse>, tensor<?xf64>) outs(%arg2 : tensor<?xf64>) {
+    ^bb0(%in: f64, %in_0: f64, %out: f64):
+      %3 = arith.mulf %in, %in_0 : f64
+      %4 = arith.addf %out, %3 : f64
+      linalg.yield %4 : f64
+    } -> tensor<?xf64>
+    %1 = tensor.empty() : tensor<f64>
+    %2 = linalg.generic {indexing_maps = [#map, #map, #map4], iterator_types = ["reduction"]} ins(%0, %arg1 : tensor<?xf64>, tensor<?xf64>) outs(%1 : tensor<f64>) {
+    ^bb0(%in: f64, %in_0: f64, %out: f64):
+      %3 = arith.mulf %in, %in_0 : f64
+      %4 = arith.addf %out, %3 : f64
+      linalg.yield %4 : f64
+    } -> tensor<f64>
+    %extracted = tensor.extract %2[] : tensor<f64>
+    return %0, %extracted : tensor<?xf64>, f64
+  }
+  func.func @pcg(%arg0: tensor<?x?xf64, #sparse>, %arg1: tensor<?xf64>, %arg2: tensor<?xf64>, %arg3: f64, %arg4: index) -> (tensor<?xf64>, index, f64) {
+    %cst = arith.constant 1.000000e+00 : f64
+    %cst_0 = arith.constant 0.000000e+00 : f64
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %dim = tensor.dim %arg1, %c0 : tensor<?xf64>
+    %0 = tensor.empty(%dim) : tensor<?xf64>
+    %1 = tensor.empty(%dim) : tensor<?xf64>
+    %2 = tensor.empty(%dim) : tensor<?xf64>
+    %3 = linalg.generic {indexing_maps = [#map, #map], iterator_types = ["parallel"]} ins(%arg1 : tensor<?xf64>) outs(%0 : tensor<?xf64>) {
+    ^bb0(%in: f64, %out: f64):
+      linalg.yield %in : f64
+    } -> tensor<?xf64>
+    %4 = linalg.generic {indexing_maps = [#map, #map, #map], iterator_types = ["parallel"]} ins(%3, %arg2 : tensor<?xf64>, tensor<?xf64>) outs(%1 : tensor<?xf64>) {
+    ^bb0(%in: f64, %in_1: f64, %out: f64):
+      %11 = arith.mulf %in, %in_1 : f64
+      linalg.yield %11 : f64
+    } -> tensor<?xf64>
+    %5 = linalg.generic {indexing_maps = [#map, #map], iterator_types = ["parallel"]} ins(%4 : tensor<?xf64>) outs(%2 : tensor<?xf64>) {
+    ^bb0(%in: f64, %out: f64):
+      linalg.yield %in : f64
+    } -> tensor<?xf64>
+    %splat = tensor.splat %cst_0[%dim] : tensor<?xf64>
+    %6 = tensor.empty(%dim) : tensor<?xf64>
+    %7 = tensor.empty() : tensor<f64>
+    %8 = linalg.generic {indexing_maps = [#map, #map, #map4], iterator_types = ["reduction"]} ins(%3, %3 : tensor<?xf64>, tensor<?xf64>) outs(%7 : tensor<f64>) {
+    ^bb0(%in: f64, %in_1: f64, %out: f64):
+      %11 = arith.mulf %in, %in_1 : f64
+      %12 = arith.addf %out, %11 : f64
+      linalg.yield %12 : f64
+    } -> tensor<f64>
+    %extracted = tensor.extract %8[] : tensor<f64>
+    %9 = math.sqrt %extracted : f64
+    %10:7 = scf.while (%arg5 = %splat, %arg6 = %5, %arg7 = %4, %arg8 = %3, %arg9 = %c1) : (tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, index) -> (tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, f64, f64, index) {
+      %11:2 = func.call @spmv_dot_0(%arg0, %arg6, %6) {noinline} : (tensor<?x?xf64, #sparse>, tensor<?xf64>, tensor<?xf64>) -> (tensor<?xf64>, f64)
+      %12 = tensor.empty() : tensor<f64>
+      %13 = linalg.generic {indexing_maps = [#map, #map, #map4], iterator_types = ["reduction"]} ins(%arg8, %arg7 : tensor<?xf64>, tensor<?xf64>) outs(%12 : tensor<f64>) {
+      ^bb0(%in: f64, %in_3: f64, %out: f64):
+        %24 = arith.mulf %in, %in_3 : f64
+        %25 = arith.addf %out, %24 : f64
+        linalg.yield %25 : f64
+      } -> tensor<f64>
+      %extracted_1 = tensor.extract %13[] : tensor<f64>
+      %14 = arith.divf %extracted_1, %11#1 : f64
+      %15 = arith.negf %14 : f64
+      %16:2 = func.call @axpby_axpby_0(%cst, %arg5, %14, %arg6, %arg8, %15, %11#0) {noinline} : (f64, tensor<?xf64>, f64, tensor<?xf64>, tensor<?xf64>, f64, tensor<?xf64>) -> (tensor<?xf64>, tensor<?xf64>)
+      %17 = tensor.empty() : tensor<f64>
+      %18 = linalg.generic {indexing_maps = [#map, #map, #map4], iterator_types = ["reduction"]} ins(%16#1, %16#1 : tensor<?xf64>, tensor<?xf64>) outs(%17 : tensor<f64>) {
+      ^bb0(%in: f64, %in_3: f64, %out: f64):
+        %24 = arith.mulf %in, %in_3 : f64
+        %25 = arith.addf %out, %24 : f64
+        linalg.yield %25 : f64
+      } -> tensor<f64>
+      %extracted_2 = tensor.extract %18[] : tensor<f64>
+      %19 = math.sqrt %extracted_2 : f64
+      %20 = arith.divf %19, %9 : f64
+      %21 = arith.cmpf ogt, %20, %arg3 : f64
+      %22 = arith.cmpi ne, %arg9, %arg4 : index
+      %23 = arith.andi %21, %22 : i1
+      scf.condition(%23) %16#0, %arg6, %arg7, %16#1, %20, %extracted_1, %arg9 : tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, f64, f64, index
+    } do {
+    ^bb0(%arg5: tensor<?xf64>, %arg6: tensor<?xf64>, %arg7: tensor<?xf64>, %arg8: tensor<?xf64>, %arg9: f64, %arg10: f64, %arg11: index):
+      %11 = linalg.generic {indexing_maps = [#map, #map, #map], iterator_types = ["parallel"]} ins(%arg8, %arg2 : tensor<?xf64>, tensor<?xf64>) outs(%arg7 : tensor<?xf64>) {
+      ^bb0(%in: f64, %in_2: f64, %out: f64):
+        %17 = arith.mulf %in, %in_2 : f64
+        linalg.yield %17 : f64
+      } -> tensor<?xf64>
+      %12 = tensor.empty() : tensor<f64>
+      %13 = linalg.generic {indexing_maps = [#map, #map, #map4], iterator_types = ["reduction"]} ins(%arg8, %11 : tensor<?xf64>, tensor<?xf64>) outs(%12 : tensor<f64>) {
+      ^bb0(%in: f64, %in_2: f64, %out: f64):
+        %17 = arith.mulf %in, %in_2 : f64
+        %18 = arith.addf %out, %17 : f64
+        linalg.yield %18 : f64
+      } -> tensor<f64>
+      %extracted_1 = tensor.extract %13[] : tensor<f64>
+      %14 = arith.divf %extracted_1, %arg10 : f64
+      %15 = linalg.generic {indexing_maps = [#map, #map, #map], iterator_types = ["parallel"]} ins(%11, %arg6 : tensor<?xf64>, tensor<?xf64>) outs(%arg6 : tensor<?xf64>) {
+      ^bb0(%in: f64, %in_2: f64, %out: f64):
+        %17 = arith.mulf %in_2, %14 : f64
+        %18 = arith.addf %in, %17 : f64
+        linalg.yield %18 : f64
+      } -> tensor<?xf64>
+      %16 = arith.addi %arg11, %c1 : index
+      scf.yield %arg5, %15, %11, %arg8, %16 : tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, index
+    }
+    return %10#0, %10#6, %10#4 : tensor<?xf64>, index, f64
+  }
+}
+

@@ -54,6 +54,8 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 
+#include "Transform/Kernel/KernelPasses.h"
+
 using namespace mlir;
 
 int main(int argc, char **argv) {
@@ -63,7 +65,7 @@ int main(int argc, char **argv) {
   DialectRegistry registry;
   registry.insert<
 #ifdef LAPIS_ENABLE_PART_TENSOR
-      mlir::part_tensor::PartTensorDialect, 
+      mlir::part_tensor::PartTensorDialect,
 #endif
       mlir::LLVM::LLVMDialect, mlir::vector::VectorDialect,
       mlir::bufferization::BufferizationDialect, mlir::linalg::LinalgDialect,
@@ -93,6 +95,10 @@ int main(int argc, char **argv) {
   tensor::registerTilingInterfaceExternalModels(registry);
   tensor::registerValueBoundsOpInterfaceExternalModels(registry);
   vector::registerBufferizableOpInterfaceExternalModels(registry);
+
+  kernel::registerKernelFusionDriver();
+  kernel::registerLinalgGenericReorderingPass();
+  kernel::registerKernelDomainFusionPass();
 
   LLVM::registerInlinerInterface(registry);
   func::registerAllExtensions(registry);
