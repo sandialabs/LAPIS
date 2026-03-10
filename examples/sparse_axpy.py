@@ -85,9 +85,7 @@ def check_axpy(module_kokkos, v1_pos, v1_inds, v1_vals, v2_pos, v2_inds, v2_vals
         print("Result crd:", result_crd)
         print("Result val:", result_val)
     print("Test case result:")
-    # Alternate way to print sparse vector, using sparse_tensor.print op
-    #module_kokkos.print_sparse_vec(result)
-    result = module_kokkos.sparse_to_dense(result)
+    result = module_kokkos.sparse_to_dense(result).asnumpy()
     if correct_nnz != actual_nnz:
         print("Failed: result nonzero count incorrect")
         return False

@@ -69,7 +69,7 @@ def main():
     module_kokkos.print_dcsr(A_dcsr)
     [result, rank, nnz] = module_kokkos.column_sums(A_dcsr)
     # Convert the sparse vector result to dense to check the output
-    result_dense = module_kokkos.sparse_vec_to_dense(result)
+    result_dense = module_kokkos.sparse_vec_to_dense(result).asnumpy()
     print("Results:        ", rank, nnz, result_dense)
     print("Correct result: ", 1, gold_nnz, gold)
 

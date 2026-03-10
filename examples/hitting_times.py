@@ -216,6 +216,7 @@ def main():
     (mom1, mom2) = module_kokkos.mht(A.indptr, A.indices, A.data, ((n, n), (n + 1, nnz, nnz)), mask, D, 0.99, 1e-10, 20)
     # Normalize 2nd moment
     mom2_norm = module_kokkos.normalize_mom2(mom1, mom2)
+    mom1, mom2_norm = mom1.asnumpy(), mom2_norm.asnumpy()
     print("1st moment:", mom1)
     print("2nd moment:", mom2_norm)
     mom1_gold = [9.9999999999999957e+01, 9.9999999999999957e+01, 1.9947875961498600e+01, 0, 1.8542105566249749e+01, 1.9909372734041774e+01, 9.9999999999999957e+01, 1.9970947033662114e+01, 2.0196661010469668e+01, 1.4624345260746775e+01, 1.8252877036565582e+01, 1.9213516388393590e+01]

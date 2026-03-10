@@ -57,16 +57,16 @@ module {
     %f1 = arith.constant 1.0 : f64
     %fm1 = arith.constant -1.0 : f64
     // Preallocate some intermediate tensors for dst-passing style
-    %buf0 = tensor.empty(%n) : tensor<?xf64>
-    %buf1 = tensor.empty(%n) : tensor<?xf64>
-    %buf2 = tensor.empty(%n) : tensor<?xf64>
+    %buf0 = tensor.splat %f0[%n] : tensor<?xf64>
+    %buf1 = tensor.splat %f0[%n] : tensor<?xf64>
+    %buf2 = tensor.splat %f0[%n] : tensor<?xf64>
     // Assume initial guess x0 = 0
     // Then r0 = b - A*x0 = b
     %r0 = linalg.copy ins(%b : tensor<?xf64>) outs(%buf0 : tensor<?xf64>) -> tensor<?xf64>
     %z0 = func.call @mult(%r0, %dinv, %buf1) : (tensor<?xf64>, tensor<?xf64>, tensor<?xf64>) -> tensor<?xf64>
     %p0 = linalg.copy ins(%z0 : tensor<?xf64>) outs(%buf2 : tensor<?xf64>) -> tensor<?xf64>
     %x0 = tensor.splat %f0[%n] : tensor<?xf64>
-    %Apbuf = tensor.empty(%n) : tensor<?xf64>
+    %Apbuf = tensor.splat %f0[%n] : tensor<?xf64>
     %rr0 = func.call @dot(%r0, %r0) : (tensor<?xf64>, tensor<?xf64>) -> f64
     %initres = math.sqrt %rr0 : f64
     %x, %p, %z, %r, %final_relres, %rz, %iters = scf.while (%xiter = %x0, %piter = %p0, %ziter = %z0, %riter = %r0, %rziter = %f0, %i = %c1) : (tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, f64, index) -> (tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, f64, f64, index)
@@ -122,11 +122,16 @@ def main():
     maxiter = 40
 
     backend = KokkosBackend.KokkosBackend(decompose_tensors=True)
-    module_kokkos = backend.compile(moduleText)
+    should_compile = True
+    if should_compile:
+        module_kokkos = backend.compile(moduleText)
+    else:
+        import lapis_package.lapis_package as module_kokkos
 
     print("x exact solution (first 10 elements):", xgold[:10])
 
     (x, numiter, relres) = module_kokkos.pcg(A.indptr, A.indices, A.data, ((n, n), (n + 1, nnz, nnz)), b, dinv, reltol, maxiter)
+    x = x.asnumpy()
     print("Ran CG for", numiter, "iterations and achieved relative residual norm", relres)
     print("x vector from LAPIS (first 10 elements):", x[:10])
 
