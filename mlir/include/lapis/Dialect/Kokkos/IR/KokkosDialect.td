@@ -252,7 +252,7 @@ def ModifyOp : Kokkos_Op<"modify"> {
   let hasFolder = 0;
 }
 
-def SingleOp : Kokkos_Op<"single", [SingleBlockImplicitTerminator<"kokkos::YieldOp">, RecursiveMemoryEffects, NoRegionArguments, InferTypeOpAdaptor]> {
+def SingleOp : Kokkos_Op<"single", [SingleBlockImplicitTerminator<"kokkos::YieldOp">, RecursiveMemoryEffects, NoRegionArguments]> {
   let summary = "Restricts a block to execute exactly once per team or per thread";
   let description = [{
     "Restricts a block to execute exactly once per team or per thread"

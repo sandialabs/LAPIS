@@ -681,6 +681,7 @@ static LogicalResult insertSingleWraps(RewriterBase &rewriter,
                                        Region& region) {
   region.walk<WalkOrder::PostOrder>([&](Operation *op) {
     if (opNeedsSingle(op)) {
+      auto oldIP = rewriter.saveInsertionPoint();
       rewriter.setInsertionPoint(op);
       if (inTeamLoop(op) && !inThreadLoop(op)) {
         // op needs to be in PerTeam single
@@ -703,6 +704,7 @@ static LogicalResult insertSingleWraps(RewriterBase &rewriter,
                                          singleWrappedOp->getResults());
         rewriter.replaceOp(op, single);
       }
+      rewriter.restoreInsertionPoint(oldIP);
       return WalkResult::skip();
     }
     return WalkResult::advance();
