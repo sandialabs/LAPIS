@@ -2115,7 +2115,12 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::SingleOp 
     }
   }
   emitter.ostream().unindent();
-  emitter << "})";
+  emitter << "}";
+  // Finally, pass a reference to each output for receiving broadcasted values.
+  for(Value result : op->getResults()) {
+    emitter << ", " << emitter.getOrCreateName(result);
+  }
+  emitter << ")";
   return success();
 }
 
