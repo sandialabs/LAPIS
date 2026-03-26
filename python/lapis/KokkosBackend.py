@@ -172,8 +172,9 @@ class KokkosBackend:
             print("== After forward mode AD: ==")
             print(moduleText)
         # Finish lowering to Kokkos
+        # NOTE: re-run the whole pipeline since Enzyme introduces new linalg ops that must be lowered to scf.
         try:
-            moduleText = self.run_cli("lapis-opt", ['--sparse-compiler-kokkos-post-ad'], moduleText)
+            moduleText = self.run_cli("lapis-opt", ['--sparse-compiler-kokkos'], moduleText)
         except:
             raise Exception("Lowering to Kokkos dialect failed.")
         if self.dump_mlir:
@@ -240,7 +241,7 @@ class KokkosBackend:
             print(moduleText)
         # Finish lowering to Kokkos
         try:
-            moduleText = self.run_cli("lapis-opt", ['--sparse-compiler-kokkos-post-ad'], moduleText)
+            moduleText = self.run_cli("lapis-opt", ['--sparse-compiler-kokkos'], moduleText)
         except:
             raise Exception("Lowering to Kokkos dialect failed.")
         if self.dump_mlir:
