@@ -436,21 +436,6 @@ kokkos::UpdateReductionOp ThreadParallelOp::getReduction() {
   return nullptr;
 }
 
-// ********* //
-//  SingleOp //
-// ********* //
-
-LogicalResult mlir::kokkos::SingleOp::inferReturnTypes(
-    MLIRContext *context, std::optional<Location> location,
-    SingleOp::Adaptor adaptor, SmallVectorImpl<Type> &inferredReturnTypes) {
-  // Return types are identical to operand types:
-  // arguments on executing thread are broadcast to the rest of the team or
-  // thread
-  for (auto arg : adaptor.getOperands())
-    inferredReturnTypes.push_back(arg.getType());
-  return success();
-}
-
 // ******************** //
 //  UpdateReductionOp   //
 // ******************** //
