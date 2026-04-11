@@ -10,7 +10,7 @@ from shutil import which
 class KokkosBackend:
     """Main entry-point for the Kokkos backend for linalg-on-tensors dense/sparse code."""
 
-    def __init__(self, decompose_tensors = False, parallel_strategy="any-storage-any-loop", dump_mlir = False, index_instance=0, num_instances=0, ws = os.getcwd()):
+    def __init__(self, decompose_tensors = False, parallel_strategy="any-storage-any-loop", dump_mlir = False, index_instance=0, num_instances=0, ws = os.getcwd(), package_name="lapis_package", release_type="Debug"):
         super().__init__()
         self.dump_mlir = dump_mlir
         self.ws = ws
@@ -18,10 +18,11 @@ class KokkosBackend:
         self.num_instances = num_instances
         self.decompose_tensors = decompose_tensors
         self.parallel_strategy = parallel_strategy
+        self.release_type = release_type
         if self.index_instance == 0:
-            self.package_name = "lapis_package"
+            self.package_name = package_name
         else:
-            self.package_name = "lapis_package_" + str(self.index_instance)
+            self.package_name = package_name + "_" + str(self.index_instance)
 
     def compile_kokkos_to_native(self, moduleRoot, linkSparseSupportLib):
         # Now that we have a Kokkos source file, generate the CMake to build it into a shared lib,
@@ -62,7 +63,7 @@ class KokkosBackend:
             cmake.write("target_link_libraries(" + self.package_name + "_module " + support_lib + ")\n")
         cmake.close()
         # Now configure the project and build the shared library from the build dir
-        subprocess.run(['cmake', "-DCMAKE_CXX_EXTENSIONS=OFF", "-DCMAKE_BUILD_TYPE=Debug", moduleRoot], cwd=buildDir)
+        subprocess.run(['cmake', "-DCMAKE_CXX_EXTENSIONS=OFF", "-DCMAKE_BUILD_TYPE=" + self.release_type , moduleRoot], cwd=buildDir)
         buildOut = subprocess.run(['make'], cwd=buildDir, shell=True)
         sys.path.insert(0, moduleRoot)
         lapis = __import__(self.package_name)
