@@ -1276,8 +1276,8 @@ static MemrefInductionCosts get_costs(Memref &memrefOp, IterationSpaceExprs &tri
 
     MDRANGE_DEBUG("====\nModel Reordered Induction variables\n====\n");  
     // ParallelConfig, size_t
-    auto [bestCfg, bestCost] = best_configuration(unknowns, costTable, mod);
-    
+    auto [bestCfg2, bestCost] = best_configuration(unknowns, costTable, mod);
+    auto& bestCfg = bestCfg2;
 
     MDRANGE_DEBUG("min cost: " << bestCost << "\n");
 
