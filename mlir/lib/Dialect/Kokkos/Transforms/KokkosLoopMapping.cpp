@@ -414,43 +414,46 @@ static LogicalResult scfParallelToSequential(scf::ForOp &newOp,
 // - with >1 operands: TODO, multiple reductions, not supported yet by Kokkos IR
 // but will be in future
 static LogicalResult inlineLoopBodyOp(RewriterBase &rewriter, Operation *op,
-                                      IRMapping &irMap, Value reduceIdentity) {
+                                      IRMapping &irMap, ValueRange reduceInits) {
   if (scf::ReduceOp reduce = dyn_cast<scf::ReduceOp>(op)) {
     int numReductions = reduce->getNumOperands();
-    if (numReductions > 1)
-      return reduce->emitError(
-          "Currently cannot lower scf::ReduceOp with >1 reductions.");
     if (numReductions == 0) {
       // Simple terminator, does nothing
       // The terminator for the new Kokkos loop (kokkos.yield) is automatically
       // inserted already
       return success();
     }
-    // TODO: support multiple reductions here!
+    SmallVector<Value> updatesAndInits;
+    for(auto update : reduce.getOperands()) {
+      updatesAndInits.push_back(irMap.lookupOrDefault(update));
+    }
+    for(auto init : reduceInits) {
+      updatesAndInits.push_back(irMap.lookupOrDefault(init));
+    }
     kokkos::UpdateReductionOp newReduce =
         rewriter.create<kokkos::UpdateReductionOp>(
-            reduce->getLoc(), irMap.lookupOrDefault(reduce.getOperand(0)),
-            irMap.lookupOrDefault(reduceIdentity));
-    // Map (old to new) the two reduce block arguments
-    Block &oldReduceBlock = reduce.getReductions()[0].front();
-    Block &newReduceBlock = newReduce.getReductionOperator().front();
-    for (auto p : llvm::zip(oldReduceBlock.getArguments(),
-                            newReduceBlock.getArguments())) {
-      irMap.map(std::get<0>(p), std::get<1>(p));
-    }
+            reduce->getLoc(), updatesAndInits);
     auto ip = rewriter.saveInsertionPoint();
-    rewriter.setInsertionPointToStart(
-        &newReduce.getReductionOperator().front());
-    for (Operation &oldOp : oldReduceBlock.getOperations()) {
-      if (scf::ReduceReturnOp reduceReturn =
-              dyn_cast<scf::ReduceReturnOp>(oldOp)) {
-        // this is not a result of reduce return; the operand of reduceReturn is
-        // actually named "result"
-        rewriter.create<kokkos::YieldOp>(
-            reduceReturn.getLoc(),
-            irMap.lookupOrDefault(reduceReturn.getOperand()));
-      } else {
-        rewriter.clone(oldOp, irMap);
+    // Map (old to new) the two reduce block arguments
+    for(int i = 0; i < numReductions; i++) {
+      Block &oldReduceBlock = reduce.getReductions()[i].front();
+      Block &newReduceBlock = newReduce.getBody(i);
+      for (auto p : llvm::zip(oldReduceBlock.getArguments(),
+                              newReduceBlock.getArguments())) {
+        irMap.map(std::get<0>(p), std::get<1>(p));
+      }
+      rewriter.setInsertionPointToStart(&newReduceBlock);
+      for (Operation &oldOp : oldReduceBlock.getOperations()) {
+        if (scf::ReduceReturnOp reduceReturn =
+                dyn_cast<scf::ReduceReturnOp>(oldOp)) {
+          // this is not a result of reduce return; the operand of reduceReturn is
+          // actually named "result"
+          rewriter.create<kokkos::YieldOp>(
+              reduceReturn.getLoc(),
+              irMap.lookupOrDefault(reduceReturn.getOperand()));
+        } else {
+          rewriter.clone(oldOp, irMap);
+        }
       }
     }
     rewriter.restoreInsertionPoint(ip);
@@ -460,7 +463,7 @@ static LogicalResult inlineLoopBodyOp(RewriterBase &rewriter, Operation *op,
   return success();
 }
 
-// Rewrite the given scf.parallel as a kokkos.parallel, with the given execution
+// Rewrite the given scf.parallel as a kokkos.range_parallel, with the given execution
 // space and nesting level (not for TeamPolicy loops) Return the new op, or NULL
 // if failed.
 static LogicalResult scfParallelToKokkosRange(kokkos::RangeParallelOp &newOp,
@@ -472,11 +475,9 @@ static LogicalResult scfParallelToKokkosRange(kokkos::RangeParallelOp &newOp,
   // If the loop has a reduction, reduceIdentity gives its identity element
   // and resultTypes contains its type. Otherwise, they are nullptr and empty
   // respectively.
-  Value reduceIdentity = nullptr;
   SmallVector<Type> resultTypes;
-  if (op.getInitVals().size()) {
-    reduceIdentity = op.getInitVals().front();
-    resultTypes.push_back(reduceIdentity.getType());
+  for(auto init : op.getInitVals()) {
+    resultTypes.push_back(init.getType());
   }
   // Create the kokkos.parallel but don't populate the body yet
   auto kokkosRange = rewriter.create<kokkos::RangeParallelOp>(
@@ -491,7 +492,7 @@ static LogicalResult scfParallelToKokkosRange(kokkos::RangeParallelOp &newOp,
     irMap.map(std::get<0>(p), std::get<1>(p));
   }
   for (Operation &oldOp : op.getBody()->getOperations()) {
-    auto result = inlineLoopBodyOp(rewriter, &oldOp, irMap, reduceIdentity);
+    auto result = inlineLoopBodyOp(rewriter, &oldOp, irMap, op.getInitVals());
     if (failed(result))
       return result;
   }
@@ -519,11 +520,9 @@ static LogicalResult scfParallelToKokkosTeam(kokkos::TeamParallelOp &newOp,
   // If the loop has a reduction, reduceIdentity gives its identity element
   // and resultTypes contains its type. Otherwise, they are nullptr and empty
   // respectively.
-  Value reduceIdentity = nullptr;
   SmallVector<Type> resultTypes;
-  if (op.getInitVals().size()) {
-    reduceIdentity = op.getInitVals().front();
-    resultTypes.push_back(reduceIdentity.getType());
+  for(auto init : op.getInitVals()) {
+    resultTypes.push_back(init.getType());
   }
   // Create the kokkos.parallel but don't populate the body yet
   auto kokkosTeam = rewriter.create<kokkos::TeamParallelOp>(
@@ -563,7 +562,7 @@ static LogicalResult scfParallelToKokkosTeam(kokkos::TeamParallelOp &newOp,
     }
   }
   for (Operation &oldOp : op.getBody()->getOperations()) {
-    auto result = inlineLoopBodyOp(rewriter, &oldOp, irMap, reduceIdentity);
+    auto result = inlineLoopBodyOp(rewriter, &oldOp, irMap, op.getInitVals());
     if (failed(result))
       return result;
   }
@@ -591,11 +590,9 @@ static LogicalResult scfParallelToKokkosThread(kokkos::ThreadParallelOp &newOp,
   // If the loop has a reduction, reduceIdentity gives its identity element
   // and resultTypes contains its type. Otherwise, they are nullptr and empty
   // respectively.
-  Value reduceIdentity = nullptr;
   SmallVector<Type> resultTypes;
-  if (op.getInitVals().size()) {
-    reduceIdentity = op.getInitVals().front();
-    resultTypes.push_back(reduceIdentity.getType());
+  for(auto init : op.getInitVals()) {
+    resultTypes.push_back(init.getType());
   }
   // Create the kokkos.parallel but don't populate the body yet
   auto kokkosThread = rewriter.create<kokkos::ThreadParallelOp>(
@@ -635,7 +632,7 @@ static LogicalResult scfParallelToKokkosThread(kokkos::ThreadParallelOp &newOp,
     }
   }
   for (Operation &oldOp : op.getBody()->getOperations()) {
-    auto result = inlineLoopBodyOp(rewriter, &oldOp, irMap, reduceIdentity);
+    auto result = inlineLoopBodyOp(rewriter, &oldOp, irMap, op.getInitVals());
     if (failed(result))
       return result;
   }

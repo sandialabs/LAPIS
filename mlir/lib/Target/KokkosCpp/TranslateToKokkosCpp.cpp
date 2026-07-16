@@ -178,14 +178,9 @@ struct KokkosCppEmitter {
     *this << "auto " << name << "_h = " << name << ".host_view();\n";
   }
 
-  /// Given a reduction result, join it with the initial value.
-  /// Since Kokkos always initializes reduction results with the
-  /// identity, we have to do this after the reduction is computed.
-  /// Precondition: result already contains the result of parallel_reduce.
-  LogicalResult joinReductionInit(Value result, kokkos::UpdateReductionOp);
-
-  /// Whether to map an mlir integer to a unsigned integer in C++.
-  bool shouldMapToUnsigned(IntegerType::SignednessSemantics val);
+  /// Given one or more reduction results, join them with their initial
+  /// value (passed to scf.parallel originally) if not equal to the Kokkos reduction identity.
+  LogicalResult joinReductionInits(ValueRange result, kokkos::UpdateReductionOp);
 
   /// RAII helper function to manage entering/exiting C++ scopes.
   struct Scope {
@@ -361,6 +356,19 @@ public:
   void ensureTypeDeclared(Location loc, Type t);
 };
 } // namespace
+
+/// Whether to map an mlir integer to a unsigned integer in C++.
+static bool shouldMapToUnsigned(IntegerType::SignednessSemantics val) {
+  switch (val) {
+  case IntegerType::Signless:
+    return false;
+  case IntegerType::Signed:
+    return false;
+  case IntegerType::Unsigned:
+    return true;
+  }
+  llvm_unreachable("Unexpected IntegerType::SignednessSemantics");
+}
 
 static LogicalResult printConstantOp(KokkosCppEmitter &emitter, Operation *operation,
                                      Attribute value) {
@@ -1592,34 +1600,95 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, scf::WhileOp whil
   return success();
 }
 
+static bool isKokkosReductionIdentity(std::string reduction, Value val) {
+  auto op = val.getDefiningOp();
+  if(auto cst = dyn_cast<arith::ConstantOp>(op)) {
+    Attribute attr = cst.getValueAttr();
+    if (auto fattr = dyn_cast<FloatAttr>(attr)) {
+      APFloat floatval = fattr.getValue();
+      if(reduction == "") {
+        // sum
+        return floatval.isZero();
+      }
+      else if(reduction == "Prod") {
+        return floatval.isExactlyValue(1.0);
+        // Change to this when LLVM is updated!
+        // return floatval.isOne();
+      }
+      else if(reduction == "Max") {
+        return floatval.isNegInfinity();
+      }
+      else if(reduction == "Min") {
+        return floatval.isPosInfinity();
+      }
+      return false;
+    }
+    else if (auto iattr = dyn_cast<IntegerAttr>(attr)) {
+      bool isUnsigned = false;
+      if(auto itype = dyn_cast<IntegerType>(iattr.getType())) {
+        isUnsigned = shouldMapToUnsigned(itype.getSignedness());
+      }
+      APInt intval = iattr.getValue();
+      if(reduction == "") {
+        // sum
+        return intval.isZero();
+      }
+      else if(reduction == "Prod") {
+        return intval.isOne();
+      }
+      else if(reduction == "Max") {
+        if(isUnsigned)
+          return intval.isMinValue(); // equivalent to isZero()
+        else
+          return intval.isMinSignedValue();
+      }
+      else if(reduction == "Min") {
+        if(isUnsigned)
+          return intval.isMaxValue();
+        else
+          return intval.isMaxSignedValue();
+      }
+      else if(reduction == "BAnd") {
+        return intval.isAllOnes();
+      }
+      else if(reduction == "BOr") {
+        return intval.isZero();
+      }
+      return false;
+    }
+  }
+  // val isn't a constant, or isn't an int/float type, so can't make any determination
+  return false;
+}
+
 // If the join represented by op is a built-in reducer in Kokkos, return true and set reduction to its
-// type in C++ (Kokkos::Prod, Kokkos::Min, etc). Otherwise return false.
-static bool isBuiltinReduction(std::string& reduction, kokkos::UpdateReductionOp op) {
-  // Built-in joins should have only two ops in the body: a binary arithmetic op of the two arguments, and a yield of that result.
-  // Note: all Kokkos built in reductions have commutative joins, so here we test for both permutations of the arguments as operands.
+// type name in C++ (Kokkos::Prod, Kokkos::Min, etc) or "" in the case of Sum.
+// Otherwise return false.
+static bool isBuiltinReduction(std::string& reduction, Block& join) {
+  // Built-in joins will have exactly two ops in the body: a binary arithmetic op on the two arguments, and a yield of that result.
+  // Note: all Kokkos built-in reductions have commutative joins, so here we test for both permutations of the arguments as operands.
   //
   // TODO! Check that op.getIdentity() matches the corresponding Kokkos reduction identity before returning true.
   // However, this should already match in all cases.
-  Region& body = op.getReductionOperator();
-  auto bodyArgs = body.getArguments();
-  if(bodyArgs.size() != 2)
+  auto joinArgs = join.getArguments();
+  if(joinArgs.size() != 2)
     return false;
-  Value arg1 = bodyArgs[0];
-  Value arg2 = bodyArgs[1];
-  SmallVector<Operation*> bodyOps;
-  for(Operation& op : body.getOps()) {
-    bodyOps.push_back(&op);
-    if(bodyOps.size() > 2)
+  Value arg1 = joinArgs[0];
+  Value arg2 = joinArgs[1];
+  SmallVector<Operation*> joinOps;
+  for(Operation& op : join.getOperations()) {
+    joinOps.push_back(&op);
+    if(joinOps.size() > 2)
       return false;
   }
-  Operation* op1 = bodyOps[0];
-  Operation* op2 = bodyOps[1];
+  Operation* op1 = joinOps[0];
+  Operation* op2 = joinOps[1];
   if(op1->getNumOperands() != 2 || op1->getNumResults() != 1)
     return false;
   // Is the second op a yield of the first op's result?
   if(!isa<kokkos::YieldOp>(op2) || op1->getResults()[0] != op2->getOperands()[0])
     return false;
-  // Does op1 take bodyArgs as its two operands?
+  // Does op1 take joinArgs as its two operands?
   if(!((op1->getOperands()[0] == arg1 && op1->getOperands()[1] == arg2)
       || (op1->getOperands()[0] == arg2 && op1->getOperands()[1] == arg1))) {
     return false;
@@ -1668,43 +1737,56 @@ static bool isBuiltinReduction(std::string& reduction, kokkos::UpdateReductionOp
   return false;
 }
 
-LogicalResult KokkosCppEmitter::joinReductionInit(Value result, kokkos::UpdateReductionOp op)
+LogicalResult KokkosCppEmitter::joinReductionInits(ValueRange results, kokkos::UpdateReductionOp op)
 {
-  Type type = result.getType();
-  std::string kokkosReducer;
-  (void) isBuiltinReduction(kokkosReducer, op);
-  // Name Sum explicitly here, since we have to declare a reducer instance
-  if(kokkosReducer == "")
-    kokkosReducer = "Kokkos::Sum";
-  auto resultName = getOrCreateName(result);
-  Value init = op.getIdentity();
-  *this << kokkosReducer << "<";
-  if(failed(emitType(op.getLoc(), type)))
-    return failure();
-  *this << "> " << resultName << "_joiner(" << resultName << ");\n";
-  *this << resultName << "_joiner.join(" << resultName << ", ";
-  if(failed(emitValue(init)))
-    return failure();
-  *this << ");\n";
+  int numReductions = op.getNumReductions();
+  for(int i = 0; i < numReductions; i++) {
+    Block& join = op.getBody(i);
+    Value init = op.getInit(i);
+    Type type = op.getReductionType(i);
+
+    std::string kokkosReducer;
+    bool isKokkosReduction = isBuiltinReduction(kokkosReducer, join);
+    if(!isKokkosReduction)
+      return op.emitError("LAPIS C++ emitter currently only supports built-in Kokkos reducers, not custom reducers");
+    if(!isKokkosReductionIdentity(kokkosReducer, init)) {
+      // init element is not the same as the reduction identity, so we have to join it with the final result.
+      // Name Sum explicitly here, since we have to declare a reducer instance.
+      if(kokkosReducer == "")
+        kokkosReducer = "Kokkos::Sum";
+      Value result = results[i];
+      auto resultName = getOrCreateName(result);
+      *this << kokkosReducer << "<";
+      if(failed(emitType(op.getLoc(), type)))
+        return failure();
+      *this << "> " << resultName << "_joiner(" << resultName << ");\n";
+      *this << resultName << "_joiner.join(" << resultName << ", ";
+      if(failed(emitValue(init)))
+        return failure();
+      *this << ");\n";
+    }
+  }
   return success();
 }
 
 static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::RangeParallelOp op) {
   // Declare any results (which can only be produced by reductions).
   // These don't need to be initialized.
-  bool isReduction = op.getNumReductions();
+  int numReductions = op.getNumReductions();
   for(Value result : op->getResults())
   {
     if(failed(emitter.emitType(op.getLoc(), result.getType())))
       return failure();
     emitter << ' ' << emitter.getOrCreateName(result) << ";\n";
   }
-  if(isReduction)
+  if(numReductions)
     emitter << "Kokkos::parallel_reduce";
   else
     emitter << "Kokkos::parallel_for";
   emitter << "(";
   bool isMDPolicy = op.getNumLoops() > 1;
+  // Does the Kokkos policy only support a single reducer and/or Sum as the reducer?
+  bool singleSumOnly = false;
   // Construct the policy, based on the level and iteration rank of op
   switch(op.getParallelLevel()) {
     case kokkos::ParallelLevel::RangePolicy:
@@ -1714,20 +1796,26 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::RangePara
         emitter << "Kokkos::RangePolicy";
       break;
     case kokkos::ParallelLevel::TeamVector:
-      if(isMDPolicy)
+      if(isMDPolicy) {
         emitter << "Kokkos::TeamVectorMDRange";
+        singleSumOnly = true;
+      }
       else
         emitter << "Kokkos::TeamVectorRange";
       break;
     case kokkos::ParallelLevel::TeamThread:
-      if(isMDPolicy)
+      if(isMDPolicy) {
         emitter << "Kokkos::TeamThreadMDRange";
+        singleSumOnly = true;
+      }
       else
         emitter << "Kokkos::TeamThreadRange";
       break;
     case kokkos::ParallelLevel::ThreadVector:
-      if(isMDPolicy)
+      if(isMDPolicy) {
         emitter << "Kokkos::ThreadVectorMDRange";
+        singleSumOnly = true;
+      }
       else
         emitter << "Kokkos::ThreadVectorRange";
       break;
@@ -1801,12 +1889,13 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::RangePara
     emitter << ' ' << emitter.getOrCreateName(iv);
   }
   int depth = kokkos::getOpParallelDepth(op) - 1;
-  if(isReduction) {
+  if(numReductions) {
+    int count = 0;
     for(Value result : op->getResults()) {
       emitter << ", ";
       if(failed(emitter.emitType(op.getLoc(), result.getType())))
         return failure();
-      emitter << "& lreduce" << depth;
+      emitter << "& lreduce" << depth << "_" << count++;
     }
   }
   emitter << ") {\n";
@@ -1818,25 +1907,35 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::RangePara
   }
   emitter.ostream().unindent();
   emitter << "}";
-  if(isReduction) {
-    // Determine what kind of reduction is being done, if any
+  if(singleSumOnly && numReductions > 1) {
+    return op.emitError("Kokkos does not support multiple reducers for nested MDRange policies");
+  }
+  if(numReductions) {
     kokkos::UpdateReductionOp reduction = op.getReduction();
     if(!reduction)
       return op.emitError("Could not find UpdateReductionOp inside parallel op with result(s)");
-    std::string kokkosReducer;
-    if(!isBuiltinReduction(kokkosReducer, reduction))
-      return op.emitError("Do not yet support non-builtin reducers");
-    Value result = op.getResults()[0];
-    // Pass in reducer arguments to parallel_reduce
-    emitter << ", ";
-    if(kokkosReducer != "") {
-      emitter << kokkosReducer << "<";
-      if(failed(emitter.emitType(op.getLoc(), result.getType())))
-        return failure();
-      emitter << ">";
+    for(int i = 0; i < numReductions; i++) {
+      std::string kokkosReducer;
+      if(!isBuiltinReduction(kokkosReducer, reduction.getBody(i)))
+        return op.emitError("LAPIS currently does not support custom reducers");
+      if(singleSumOnly && kokkosReducer != "")
+        return op.emitError("Kokkos does not support non-Sum reducers for nested MDRange policies");
+      Value result = op.getResults()[i];
+      // Pass in reducer arguments to parallel_reduce
+      emitter << ", ";
+      if(kokkosReducer != "") {
+        emitter << kokkosReducer << "<";
+        if(failed(emitter.emitType(op.getLoc(), result.getType())))
+          return failure();
+        emitter << ">(";
+      }
+      emitter << emitter.getOrCreateName(result);
+      if(kokkosReducer != "") {
+        emitter << ")";
+      }
     }
-    emitter << "(" << emitter.getOrCreateName(result) << "));\n";
-    if(failed(emitter.joinReductionInit(result, op.getReduction())))
+    emitter << ");\n";
+    if(failed(emitter.joinReductionInits(op.getResults(), op.getReduction())))
       return failure();
   }
   else
@@ -1847,7 +1946,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::RangePara
 static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::TeamParallelOp op) {
   // Declare any results (which can only be produced by reductions).
   // These don't need to be initialized.
-  bool isReduction = op.getNumReductions();
+  bool numReductions = op.getNumReductions();
   for(Value result : op->getResults())
   {
     if(failed(emitter.emitType(op.getLoc(), result.getType())))
@@ -1858,14 +1957,15 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::TeamParal
   // First, declare the lambda.
   emitter << "auto " << lambda << " = \n";
   emitter << "KOKKOS_LAMBDA(const LAPIS::TeamMember& team";
-  if(isReduction) {
+  if(numReductions) {
     if(op->getNumResults() > 1)
       return op.emitError("Currently, can only handle 1 reducer per parallel");
+    int count = 0;
     for(Value result : op->getResults()) {
       emitter << ", ";
       if(failed(emitter.emitType(op.getLoc(), result.getType())))
         return failure();
-      emitter << "& lreduce0";
+      emitter << "& lreduce0_" << count++;
     }
   }
   emitter << ") {\n";
@@ -1910,7 +2010,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::TeamParal
   // Team size hint was given, so just cap it at team_size_max
   emitter << teamSize << " = Kokkos::min<size_t>(" << teamSize << ", ";
   emitter << "LAPIS::TeamPolicy(1, 1, " << vectorLength << ").team_size_max(" << lambda << ", ";
-  if(isReduction)
+  if(numReductions)
     emitter << "Kokkos::ParallelReduceTag{}";
   else
     emitter << "Kokkos::ParallelForTag{}";
@@ -1921,7 +2021,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::TeamParal
   emitter.ostream().indent();
   emitter << teamSize << " = ";
   emitter << "LAPIS::TeamPolicy(1, 1, " << vectorLength << ").team_size_recommended(" << lambda << ", ";
-  if(isReduction)
+  if(numReductions)
     emitter << "Kokkos::ParallelReduceTag{}";
   else
     emitter << "Kokkos::ParallelForTag{}";
@@ -1929,7 +2029,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::TeamParal
   emitter.ostream().unindent();
   emitter << "}\n";
   // Finally, launch the lambda with the correct policy.
-  if(isReduction)
+  if(numReductions)
     emitter << "Kokkos::parallel_reduce";
   else
     emitter << "Kokkos::parallel_for";
@@ -1937,25 +2037,29 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::TeamParal
   if(failed(emitter.emitValue(op.getLeagueSize())))
     return failure();
   emitter << ", " << teamSize << ", " << vectorLength << "), " << lambda;
-  if(isReduction) {
-    // Determine what kind of reduction is being done, if any
+  if(numReductions) {
     kokkos::UpdateReductionOp reduction = op.getReduction();
     if(!reduction)
       return op.emitError("Could not find UpdateReductionOp inside parallel op with result(s)");
-    std::string kokkosReducer;
-    if(!isBuiltinReduction(kokkosReducer, reduction))
-      return op.emitError("Do not yet support non-builtin reducers");
-    Value result = op.getResults()[0];
-    // Pass in reducer arguments to parallel_reduce
-    emitter << ", ";
-    if(kokkosReducer != "") {
-      emitter << kokkosReducer << "<";
-      if(failed(emitter.emitType(op.getLoc(), result.getType())))
-        return failure();
-      emitter << ">";
+    for(int i = 0; i < numReductions; i++) {
+      std::string kokkosReducer;
+      if(!isBuiltinReduction(kokkosReducer, reduction.getBody(i)))
+        return op.emitError("Do not yet support non-builtin reducers");
+      Value result = op.getResults()[i];
+      // Pass in reducer arguments to parallel_reduce
+      emitter << ", ";
+      if(kokkosReducer != "") {
+        emitter << kokkosReducer << "<";
+        if(failed(emitter.emitType(op.getLoc(), result.getType())))
+          return failure();
+        emitter << ">(";
+      }
+      emitter << emitter.getOrCreateName(result);
+      if(kokkosReducer != "")
+        emitter << ")";
     }
-    emitter << "(" << emitter.getOrCreateName(result) << "));\n";
-    if(failed(emitter.joinReductionInit(result, op.getReduction())))
+    emitter << ");\n";
+    if(failed(emitter.joinReductionInits(op.getResults(), op.getReduction())))
       return failure();
   }
   else
@@ -1966,7 +2070,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::TeamParal
 static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::ThreadParallelOp op) {
   // Declare any results (which can only be produced by reductions).
   // These don't need to be initialized.
-  bool isReduction = op.getNumReductions();
+  int numReductions = op.getNumReductions();
   for(Value result : op->getResults())
   {
     if(failed(emitter.emitType(op.getLoc(), result.getType())))
@@ -1977,14 +2081,15 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::ThreadPar
   // First, declare the lambda.
   emitter << "auto " << lambda << " = \n";
   emitter << "KOKKOS_LAMBDA(const LAPIS::TeamMember& team";
-  if(isReduction) {
+  if(numReductions) {
     if(op->getNumResults() > 1)
       return op.emitError("Currently, can only handle 1 reducer per parallel");
+    int count = 0;
     for(Value result : op->getResults()) {
       emitter << ", ";
       if(failed(emitter.emitType(op.getLoc(), result.getType())))
         return failure();
-      emitter << "& lreduce0";
+      emitter << "& lreduce0_" << count++;
     }
   }
   emitter << ") {\n";
@@ -2020,7 +2125,7 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::ThreadPar
   // Since we have a lambda and a vector length, we can now query a temporary TeamPolicy for the best team size
   std::string teamSize = "teamSize_" + emitter.getUniqueIdentifier();
   emitter << "size_t " << teamSize << " = LAPIS::TeamPolicy(1, 1, " << vectorLength << ").team_size_recommended(" << lambda << ", ";
-  if(isReduction)
+  if(numReductions)
     emitter << "Kokkos::ParallelReduceTag{}";
   else
     emitter << "Kokkos::ParallelForTag{}";
@@ -2032,30 +2137,35 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::ThreadPar
     return failure();
   emitter << " + " << teamSize << " - 1) / " << teamSize << ";\n";
   // Finally, launch the lambda with the correct policy.
-  if(isReduction)
+  if(numReductions)
     emitter << "Kokkos::parallel_reduce";
   else
     emitter << "Kokkos::parallel_for";
   emitter << "(LAPIS::TeamPolicy(" << leagueSize << ", " << teamSize << ", " << vectorLength << "), " << lambda;
-  if(isReduction) {
+  if(numReductions) {
     // Determine what kind of reduction is being done, if any
     kokkos::UpdateReductionOp reduction = op.getReduction();
     if(!reduction)
       return op.emitError("Could not find UpdateReductionOp inside parallel op with result(s)");
-    std::string kokkosReducer;
-    if(!isBuiltinReduction(kokkosReducer, reduction))
-      return op.emitError("Do not yet support non-builtin reducers");
-    Value result = op.getResults()[0];
-    // Pass in reducer arguments to parallel_reduce
-    emitter << ", ";
-    if(kokkosReducer != "") {
-      emitter << kokkosReducer << "<";
-      if(failed(emitter.emitType(op.getLoc(), result.getType())))
-        return failure();
-      emitter << ">";
+    for(int i = 0; i < numReductions; i++) {
+      std::string kokkosReducer;
+      if(!isBuiltinReduction(kokkosReducer, reduction.getBody(i)))
+        return op.emitError("Do not yet support non-builtin reducers");
+      Value result = op.getResults()[i];
+      // Pass in reducer arguments to parallel_reduce
+      emitter << ", ";
+      if(kokkosReducer != "") {
+        emitter << kokkosReducer << "<";
+        if(failed(emitter.emitType(op.getLoc(), result.getType())))
+          return failure();
+        emitter << ">(";
+      }
+      emitter << emitter.getOrCreateName(result);
+      if(kokkosReducer != "")
+        emitter << ")";
     }
-    emitter << "(" << emitter.getOrCreateName(result) << "));\n";
-    if(failed(emitter.joinReductionInit(result, op.getReduction())))
+    emitter << ");\n";
+    if(failed(emitter.joinReductionInits(op.getResults(), op.getReduction())))
       return failure();
   }
   else
@@ -2125,32 +2235,34 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::SingleOp 
 }
 
 static LogicalResult printOperation(KokkosCppEmitter &emitter, kokkos::UpdateReductionOp op) {
-  std::string kokkosReducer;
-  bool isBuiltin = isBuiltinReduction(kokkosReducer, op);
-  // TODO: for non-builtin reductions, declare a reducer type into declOS (with operator+ overloaded)
-  // and wrap result and partial reduction in that.
-  if(!isBuiltin)
-    return op.emitError("Currently, emitter can only handle reductions that are built-in to Kokkos");
-  // Get the depth of the enclosing parallel, which determines the name of the local reduction value
-  int depth = kokkos::getOpParallelDepth(op) - 1;
-  std::string partialReduction = std::string("lreduce") + std::to_string(depth);
-  Value contribute = op.getUpdate();
-  Region& body = op.getReductionOperator();
-  // Body has 2 arguments
-  Value arg1 = body.getArguments()[0];
-  Value arg2 = body.getArguments()[1];
-  // Within the body of op, replace arg1 with the name partialReduction
-  emitter.assignName(partialReduction, arg1);
-  // and arg2 with the name of the value to contribute
-  emitter.assignName(emitter.getOrCreateName(contribute), arg2);
-  // Now emit the ops of the body. When yield is encountered, just assign the operand to partialReduction.
-  for(Operation& bodyOp : body.getOps()) {
-    if(auto yield = dyn_cast<kokkos::YieldOp>(bodyOp)) {
-      emitter << partialReduction << " = " << emitter.getOrCreateName(bodyOp.getOperands()[0]) << ";\n";
-    }
-    else {
-      if(failed(emitter.emitOperation(bodyOp, true)))
-        return failure();
+  for(size_t i = 0; i < op.getNumReductions(); i++) {
+    std::string kokkosReducer;
+    bool isBuiltin = isBuiltinReduction(kokkosReducer, op.getBody(i));
+    // TODO: for non-builtin reductions, declare a reducer type into declOS (with operator+ overloaded)
+    // and wrap result and partial reduction in that.
+    if(!isBuiltin)
+      return op.emitError("Currently, emitter can only handle reductions that are built-in to Kokkos");
+    // Get the depth of the enclosing parallel, which determines the name of the local reduction value
+    int depth = kokkos::getOpParallelDepth(op) - 1;
+    std::string partialReduction = std::string("lreduce") + std::to_string(depth) + "_" + std::to_string(i);
+    Value contribute = op.getUpdate(i);
+    Block& body = op.getBody(i);
+    // Body has 2 arguments
+    Value arg1 = body.getArguments()[0];
+    Value arg2 = body.getArguments()[1];
+    // Within the body of op, replace arg1 with the name partialReduction
+    emitter.assignName(partialReduction, arg1);
+    // and arg2 with the name of the value to contribute
+    emitter.assignName(emitter.getOrCreateName(contribute), arg2);
+    // Now emit the ops of the body. When yield is encountered, just assign the operand to partialReduction.
+    for(Operation& bodyOp : body.getOperations()) {
+      if(auto yield = dyn_cast<kokkos::YieldOp>(bodyOp)) {
+        emitter << partialReduction << " = " << emitter.getOrCreateName(bodyOp.getOperands()[0]) << ";\n";
+      }
+      else {
+        if(failed(emitter.emitOperation(bodyOp, true)))
+          return failure();
+      }
     }
   }
   return success();
@@ -3301,18 +3413,6 @@ StringRef KokkosCppEmitter::getOrCreateName(Block &block) {
   if (!blockMapper.count(&block))
     blockMapper.insert(&block, formatv("label{0}", ++labelInScopeCount.top()));
   return *blockMapper.begin(&block);
-}
-
-bool KokkosCppEmitter::shouldMapToUnsigned(IntegerType::SignednessSemantics val) {
-  switch (val) {
-  case IntegerType::Signless:
-    return false;
-  case IntegerType::Signed:
-    return false;
-  case IntegerType::Unsigned:
-    return true;
-  }
-  llvm_unreachable("Unexpected IntegerType::SignednessSemantics");
 }
 
 bool KokkosCppEmitter::hasValueInScope(Value val) { return valueMapper.count(val) || isScalarConstant(val); }

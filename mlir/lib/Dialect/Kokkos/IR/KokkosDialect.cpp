@@ -169,33 +169,53 @@ LogicalResult RangeParallelOp::verify() {
                                << RangeParallelOp::getOperationName() << "'";
 
   // Check that the number of results is the same as the number of
-  // UpdateReductionOps. Reductions can appear in 2 places: either directly as a
-  // child of body, or in a single. If in a single, the single must be a direct
-  // child of body.
+  // reductions in the UpdateReductionOp op (if there is one).
+  // Reductions can appear in 2 places: either directly as a
+  // child of body, or in a single. If in a single, the single must be a direct child of body.
   SmallVector<kokkos::UpdateReductionOp, 4> reductions;
+
+  int numUpdateReduction = 0;
+  int numReducers = 0;
+  kokkos::UpdateReductionOp reduceOp = nullptr;
+  SmallVector<Type> reductionTypes;
   for (auto reduce : body->getOps<kokkos::UpdateReductionOp>()) {
-    reductions.push_back(reduce);
-  }
-  for (auto single : body->getOps<kokkos::SingleOp>()) {
-    for (auto reduce :
-         single.getRegion().front().getOps<kokkos::UpdateReductionOp>()) {
-      reductions.push_back(reduce);
+    reduceOp = reduce;
+    numUpdateReduction++;
+    numReducers += reduce.getNumReductions();
+    for(size_t i = 0; i < reduce.getNumReductions(); i++) {
+      reductionTypes.push_back(reduce.getReductionType(i));
     }
   }
-  auto resultsSize = getResults().size();
-  if (resultsSize != reductions.size())
-    return emitOpError() << "expects number of results: " << resultsSize
-                         << " to be the same as number of reductions: "
-                         << reductions.size();
+  for (auto single : body->getOps<kokkos::SingleOp>()) {
+    for (auto reduce : single.getRegion().front().getOps<kokkos::UpdateReductionOp>()) {
+      reduceOp = reduce;
+      numUpdateReduction++;
+      numReducers += reduce.getNumReductions();
+      for(size_t i = 0; i < reduce.getNumReductions(); i++) {
+        reductionTypes.push_back(reduce.getReductionType(i));
+      }
+    }
+  }
+
+  if(numUpdateReduction > 1) {
+    return emitOpError() <<
+      "expect at most kokkos.update_reduction op in direct "
+      "body of kokkos.range_parallel, but found " << numUpdateReduction;
+  }
+  int resultsSize = getResults().size();
+  if (resultsSize != numReducers) {
+    return emitOpError() << "number of results (" << resultsSize
+                         << ") must match number of reductions in "
+                         "the kokkos.update_reduction (" << numReducers << ")";
+  }
   // Check that the types of the results and reductions are the same.
-  for (auto resultAndReduce : llvm::zip(getResults(), reductions)) {
+  for (auto resultAndReduce : llvm::zip(getResults(), reductionTypes)) {
     auto resultType = std::get<0>(resultAndReduce).getType();
-    auto reduceOp = std::get<1>(resultAndReduce);
-    auto reduceType = reduceOp.getUpdate().getType();
+    auto reduceType = std::get<1>(resultAndReduce);
     if (resultType != reduceType)
       return reduceOp.emitOpError()
-             << "expects type of reduce: " << reduceType
-             << " to be the same as result type: " << resultType;
+             << "expects value type of reduce " << reduceType
+             << " to be the same as corresponding result type: " << resultType;
   }
   return success();
 }
@@ -441,19 +461,26 @@ kokkos::UpdateReductionOp ThreadParallelOp::getReduction() {
 // ******************** //
 
 void UpdateReductionOp::build(
-    OpBuilder &builder, OperationState &result, Value update, Value identity,
-    function_ref<void(OpBuilder &, Location, Value, Value)> bodyBuilderFn) {
-  auto type = update.getType();
-  result.addOperands(update);
-  result.addOperands(identity);
+    OpBuilder &builder, OperationState &result, ValueRange updatesAndInits) {
+  assert(updatesAndInits.size() % 2 == size_t(0));
+  size_t numReductions = updatesAndInits.size() / 2;
+  SmallVector<Type> reductionTypes;
+  for(size_t i = 0; i < numReductions; i++) {
+    reductionTypes.push_back(updatesAndInits[i].getType());
+  }
+  result.addOperands(updatesAndInits);
 
-  OpBuilder::InsertionGuard guard(builder);
-  Region *bodyRegion = result.addRegion();
-  Block *body = builder.createBlock(bodyRegion, {}, ArrayRef<Type>{type, type},
-                                    {result.location, result.location});
-  if (bodyBuilderFn)
-    bodyBuilderFn(builder, result.location, body->getArgument(0),
-                  body->getArgument(1));
+  // Make sure we have equal number of updates and inits, and that their types match
+  for(size_t i = 0; i < numReductions; i++) {
+    assert(reductionTypes[i] == updatesAndInits[numReductions + i].getType());
+  }
+
+  // Create regions and blocks to contain the join logic 
+  for(size_t i = 0; i < numReductions; i++) {
+    OpBuilder::InsertionGuard guard(builder);
+    Region *bodyRegion = result.addRegion();
+    (void) builder.createBlock(bodyRegion, {}, ArrayRef<Type>{reductionTypes[i], reductionTypes[i]}, {result.location, result.location});
+  }
 }
 
 // *************** //

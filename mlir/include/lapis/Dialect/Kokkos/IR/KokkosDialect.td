@@ -283,16 +283,26 @@ def UpdateReductionOp : Kokkos_Op<"update_reduction",
   }];
 
   let skipDefaultBuilders = 1;
+  // updates and identities should have the same number of values (the number of reductions to perform).
+  // updates[i] is the value to join with the partial reduction. identities[i] is the reduction identity element (e.g. 1.0 for product).
   let builders = [
-    OpBuilder<(ins "Value":$update, "Value":$identity,
-      CArg<"function_ref<void (OpBuilder &, Location, Value, Value)>",
-           "nullptr">:$bodyBuilderFn)>
+    OpBuilder<(ins "ValueRange":$updatesAndInits)>
   ];
 
-  let arguments = (ins AnyType:$update, AnyType:$identity);
+  let extraClassDeclaration = [{
+    size_t getNumReductions() { return getUpdatesAndInits().size() / 2; }
+    Block& getBody(size_t i) {return getRegion(i).front();}
+    Value getUpdate(size_t i) {return getUpdatesAndInits()[i];}
+    Value getInit(size_t i) {return getUpdatesAndInits()[getNumReductions() + i];}
+    Type getReductionType(size_t i) { return getUpdate(i).getType(); }
+  }];
+
+  // all updates go first, then all identities (they are not interleaved)
+  let arguments = (ins Variadic<AnyType>:$updatesAndInits);
+  let regions = (region VariadicRegion<SizedRegion<1>>:$reductionOperators);
   let hasCustomAssemblyFormat = 0;
-  let regions = (region SizedRegion<1>:$reductionOperator);
   let hasRegionVerifier = 0;
+  let hasVerifier = 0;
 }
 
 def YieldOp : Kokkos_Op<"yield", [Pure, ReturnLike, Terminator,
