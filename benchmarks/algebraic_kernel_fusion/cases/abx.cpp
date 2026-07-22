@@ -9,9 +9,16 @@
 
 namespace {
 
-constexpr std::size_t m = 128;
-constexpr std::size_t k = 256;
-constexpr std::size_t n = 1024;
+#ifndef LAPIS_ABX_M
+#define LAPIS_ABX_M 128
+#define LAPIS_ABX_K 256
+#define LAPIS_ABX_N 1024
+#define LAPIS_ABX_CASE "abx"
+#endif
+
+constexpr std::size_t m = LAPIS_ABX_M;
+constexpr std::size_t k = LAPIS_ABX_K;
+constexpr std::size_t n = LAPIS_ABX_N;
 
 using MatrixA = LAPIS::DualView<float[m][k], Kokkos::LayoutRight>;
 using MatrixB = LAPIS::DualView<float[k][n], Kokkos::LayoutRight>;
@@ -88,8 +95,8 @@ int main(int argc, char **argv) {
       const double checksum = validateAndChecksum(a, b, x);
       const auto measurement =
           lapis::benchmark::measure(options, [&] { return abx(a, b, x); });
-      lapis::benchmark::printResult("abx", LAPIS_BENCHMARK_VARIANT, options,
-                                    measurement, checksum);
+      lapis::benchmark::printResult(LAPIS_ABX_CASE, LAPIS_BENCHMARK_VARIANT,
+                                    options, measurement, checksum);
     }
     lapis_finalize();
     return 0;

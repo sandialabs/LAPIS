@@ -40,7 +40,10 @@ The current cases are:
 | Case | Source expression | Principal optimization |
 | --- | --- | --- |
 | ABx | `(A B) x` | Reorder to `A (B x)` and avoid the `A B` matrix. |
+| Large ABx | `(A B) x` | Larger profile for distinguishing computation from fixed overhead. |
 | Linear attention | `(Q K^T) V` | Reorder to `Q (K^T V)` and avoid the score matrix. |
+| Large linear attention | `(Q K^T) V` | Larger sequence-length profile. |
+| Batched linear attention | Batched `(Q K^T) V` | Exercise batch-index liveness and backend mapping. |
 | PCG | One dense preconditioned-CG iteration | Exercise equal-work fusion selection and externally visible intermediates. |
 
 Each timed sample is one complete generated function call. It therefore

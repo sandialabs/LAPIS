@@ -11,10 +11,18 @@
 
 namespace {
 
-constexpr std::size_t queryLength = 256;
-constexpr std::size_t keyLength = 1024;
-constexpr std::size_t featureSize = 64;
-constexpr std::size_t valueSize = 64;
+#ifndef LAPIS_ATTENTION_QUERY_LENGTH
+#define LAPIS_ATTENTION_QUERY_LENGTH 256
+#define LAPIS_ATTENTION_KEY_LENGTH 1024
+#define LAPIS_ATTENTION_FEATURE_SIZE 64
+#define LAPIS_ATTENTION_VALUE_SIZE 64
+#define LAPIS_ATTENTION_CASE "linear_attention"
+#endif
+
+constexpr std::size_t queryLength = LAPIS_ATTENTION_QUERY_LENGTH;
+constexpr std::size_t keyLength = LAPIS_ATTENTION_KEY_LENGTH;
+constexpr std::size_t featureSize = LAPIS_ATTENTION_FEATURE_SIZE;
+constexpr std::size_t valueSize = LAPIS_ATTENTION_VALUE_SIZE;
 
 using Queries =
     LAPIS::DualView<float[queryLength][featureSize], Kokkos::LayoutRight>;
@@ -104,8 +112,9 @@ int main(int argc, char **argv) {
       const double checksum = validateAndChecksum(q, k, v);
       const auto measurement = lapis::benchmark::measure(
           options, [&] { return linear_attention(q, k, v); });
-      lapis::benchmark::printResult("linear_attention", LAPIS_BENCHMARK_VARIANT,
-                                    options, measurement, checksum);
+      lapis::benchmark::printResult(LAPIS_ATTENTION_CASE,
+                                    LAPIS_BENCHMARK_VARIANT, options,
+                                    measurement, checksum);
     }
     lapis_finalize();
     return 0;
