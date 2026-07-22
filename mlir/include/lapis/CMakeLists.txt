@@ -1,4 +1,5 @@
 add_subdirectory(Dialect)
+add_subdirectory(Transform)
 
 # Copy LAPIS_config.h.in to LAPIS_config.h in the build's
 # include directory, with #cmakedefine lines replaced with #define
