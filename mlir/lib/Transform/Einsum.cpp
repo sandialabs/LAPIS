@@ -106,10 +106,6 @@ llvm::SmallVector<IndexId, 4> EinsumExpression::getReductionIndices() const {
   return reductionIndices;
 }
 
-} // namespace mlir::lapis
-
-namespace mlir::lapis {
-
 //===----------------------------------------------------------------------===//
 // Expression composition
 //===----------------------------------------------------------------------===//
@@ -246,10 +242,6 @@ composeEinsumExpressions(const EinsumExpression &producer,
   return composition->takeExpression();
 }
 
-} // namespace mlir::lapis
-
-namespace mlir::lapis {
-
 //===----------------------------------------------------------------------===//
 // linalg.generic extraction
 //===----------------------------------------------------------------------===//
@@ -303,29 +295,16 @@ llvm::Error verifySumProductBody(linalg::GenericOp generic,
     return unsupported("body argument count does not match two inputs and one "
                        "output");
 
-  arith::MulFOp multiplication;
-  arith::AddFOp addition;
-  for (Operation &operation : body.without_terminator()) {
-    if (auto multiply = dyn_cast<arith::MulFOp>(operation)) {
-      if (multiplication)
-        return unsupported("body must contain exactly one arith.mulf");
-      multiplication = multiply;
-      continue;
-    }
-    if (auto add = dyn_cast<arith::AddFOp>(operation)) {
-      if (addition)
-        return unsupported("body must contain exactly one arith.addf");
-      addition = add;
-      continue;
-    }
-    return unsupported("body contains an operation other than arith.mulf, "
-                       "arith.addf, and linalg.yield");
-  }
-
-  if (!multiplication)
-    return unsupported("body must contain exactly one arith.mulf");
-  if (!addition)
-    return unsupported("body must contain exactly one arith.addf");
+  auto operations = body.without_terminator();
+  if (!llvm::hasNItems(operations, 2))
+    return unsupported("body must contain exactly one arith.mulf and one "
+                       "arith.addf");
+  auto operation = operations.begin();
+  auto multiplication = dyn_cast<arith::MulFOp>(*operation++);
+  auto addition = dyn_cast<arith::AddFOp>(*operation);
+  if (!multiplication || !addition)
+    return unsupported("body must compute arith.addf(arith.mulf(inputs), "
+                       "accumulator)");
 
   llvm::DenseSet<unsigned> multipliedInputs;
   for (Value operand : multiplication.getOperands()) {

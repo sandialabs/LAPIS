@@ -5,6 +5,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/ADT/bit.h"
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -33,7 +34,8 @@ llvm::Error invalidStep(std::size_t step, const llvm::Twine &message) {
                                  ": " + message);
 }
 
-bool haveSameIndices(llvm::ArrayRef<IndexId> lhs, llvm::ArrayRef<IndexId> rhs) {
+bool haveSameIndexSet(llvm::ArrayRef<IndexId> lhs,
+                      llvm::ArrayRef<IndexId> rhs) {
   if (lhs.size() != rhs.size())
     return false;
   llvm::DenseSet<IndexId> lhsIndices(lhs.begin(), lhs.end());
@@ -41,6 +43,10 @@ bool haveSameIndices(llvm::ArrayRef<IndexId> lhs, llvm::ArrayRef<IndexId> rhs) {
     return false;
   return llvm::all_of(
       rhs, [&](IndexId index) { return lhsIndices.contains(index); });
+}
+
+bool isSingleton(OperandSubset operands) {
+  return operands != 0 && (operands & (operands - 1)) == 0;
 }
 
 } // namespace
@@ -198,7 +204,7 @@ llvm::Error verifyContractionPlan(const EinsumExpression &expression,
         liveness->getLiveIndices((*valueOperands)[stepResult]);
     if (!expectedResultIndices)
       return expectedResultIndices.takeError();
-    if (!haveSameIndices(step.resultIndices, *expectedResultIndices))
+    if (!haveSameIndexSet(step.resultIndices, *expectedResultIndices))
       return invalidStep(stepNumber,
                          "result indices do not match index liveness");
   }
@@ -225,10 +231,6 @@ llvm::Error verifyContractionPlan(const EinsumExpression &expression,
 
   return llvm::Error::success();
 }
-
-} // namespace mlir::lapis
-
-namespace mlir::lapis {
 
 //===----------------------------------------------------------------------===//
 // Platform-independent cost model
@@ -276,13 +278,10 @@ ContractionCostModel::getValueIndices(OperandSubset operands) const {
     return llvm::createStringError(
         "operand subset contains an operand outside the expression");
 
-  if ((operands & (operands - 1)) == 0) {
-    for (unsigned operand = 0; operand < expression.getOperands().size();
-         ++operand) {
-      if (operands == (OperandSubset{1} << operand))
-        return llvm::SmallVector<IndexId, 4>(
-            expression.getOperands()[operand].indices);
-    }
+  if (isSingleton(operands)) {
+    unsigned operand = llvm::countr_zero(operands);
+    return llvm::SmallVector<IndexId, 4>(
+        expression.getOperands()[operand].indices);
   }
   return liveness.getLiveIndices(operands);
 }
@@ -331,7 +330,6 @@ ContractionCostModel::evaluatePlan(const ContractionPlan &plan) const {
     return valueOperands.takeError();
 
   ContractionPlanCost planCost;
-  planCost.totalWork = 0;
   planCost.stepCosts.reserve(plan.getSteps().size());
   for (const auto &[stepNumber, step] : llvm::enumerate(plan.getSteps())) {
     auto stepCost = getContractionWork((*valueOperands)[step.lhs],
@@ -347,10 +345,6 @@ ContractionCostModel::evaluatePlan(const ContractionPlan &plan) const {
   return planCost;
 }
 
-} // namespace mlir::lapis
-
-namespace mlir::lapis {
-
 //===----------------------------------------------------------------------===//
 // Exact subset dynamic-programming planner
 //===----------------------------------------------------------------------===//
@@ -362,10 +356,6 @@ struct PlannerState {
   OperandSubset lhs;
   OperandSubset rhs;
 };
-
-bool isSingleton(OperandSubset operands) {
-  return (operands & (operands - 1)) == 0;
-}
 
 std::optional<WorkCost> checkedPlanWork(WorkCost lhsWork, WorkCost rhsWork,
                                         WorkCost stepWork) {
@@ -385,17 +375,6 @@ bool isBetterPlan(WorkCost totalWork, OperandSubset lhs, OperandSubset rhs,
   if (totalWork != current->totalWork)
     return totalWork < current->totalWork;
   return std::tie(lhs, rhs) < std::tie(current->lhs, current->rhs);
-}
-
-bool haveSameIndexSet(llvm::ArrayRef<IndexId> lhs,
-                      llvm::ArrayRef<IndexId> rhs) {
-  if (lhs.size() != rhs.size())
-    return false;
-  llvm::SmallDenseSet<IndexId, 4> lhsIndices(lhs.begin(), lhs.end());
-  if (lhsIndices.size() != lhs.size())
-    return false;
-  return llvm::all_of(
-      rhs, [&](IndexId index) { return lhsIndices.contains(index); });
 }
 
 llvm::Expected<llvm::SmallVector<OperandSubset, 2>>
@@ -552,12 +531,7 @@ llvm::Expected<ContractionPlan> ExactContractionPlanner::plan(
   auto emitPlan = [&](auto &&self,
                       OperandSubset operands) -> llvm::Expected<PlanValueId> {
     if (isSingleton(operands)) {
-      for (unsigned operand = 0; operand < operandCount; ++operand) {
-        if (operands == (OperandSubset{1} << operand))
-          return operand;
-      }
-      return llvm::createStringError(
-          "exact contraction planner produced an invalid singleton subset");
+      return static_cast<PlanValueId>(llvm::countr_zero(operands));
     }
 
     const PlannerState &state = *best[operands];

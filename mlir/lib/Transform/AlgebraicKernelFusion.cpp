@@ -1,22 +1,15 @@
 //===- AlgebraicKernelFusion.cpp -----------------------------------------===//
 
 #include "lapis/Transform/AlgebraicKernelFusion.h"
-#include "mlir/Analysis/AliasAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Utils/StructuredOpsUtils.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
-#include "mlir/IR/Dominance.h"
-#include "mlir/IR/IRMapping.h"
-#include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -29,7 +22,6 @@
 #include <cstddef>
 #include <limits>
 #include <optional>
-#include <string>
 #include <utility>
 
 namespace mlir::lapis {
@@ -40,13 +32,6 @@ namespace mlir::lapis {
 
 namespace {
 
-struct PartialResult {
-  linalg::GenericOp source;
-  Value value;
-  OperandSubset operandSubset;
-  TensorAccess access;
-};
-
 struct PartialRegion {
   explicit PartialRegion(const ExtractedEinsumExpression &extracted)
       : expression(extracted.getExpression()),
@@ -54,16 +39,24 @@ struct PartialRegion {
                  extracted.getOperands().end()) {
     OperandSubset allOperands =
         (OperandSubset{1} << extracted.getOperands().size()) - 1;
-    results.push_back(PartialResult{extracted.getSource(),
-                                    extracted.getResult(), allOperands,
-                                    extracted.getExpression().getResult()});
+    results.push_back(LinalgEinsumRegionOutput{
+        extracted.getSource(), extracted.getResult(), allOperands,
+        extracted.getExpression().getResult()});
   }
 
   EinsumExpression expression;
   llvm::SmallVector<Value, 4> operands;
   llvm::SmallVector<linalg::GenericOp, 4> operations;
-  llvm::SmallVector<PartialResult, 4> results;
+  llvm::SmallVector<LinalgEinsumRegionOutput, 4> results;
 };
+
+llvm::DenseSet<Operation *>
+getOperationSet(llvm::ArrayRef<linalg::GenericOp> operations) {
+  llvm::DenseSet<Operation *> result;
+  for (linalg::GenericOp operation : operations)
+    result.insert(operation);
+  return result;
+}
 
 llvm::Expected<OperandSubset>
 remapConsumerSubset(OperandSubset subset, unsigned consumerOperand,
@@ -190,7 +183,7 @@ discoverLinalgEinsumRegions(func::FuncOp function) {
       if (!composed)
         return composed.takeError();
 
-      for (PartialResult &result : region.results) {
+      for (LinalgEinsumRegionOutput &result : region.results) {
         auto remapped = remapConsumerSubset(
             result.operandSubset, static_cast<unsigned>(consumerOperand),
             static_cast<unsigned>(producerRegion->operands.size()),
@@ -199,7 +192,7 @@ discoverLinalgEinsumRegions(func::FuncOp function) {
           return remapped.takeError();
         result.operandSubset = *remapped;
       }
-      for (PartialResult &result : producerRegion->results) {
+      for (LinalgEinsumRegionOutput &result : producerRegion->results) {
         result.operandSubset <<= consumerOperand;
         result.access = composed->remapProducerAccess(result.access);
         region.results.push_back(std::move(result));
@@ -228,15 +221,15 @@ discoverLinalgEinsumRegions(func::FuncOp function) {
     if (region->operations.size() < 2)
       continue;
 
-    llvm::DenseSet<Operation *> regionOperations;
-    for (linalg::GenericOp operation : region->operations)
-      regionOperations.insert(operation.getOperation());
+    llvm::DenseSet<Operation *> regionOperations =
+        getOperationSet(region->operations);
 
     llvm::SmallVector<LinalgEinsumRegionOutput, 2> outputs;
     for (linalg::GenericOp operation : region->operations) {
-      auto result = llvm::find_if(region->results, [&](const PartialResult &r) {
-        return r.source == operation;
-      });
+      auto result = llvm::find_if(region->results,
+                                  [&](const LinalgEinsumRegionOutput &r) {
+                                    return r.source == operation;
+                                  });
       if (result == region->results.end())
         return llvm::createStringError(
             "internal error: region operation has no algebraic result");
@@ -260,10 +253,6 @@ discoverLinalgEinsumRegions(func::FuncOp function) {
   return regions;
 }
 
-} // namespace mlir::lapis
-
-namespace mlir::lapis {
-
 //===----------------------------------------------------------------------===//
 // Candidate evaluation
 //===----------------------------------------------------------------------===//
@@ -276,16 +265,10 @@ llvm::Expected<WorkCost> getSourceOperationWork(linalg::GenericOp operation) {
     return extracted.takeError();
 
   const EinsumExpression &expression = extracted->getExpression();
-  ContractionStep step{/*lhs=*/0, /*rhs=*/1,
-                       /*resultIndices=*/expression.getResult().indices};
-  ContractionPlan plan(/*operandCount=*/2, {step}, /*result=*/2);
   auto costModel = ContractionCostModel::create(expression);
   if (!costModel)
     return costModel.takeError();
-  auto cost = costModel->evaluatePlan(plan);
-  if (!cost)
-    return cost.takeError();
-  return cost->totalWork;
+  return costModel->getContractionWork(OperandSubset{1}, OperandSubset{2});
 }
 
 llvm::Expected<WorkCost> checkedAdd(WorkCost accumulated, WorkCost next,
@@ -331,10 +314,6 @@ evaluateFusionCandidate(const LinalgEinsumRegion &region,
       static_cast<unsigned>(region.getOperations().size()),
       /*fusedKernelCount=*/1};
 }
-
-} // namespace mlir::lapis
-
-namespace mlir::lapis {
 
 //===----------------------------------------------------------------------===//
 // Contraction materialization
@@ -457,9 +436,8 @@ verifyMaterializable(const LinalgEinsumRegion &region,
       return error;
   }
 
-  llvm::DenseSet<Operation *> regionOperations;
-  for (linalg::GenericOp operation : region.getOperations())
-    regionOperations.insert(operation.getOperation());
+  llvm::DenseSet<Operation *> regionOperations =
+      getOperationSet(region.getOperations());
 
   outputPlanValues.reserve(region.getOutputs().size());
   for (const auto &indexedOutput : llvm::enumerate(region.getOutputs())) {
@@ -493,7 +471,7 @@ verifyMaterializable(const LinalgEinsumRegion &region,
     if (llvm::Error error = verifyTensor(
             init, expression, output.access, elementType,
             "output " + llvm::Twine(outputNumber) + " initializer"))
-      return llvm::Error(std::move(error));
+      return error;
     if (init.getType() != output.value.getType())
       return invalidMaterialization("output " + llvm::Twine(outputNumber) +
                                     " initializer and result types differ");
@@ -602,9 +580,8 @@ llvm::Expected<llvm::SmallVector<Value, 2>> materializeContractionPlan(
     values.push_back(contraction.getResult(0));
   }
 
-  llvm::DenseSet<Operation *> regionOperations;
-  for (linalg::GenericOp operation : region.getOperations())
-    regionOperations.insert(operation.getOperation());
+  llvm::DenseSet<Operation *> regionOperations =
+      getOperationSet(region.getOperations());
 
   llvm::SmallVector<Value, 2> replacements;
   replacements.reserve(region.getOutputs().size());
@@ -622,13 +599,9 @@ llvm::Expected<llvm::SmallVector<Value, 2>> materializeContractionPlan(
   return replacements;
 }
 
-} // namespace mlir::lapis
-
 //===----------------------------------------------------------------------===//
 // Fusion-set selection
 //===----------------------------------------------------------------------===//
-
-namespace mlir::lapis {
 namespace {
 
 unsigned commonDomainPrefix(llvm::ArrayRef<int64_t> lhs,
@@ -831,34 +804,31 @@ void partitionFusionAtoms(llvm::MutableArrayRef<FusionAtom> atoms,
 
 void selectFusionSets(Block &block, std::uint64_t &nextFusionGroup,
                       Builder &builder) {
-  llvm::DenseMap<Operation *, unsigned> positions;
   llvm::SmallVector<FusionAtom, 8> atoms;
   llvm::DenseMap<std::int64_t, unsigned> markedAtoms;
 
   unsigned position = 0;
   for (Operation &operation : block) {
-    positions.insert({&operation, position++});
+    const unsigned currentPosition = position++;
     auto generic = dyn_cast<linalg::GenericOp>(operation);
     if (!generic)
       continue;
 
     auto group = generic->getAttrOfType<IntegerAttr>(kAlgebraicFusionGroupAttr);
     if (!group) {
-      atoms.push_back(
-          FusionAtom{{generic}, positions[&operation], positions[&operation]});
+      atoms.push_back(FusionAtom{{generic}, currentPosition, currentPosition});
       continue;
     }
 
     auto [iterator, inserted] =
         markedAtoms.try_emplace(group.getInt(), atoms.size());
     if (inserted) {
-      atoms.push_back(
-          FusionAtom{{generic}, positions[&operation], positions[&operation]});
+      atoms.push_back(FusionAtom{{generic}, currentPosition, currentPosition});
       continue;
     }
     FusionAtom &atom = atoms[iterator->second];
     atom.operations.push_back(generic);
-    atom.lastPosition = positions[&operation];
+    atom.lastPosition = currentPosition;
   }
 
   llvm::SmallVector<FusionAtom, 8> run;
@@ -907,691 +877,6 @@ void selectFusionSets(ModuleOp module, std::uint64_t &nextFusionGroup) {
 } // namespace mlir::lapis
 
 //===----------------------------------------------------------------------===//
-// Algebraic kernel outlining
-//===----------------------------------------------------------------------===//
-
-namespace mlir::lapis {
-namespace {
-
-struct OutlineGroup {
-  func::FuncOp parent;
-  std::int64_t group;
-  llvm::SmallVector<linalg::GenericOp, 4> operations;
-};
-
-struct PrivateBufferAnalysis {
-  llvm::DenseSet<Value> buffers;
-  llvm::DenseSet<Operation *> ownedOperations;
-};
-
-bool isPrivateBufferAuxiliaryUse(Value buffer, Operation *owner,
-                                 PrivateBufferAnalysis &analysis) {
-  if (auto copy = dyn_cast<memref::CopyOp>(owner)) {
-    if (copy.getTarget() != buffer)
-      return false;
-    analysis.ownedOperations.insert(owner);
-    return true;
-  }
-  if (auto fill = dyn_cast<linalg::FillOp>(owner)) {
-    if (llvm::none_of(fill.getDpsInits(),
-                      [&](Value output) { return output == buffer; }))
-      return false;
-    analysis.ownedOperations.insert(owner);
-    return true;
-  }
-  if (isa<memref::DeallocOp>(owner) && owner->getOperand(0) == buffer) {
-    analysis.ownedOperations.insert(owner);
-    return true;
-  }
-  return false;
-}
-
-/// Finds allocation-backed buffers that communicate only between operations
-/// in one fusion group. Their allocation, initialization, and optional
-/// deallocation can move with the group instead of becoming kernel arguments.
-PrivateBufferAnalysis findPrivateBuffers(OutlineGroup &group) {
-  llvm::DenseSet<Operation *> members;
-  for (linalg::GenericOp operation : group.operations)
-    members.insert(operation);
-
-  llvm::DenseSet<Value> candidates;
-  for (auto [producerNumber, producer] : llvm::enumerate(group.operations)) {
-    for (Value output : producer.getDpsInits()) {
-      bool consumedLater = llvm::any_of(
-          llvm::ArrayRef(group.operations).drop_front(producerNumber + 1),
-          [&](linalg::GenericOp consumer) {
-            return llvm::is_contained(consumer.getDpsInputs(), output);
-          });
-      if (consumedLater)
-        candidates.insert(output);
-    }
-  }
-
-  PrivateBufferAnalysis analysis;
-  for (Value candidate : candidates) {
-    Operation *allocation = candidate.getDefiningOp();
-    if (!isa_and_nonnull<memref::AllocOp, memref::AllocaOp>(allocation) ||
-        allocation->getBlock() != group.operations.front()->getBlock())
-      continue;
-
-    PrivateBufferAnalysis candidateAnalysis;
-    bool isPrivate = llvm::all_of(candidate.getUses(), [&](OpOperand &use) {
-      Operation *owner = use.getOwner();
-      return members.contains(owner) ||
-             isPrivateBufferAuxiliaryUse(candidate, owner, candidateAnalysis);
-    });
-    if (!isPrivate)
-      continue;
-
-    analysis.buffers.insert(candidate);
-    analysis.ownedOperations.insert(allocation);
-    analysis.ownedOperations.insert(candidateAnalysis.ownedOperations.begin(),
-                                    candidateAnalysis.ownedOperations.end());
-  }
-  return analysis;
-}
-
-bool canMoveGroupToLastOperation(OutlineGroup &group) {
-  llvm::DenseSet<Operation *> members;
-  for (linalg::GenericOp operation : group.operations)
-    members.insert(operation.getOperation());
-
-  llvm::DenseSet<Value> previouslyAccessedBuffers;
-  Operation *first = group.operations.front().getOperation();
-  Operation *last = group.operations.back().getOperation();
-  for (Operation *operation = first; operation != last;
-       operation = operation->getNextNode()) {
-    if (members.contains(operation)) {
-      previouslyAccessedBuffers.insert(operation->operand_begin(),
-                                       operation->operand_end());
-      continue;
-    }
-    if (isMemoryEffectFree(operation) ||
-        isa<memref::AllocOp, memref::AllocaOp>(operation))
-      continue;
-    if (auto copy = dyn_cast<memref::CopyOp>(operation)) {
-      // Moving the contractions past a copy is only safe when the copy neither
-      // observes a value produced by the group nor overwrites one of its
-      // inputs or outputs.
-      if (!previouslyAccessedBuffers.contains(copy.getSource()) &&
-          !previouslyAccessedBuffers.contains(copy.getTarget()))
-        continue;
-    }
-    if (auto fill = dyn_cast<linalg::FillOp>(operation)) {
-      if (llvm::none_of(fill.getDpsInits(), [&](Value output) {
-            return previouslyAccessedBuffers.contains(output);
-          }))
-        continue;
-    }
-    return false;
-  }
-  return true;
-}
-
-std::string getUniqueKernelName(ModuleOp module, StringRef parentName,
-                                std::int64_t group) {
-  std::string base =
-      (parentName + "__lapis_algebraic_kernel_" + llvm::Twine(group)).str();
-  std::string name = base;
-  for (unsigned suffix = 0; module.lookupSymbol(name); ++suffix)
-    name = (base + "_" + llvm::Twine(suffix)).str();
-  return name;
-}
-
-LogicalResult outlineGroup(ModuleOp module, OutlineGroup &group) {
-  if (group.operations.size() < 2)
-    return group.operations.front().emitError(
-        "an algebraic fusion group must contain at least two contractions");
-  Block *block = group.operations.front()->getBlock();
-  if (!llvm::all_of(group.operations, [&](linalg::GenericOp operation) {
-        return operation->getBlock() == block &&
-               operation.hasPureBufferSemantics() &&
-               operation->getNumResults() == 0;
-      })) {
-    return group.operations.front().emitError(
-        "algebraic kernels must be outlined after bufferization from one "
-        "block");
-  }
-  if (!canMoveGroupToLastOperation(group)) {
-    return group.operations.front().emitError(
-        "cannot outline an algebraic group across an intervening "
-        "side-effecting operation");
-  }
-
-  PrivateBufferAnalysis privateBuffers = findPrivateBuffers(group);
-  llvm::DenseSet<Operation *> clonedOperations(
-      privateBuffers.ownedOperations.begin(),
-      privateBuffers.ownedOperations.end());
-  llvm::DenseSet<Operation *> operationsToErase(
-      privateBuffers.ownedOperations.begin(),
-      privateBuffers.ownedOperations.end());
-  for (linalg::GenericOp operation : group.operations) {
-    clonedOperations.insert(operation);
-    operationsToErase.insert(operation);
-  }
-
-  // Keep constant initialization self-contained. Passing a memref.get_global
-  // result through the outlined signature both obscures ownership and causes
-  // LAPIS's DualView management to treat the global as a mutable argument.
-  // Clone these side-effect-free support operations, but leave their original
-  // definitions in place for any other caller-side initializers.
-  llvm::SmallVector<Operation *, 4> ownedSnapshot(
-      privateBuffers.ownedOperations.begin(),
-      privateBuffers.ownedOperations.end());
-  for (Operation *operation : ownedSnapshot) {
-    for (Value operand : operation->getOperands()) {
-      Operation *definition = operand.getDefiningOp();
-      if (isa_and_nonnull<memref::GetGlobalOp, arith::ConstantOp>(definition) &&
-          definition->getBlock() == block)
-        clonedOperations.insert(definition);
-    }
-  }
-
-  llvm::SmallVector<Operation *, 8> operationsToClone;
-  for (Operation &operation : *block) {
-    if (clonedOperations.contains(&operation))
-      operationsToClone.push_back(&operation);
-  }
-
-  llvm::SmallVector<Value, 8> arguments;
-  llvm::DenseMap<Value, unsigned> argumentNumbers;
-  auto addArgument = [&](Value value) {
-    Operation *definition = value.getDefiningOp();
-    if ((definition && clonedOperations.contains(definition)) ||
-        argumentNumbers.contains(value))
-      return;
-    argumentNumbers.insert({value, static_cast<unsigned>(arguments.size())});
-    arguments.push_back(value);
-  };
-  for (Operation *operation : operationsToClone) {
-    for (Value operand : operation->getOperands())
-      addArgument(operand);
-    if (operation->getNumRegions() == 0)
-      continue;
-    llvm::SetVector<Value> captures;
-    getUsedValuesDefinedAbove(operation->getRegions(), captures);
-    for (Value capture : captures)
-      addArgument(capture);
-  }
-
-  // Private buffers are defined by cloned allocation operations, so they must
-  // never remain in the outlined function signature.
-  for (Value buffer : privateBuffers.buffers) {
-    if (argumentNumbers.contains(buffer)) {
-      return group.operations.front().emitError(
-          "private intermediate unexpectedly remained a kernel argument");
-    }
-  }
-
-  OpBuilder builder(group.parent);
-  builder.setInsertionPoint(group.parent);
-  FunctionType type = builder.getFunctionType(TypeRange(arguments), {});
-  std::string name =
-      getUniqueKernelName(module, group.parent.getSymName(), group.group);
-  auto kernel = builder.create<func::FuncOp>(group.operations.front().getLoc(),
-                                             name, type);
-  kernel.setPrivate();
-  kernel->setAttr(kAlgebraicKernelAttr, builder.getUnitAttr());
-  kernel->setAttr(kAlgebraicFusionGroupAttr,
-                  builder.getI64IntegerAttr(group.group));
-  Block *entry = kernel.addEntryBlock();
-
-  IRMapping mapping;
-  for (const auto &[argumentNumber, argument] : llvm::enumerate(arguments)) {
-    mapping.map(argument,
-                entry->getArgument(static_cast<unsigned>(argumentNumber)));
-  }
-  builder.setInsertionPointToStart(entry);
-  for (Operation *operation : operationsToClone)
-    builder.clone(*operation, mapping);
-  builder.create<func::ReturnOp>(kernel.getLoc());
-
-  builder.setInsertionPoint(group.operations.back());
-  auto call = builder.create<func::CallOp>(group.operations.back().getLoc(),
-                                           kernel, arguments);
-  call->setAttr(kAlgebraicKernelAttr, builder.getUnitAttr());
-  call->setAttr(kAlgebraicFusionGroupAttr,
-                builder.getI64IntegerAttr(group.group));
-
-  for (Operation *operation : llvm::reverse(operationsToClone)) {
-    if (operationsToErase.contains(operation))
-      operation->erase();
-  }
-  return success();
-}
-
-} // namespace
-
-LogicalResult outlineAlgebraicKernels(ModuleOp module) {
-  llvm::SmallVector<OutlineGroup, 4> groups;
-  llvm::DenseMap<std::int64_t, unsigned> groupNumbers;
-
-  for (func::FuncOp function : module.getOps<func::FuncOp>()) {
-    if (function->hasAttr(kAlgebraicKernelAttr))
-      continue;
-    WalkResult result = function.walk([&](linalg::GenericOp operation) {
-      auto groupAttr =
-          operation->getAttrOfType<IntegerAttr>(kAlgebraicFusionGroupAttr);
-      if (!groupAttr)
-        return WalkResult::advance();
-      std::int64_t group = groupAttr.getInt();
-      auto [iterator, inserted] =
-          groupNumbers.try_emplace(group, groups.size());
-      if (inserted)
-        groups.push_back(OutlineGroup{function, group, {}});
-      OutlineGroup &outlineGroup = groups[iterator->second];
-      if (outlineGroup.parent != function) {
-        operation.emitError(
-            "an algebraic fusion group crosses function boundaries");
-        return WalkResult::interrupt();
-      }
-      outlineGroup.operations.push_back(operation);
-      return WalkResult::advance();
-    });
-    if (result.wasInterrupted())
-      return failure();
-  }
-
-  // Outlining later groups first keeps every cached operation position valid.
-  for (OutlineGroup &group : llvm::reverse(groups)) {
-    if (failed(outlineGroup(module, group)))
-      return failure();
-  }
-  return success();
-}
-
-} // namespace mlir::lapis
-
-//===----------------------------------------------------------------------===//
-// Partial parallel-domain fusion
-//===----------------------------------------------------------------------===//
-
-namespace mlir::lapis {
-namespace {
-
-struct MemoryAccess {
-  Value buffer;
-  llvm::SmallVector<Value, 4> indices;
-  bool writes;
-};
-
-bool collectMemoryAccesses(Operation *root,
-                           llvm::SmallVectorImpl<MemoryAccess> &accesses) {
-  bool supported = true;
-  root->walk([&](Operation *operation) {
-    if (auto load = dyn_cast<memref::LoadOp>(operation)) {
-      accesses.push_back(
-          MemoryAccess{load.getMemRef(),
-                       {load.getIndices().begin(), load.getIndices().end()},
-                       /*writes=*/false});
-      return;
-    }
-    if (auto store = dyn_cast<memref::StoreOp>(operation)) {
-      accesses.push_back(
-          MemoryAccess{store.getMemRef(),
-                       {store.getIndices().begin(), store.getIndices().end()},
-                       /*writes=*/true});
-      return;
-    }
-    if (isa<scf::ParallelOp, scf::ReduceOp, scf::ReduceReturnOp>(operation) ||
-        isMemoryEffectFree(operation) ||
-        operation->hasTrait<OpTrait::HasRecursiveMemoryEffects>())
-      return;
-    supported = false;
-  });
-  return supported;
-}
-
-bool equivalentBound(Value first, Value second) {
-  if (first == second)
-    return true;
-  std::optional<std::int64_t> firstConstant = getConstantIntValue(first);
-  std::optional<std::int64_t> secondConstant = getConstantIntValue(second);
-  return firstConstant && secondConstant && *firstConstant == *secondConstant;
-}
-
-unsigned getCommonPrefix(scf::ParallelOp first, scf::ParallelOp second) {
-  unsigned common = 0;
-  unsigned maximum = std::min(first.getNumLoops(), second.getNumLoops());
-  while (common < maximum &&
-         equivalentBound(first.getLowerBound()[common],
-                         second.getLowerBound()[common]) &&
-         equivalentBound(first.getUpperBound()[common],
-                         second.getUpperBound()[common]) &&
-         equivalentBound(first.getStep()[common], second.getStep()[common]))
-    ++common;
-  return common;
-}
-
-bool isPartitionedByCommonPrefix(const MemoryAccess &first,
-                                 const MemoryAccess &second,
-                                 scf::ParallelOp firstLoop,
-                                 scf::ParallelOp secondLoop,
-                                 unsigned commonPrefix) {
-  if (first.indices.size() != second.indices.size())
-    return false;
-  for (unsigned dimension = 0; dimension < commonPrefix; ++dimension) {
-    bool foundPartitionIndex = false;
-    for (const auto &[firstIndex, secondIndex] :
-         llvm::zip(first.indices, second.indices)) {
-      if (firstIndex == firstLoop.getInductionVars()[dimension] &&
-          secondIndex == secondLoop.getInductionVars()[dimension]) {
-        foundPartitionIndex = true;
-        break;
-      }
-    }
-    if (!foundPartitionIndex)
-      return false;
-  }
-  return true;
-}
-
-Value resolveCallSiteBuffer(Value buffer, func::FuncOp kernel,
-                            func::CallOp call) {
-  auto argument = dyn_cast<BlockArgument>(buffer);
-  if (!argument || argument.getOwner() != &kernel.getBody().front())
-    return buffer;
-  return call.getOperand(argument.getArgNumber());
-}
-
-bool isFreshAllocation(Value value) {
-  return isa_and_nonnull<memref::AllocOp, memref::AllocaOp>(
-      value.getDefiningOp());
-}
-
-bool areProvablyDistinctFreshBuffers(Value first, Value second) {
-  if (first == second)
-    return false;
-  bool firstFresh = isFreshAllocation(first);
-  bool secondFresh = isFreshAllocation(second);
-  return (firstFresh && (secondFresh || isa<BlockArgument>(second))) ||
-         (secondFresh && isa<BlockArgument>(first));
-}
-
-bool buffersCannotAlias(Value first, Value second,
-                        AliasAnalysis &aliasAnalysis) {
-  return aliasAnalysis.alias(first, second).isNo() ||
-         areProvablyDistinctFreshBuffers(first, second);
-}
-
-bool dependenciesPermitFusion(scf::ParallelOp firstLoop,
-                              scf::ParallelOp secondLoop, unsigned commonPrefix,
-                              func::FuncOp kernel, func::CallOp call,
-                              AliasAnalysis &aliasAnalysis) {
-  llvm::SmallVector<MemoryAccess, 16> firstAccesses;
-  llvm::SmallVector<MemoryAccess, 16> secondAccesses;
-  if (!collectMemoryAccesses(firstLoop.getOperation(), firstAccesses) ||
-      !collectMemoryAccesses(secondLoop.getOperation(), secondAccesses))
-    return false;
-
-  for (const MemoryAccess &first : firstAccesses) {
-    for (const MemoryAccess &second : secondAccesses) {
-      if (!first.writes && !second.writes)
-        continue;
-      Value firstBuffer = resolveCallSiteBuffer(first.buffer, kernel, call);
-      Value secondBuffer = resolveCallSiteBuffer(second.buffer, kernel, call);
-      if (buffersCannotAlias(firstBuffer, secondBuffer, aliasAnalysis))
-        continue;
-      if (first.buffer != second.buffer ||
-          !isPartitionedByCommonPrefix(first, second, firstLoop, secondLoop,
-                                       commonPrefix))
-        return false;
-    }
-  }
-  return true;
-}
-
-bool operationsBetweenAreMovable(scf::ParallelOp first, scf::ParallelOp second,
-                                 func::FuncOp kernel, func::CallOp call,
-                                 AliasAnalysis &aliasAnalysis) {
-  llvm::SmallVector<MemoryAccess, 16> firstAccesses;
-  if (!collectMemoryAccesses(first.getOperation(), firstAccesses))
-    return false;
-
-  for (Operation *operation = first->getNextNode(); operation != second;
-       operation = operation->getNextNode()) {
-    llvm::SmallVector<MemoryAccess, 4> interveningAccesses;
-    if (!collectMemoryAccesses(operation, interveningAccesses))
-      return false;
-    for (const MemoryAccess &firstAccess : firstAccesses) {
-      for (const MemoryAccess &interveningAccess : interveningAccesses) {
-        if (!firstAccess.writes && !interveningAccess.writes)
-          continue;
-        Value firstBuffer =
-            resolveCallSiteBuffer(firstAccess.buffer, kernel, call);
-        Value interveningBuffer =
-            resolveCallSiteBuffer(interveningAccess.buffer, kernel, call);
-        if (!buffersCannotAlias(firstBuffer, interveningBuffer, aliasAnalysis))
-          return false;
-      }
-    }
-  }
-  return true;
-}
-
-void cloneParallelBody(OpBuilder &rewriter, scf::ParallelOp source,
-                       ValueRange commonInductionVars, unsigned commonPrefix,
-                       bool cloneTerminator = false) {
-  IRMapping mapping;
-  llvm::SmallVector<Value> sourceInductionVars = source.getInductionVars();
-  mapping.map(ValueRange(sourceInductionVars).take_front(commonPrefix),
-              commonInductionVars);
-
-  auto cloneOperations = [&](OpBuilder &builder, ValueRange remainingIvs) {
-    mapping.map(ValueRange(sourceInductionVars).drop_front(commonPrefix),
-                remainingIvs);
-    OpBuilder::InsertionGuard guard(builder);
-    builder.setInsertionPointToEnd(builder.getInsertionBlock());
-    for (Operation &operation : *source.getBody()) {
-      if (!cloneTerminator && operation.hasTrait<OpTrait::IsTerminator>())
-        continue;
-      builder.clone(operation, mapping);
-    }
-  };
-
-  unsigned remaining = source.getNumLoops() - commonPrefix;
-  if (remaining == 0) {
-    cloneOperations(rewriter, {});
-    return;
-  }
-
-  rewriter.create<scf::ParallelOp>(
-      source.getLoc(), source.getLowerBound().drop_front(commonPrefix),
-      source.getUpperBound().drop_front(commonPrefix),
-      source.getStep().drop_front(commonPrefix),
-      [&](OpBuilder &builder, Location, ValueRange inductionVars) {
-        cloneOperations(builder, inductionVars);
-      });
-}
-
-bool fuseParallelPair(scf::ParallelOp first, scf::ParallelOp second,
-                      func::FuncOp kernel, func::CallOp call,
-                      AliasAnalysis &aliasAnalysis) {
-  if (!first.getInitVals().empty() || first->getBlock() != second->getBlock() ||
-      !operationsBetweenAreMovable(first, second, kernel, call, aliasAnalysis))
-    return false;
-
-  unsigned commonPrefix = getCommonPrefix(first, second);
-  bool secondReduces = !second.getInitVals().empty();
-  // A reduction consumer can be fused when the shared domain is its complete
-  // reduction domain. Partial reduction-domain fusion would require carrying
-  // reduction values through another nested parallel operation.
-  if (secondReduces && commonPrefix != second.getNumLoops())
-    return false;
-  if (commonPrefix == 0 ||
-      !dependenciesPermitFusion(first, second, commonPrefix, kernel, call,
-                                aliasAnalysis))
-    return false;
-
-  IRRewriter rewriter(first.getContext());
-  rewriter.setInsertionPoint(second);
-  scf::ParallelOp fused;
-  if (secondReduces) {
-    fused = rewriter.create<scf::ParallelOp>(
-        second.getLoc(), second.getLowerBound().take_front(commonPrefix),
-        second.getUpperBound().take_front(commonPrefix),
-        second.getStep().take_front(commonPrefix), second.getInitVals(),
-        [&](OpBuilder &builder, Location, ValueRange inductionVars,
-            ValueRange) {
-          cloneParallelBody(builder, first, inductionVars, commonPrefix);
-          cloneParallelBody(builder, second, inductionVars, commonPrefix,
-                            /*cloneTerminator=*/true);
-        });
-  } else {
-    fused = rewriter.create<scf::ParallelOp>(
-        second.getLoc(), second.getLowerBound().take_front(commonPrefix),
-        second.getUpperBound().take_front(commonPrefix),
-        second.getStep().take_front(commonPrefix),
-        [&](OpBuilder &builder, Location, ValueRange inductionVars) {
-          cloneParallelBody(builder, first, inductionVars, commonPrefix);
-          cloneParallelBody(builder, second, inductionVars, commonPrefix);
-        });
-  }
-  for (auto [oldResult, newResult] :
-       llvm::zip(second.getResults(), fused.getResults()))
-    oldResult.replaceAllUsesWith(newResult);
-  rewriter.eraseOp(first);
-  rewriter.eraseOp(second);
-  return true;
-}
-
-func::CallOp findSoleKernelCall(ModuleOp module, func::FuncOp kernel) {
-  func::CallOp result;
-  bool multipleCalls = false;
-  module.walk([&](func::CallOp call) {
-    if (call.getCallee() != kernel.getSymName())
-      return;
-    if (result)
-      multipleCalls = true;
-    else
-      result = call;
-  });
-  return multipleCalls ? func::CallOp{} : result;
-}
-
-void fuseKernelLoops(func::FuncOp kernel, func::CallOp call,
-                     AliasAnalysis &aliasAnalysis) {
-  bool changed = true;
-  while (changed) {
-    changed = false;
-    for (Block &block : kernel.getBody()) {
-      llvm::SmallVector<scf::ParallelOp, 4> loops =
-          llvm::to_vector(block.getOps<scf::ParallelOp>());
-      for (auto pair : llvm::zip(loops, llvm::drop_begin(loops))) {
-        auto [first, second] = pair;
-        if (fuseParallelPair(first, second, kernel, call, aliasAnalysis)) {
-          changed = true;
-          break;
-        }
-      }
-      if (changed)
-        break;
-    }
-  }
-}
-
-struct ScalarForwardingCandidate {
-  Operation *allocation;
-  memref::StoreOp store;
-  llvm::SmallVector<memref::LoadOp, 2> loads;
-  llvm::SmallVector<memref::DeallocOp, 1> deallocations;
-};
-
-/// Recognizes the deliberately narrow case where a local buffer is merely an
-/// SSA edge obscured by loop lowering: one store operation, one or more later
-/// loads in the same parallel loop, and exactly equal index Values. Buffers
-/// with initialization, multiple stores, subviews, or cross-loop reuse remain
-/// materialized.
-std::optional<ScalarForwardingCandidate>
-getScalarForwardingCandidate(Operation *allocation, DominanceInfo &dominance) {
-  if (!isa<memref::AllocOp, memref::AllocaOp>(allocation) ||
-      allocation->getNumResults() != 1)
-    return std::nullopt;
-
-  Value buffer = allocation->getResult(0);
-  memref::StoreOp store;
-  llvm::SmallVector<memref::LoadOp, 2> loads;
-  llvm::SmallVector<memref::DeallocOp, 1> deallocations;
-  for (OpOperand &use : buffer.getUses()) {
-    Operation *owner = use.getOwner();
-    if (auto candidateStore = dyn_cast<memref::StoreOp>(owner)) {
-      if (candidateStore.getMemRef() != buffer || store)
-        return std::nullopt;
-      store = candidateStore;
-      continue;
-    }
-    if (auto load = dyn_cast<memref::LoadOp>(owner)) {
-      if (load.getMemRef() != buffer)
-        return std::nullopt;
-      loads.push_back(load);
-      continue;
-    }
-    if (auto deallocation = dyn_cast<memref::DeallocOp>(owner)) {
-      deallocations.push_back(deallocation);
-      continue;
-    }
-    return std::nullopt;
-  }
-  if (!store || loads.empty())
-    return std::nullopt;
-
-  scf::ParallelOp parallel = store->getParentOfType<scf::ParallelOp>();
-  if (!parallel)
-    return std::nullopt;
-  for (memref::LoadOp load : loads) {
-    if (load->getParentOfType<scf::ParallelOp>() != parallel ||
-        !dominance.dominates(store, load) ||
-        !llvm::equal(store.getIndices(), load.getIndices()))
-      return std::nullopt;
-  }
-  return ScalarForwardingCandidate{allocation, store, std::move(loads),
-                                   std::move(deallocations)};
-}
-
-void eliminateScalarIntermediates(func::FuncOp kernel) {
-  DominanceInfo dominance(kernel);
-  llvm::SmallVector<ScalarForwardingCandidate, 4> candidates;
-  kernel.walk([&](Operation *operation) {
-    auto candidate = getScalarForwardingCandidate(operation, dominance);
-    if (candidate)
-      candidates.push_back(std::move(*candidate));
-  });
-
-  for (ScalarForwardingCandidate &candidate : candidates) {
-    Value forwarded = candidate.store.getValue();
-    for (memref::LoadOp load : candidate.loads) {
-      load.getResult().replaceAllUsesWith(forwarded);
-      load.erase();
-    }
-    candidate.store.erase();
-    for (memref::DeallocOp deallocation : candidate.deallocations)
-      deallocation.erase();
-    candidate.allocation->erase();
-  }
-}
-
-} // namespace
-
-LogicalResult fuseAlgebraicKernelLoops(ModuleOp module) {
-  AliasAnalysis aliasAnalysis(module);
-  for (func::FuncOp function : module.getOps<func::FuncOp>()) {
-    if (!function->hasAttr(kAlgebraicKernelAttr))
-      continue;
-    func::CallOp call = findSoleKernelCall(module, function);
-    if (!call) {
-      function.emitRemark(
-          "loop fusion requires an outlined kernel with exactly one call");
-      continue;
-    }
-    fuseKernelLoops(function, call, aliasAnalysis);
-    eliminateScalarIntermediates(function);
-  }
-  return success();
-}
-
-} // namespace mlir::lapis
-
-//===----------------------------------------------------------------------===//
 // Pass driver
 //===----------------------------------------------------------------------===//
 
@@ -1599,8 +884,6 @@ using namespace mlir;
 
 namespace mlir {
 #define GEN_PASS_DEF_ALGEBRAICKERNELFUSIONPASS
-#define GEN_PASS_DEF_OUTLINEALGEBRAICKERNELSPASS
-#define GEN_PASS_DEF_FUSEALGEBRAICKERNELLOOPSPASS
 #include "lapis/Transform/Passes.h.inc"
 } // namespace mlir
 
@@ -1621,6 +904,11 @@ struct AlgebraicKernelFusionPass
     ModuleOp module = getOperation();
     llvm::SmallVector<PlannedRegion, 4> plannedRegions;
     std::uint64_t nextFusionGroup = 0;
+    auto fail = [&](Operation *operation, llvm::StringRef context,
+                    llvm::Error error) {
+      operation->emitError(context) << llvm::toString(std::move(error));
+      signalPassFailure();
+    };
 
     // Finish every fallible discovery and planning step before modifying the
     // module. A planner limitation therefore cannot leave a partially
@@ -1628,9 +916,8 @@ struct AlgebraicKernelFusionPass
     for (func::FuncOp function : module.getOps<func::FuncOp>()) {
       auto regions = mlir::lapis::discoverLinalgEinsumRegions(function);
       if (!regions) {
-        function.emitError("algebraic region discovery failed: ")
-            << llvm::toString(regions.takeError());
-        signalPassFailure();
+        fail(function,
+             "algebraic region discovery failed: ", regions.takeError());
         return;
       }
 
@@ -1638,9 +925,8 @@ struct AlgebraicKernelFusionPass
         auto planner = mlir::lapis::ExactContractionPlanner::create(
             region.getExpression());
         if (!planner) {
-          region.getRoot().emitError("contraction planner creation failed: ")
-              << llvm::toString(planner.takeError());
-          signalPassFailure();
+          fail(region.getRoot(),
+               "contraction planner creation failed: ", planner.takeError());
           return;
         }
 
@@ -1655,17 +941,15 @@ struct AlgebraicKernelFusionPass
 
         auto plan = planner->plan(requiredResults);
         if (!plan) {
-          region.getRoot().emitError("contraction planning failed: ")
-              << llvm::toString(plan.takeError());
-          signalPassFailure();
+          fail(region.getRoot(),
+               "contraction planning failed: ", plan.takeError());
           return;
         }
 
         auto evaluation = mlir::lapis::evaluateFusionCandidate(region, *plan);
         if (!evaluation) {
-          region.getRoot().emitError("fusion candidate evaluation failed: ")
-              << llvm::toString(evaluation.takeError());
-          signalPassFailure();
+          fail(region.getRoot(),
+               "fusion candidate evaluation failed: ", evaluation.takeError());
           return;
         }
         if (!evaluation->shouldRewrite())
@@ -1733,10 +1017,8 @@ struct AlgebraicKernelFusionPass
       auto result = mlir::lapis::materializeContractionPlan(
           rewriter, planned.region, planned.plan, planned.fusionGroup);
       if (!result) {
-        planned.region.getRoot().emitError(
-            "contraction materialization failed: ")
-            << llvm::toString(result.takeError());
-        signalPassFailure();
+        fail(planned.region.getRoot(),
+             "contraction materialization failed: ", result.takeError());
         return;
       }
     }
@@ -1750,40 +1032,8 @@ struct AlgebraicKernelFusionPass
   }
 };
 
-struct OutlineAlgebraicKernelsPass
-    : public impl::OutlineAlgebraicKernelsPassBase<
-          OutlineAlgebraicKernelsPass> {
-  using impl::OutlineAlgebraicKernelsPassBase<
-      OutlineAlgebraicKernelsPass>::OutlineAlgebraicKernelsPassBase;
-
-  void runOnOperation() override {
-    if (failed(mlir::lapis::outlineAlgebraicKernels(getOperation())))
-      signalPassFailure();
-  }
-};
-
-struct FuseAlgebraicKernelLoopsPass
-    : public impl::FuseAlgebraicKernelLoopsPassBase<
-          FuseAlgebraicKernelLoopsPass> {
-  using impl::FuseAlgebraicKernelLoopsPassBase<
-      FuseAlgebraicKernelLoopsPass>::FuseAlgebraicKernelLoopsPassBase;
-
-  void runOnOperation() override {
-    if (failed(mlir::lapis::fuseAlgebraicKernelLoops(getOperation())))
-      signalPassFailure();
-  }
-};
-
 } // namespace
 
 std::unique_ptr<Pass> mlir::createAlgebraicKernelFusionPass() {
   return std::make_unique<AlgebraicKernelFusionPass>();
-}
-
-std::unique_ptr<Pass> mlir::createOutlineAlgebraicKernelsPass() {
-  return std::make_unique<OutlineAlgebraicKernelsPass>();
-}
-
-std::unique_ptr<Pass> mlir::createFuseAlgebraicKernelLoopsPass() {
-  return std::make_unique<FuseAlgebraicKernelLoopsPass>();
 }
