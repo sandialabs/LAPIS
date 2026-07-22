@@ -2,9 +2,9 @@
 
 This harness builds two versions of each input MLIR module:
 
-- `baseline`: lowered directly with `--sparse-compiler-kokkos`;
-- `optimized`: first transformed with `--algebraic-kernel-fusion`, then
-  lowered through the same Kokkos pipeline.
+- `baseline`: lowered with `--sparse-compiler-kokkos`;
+- `optimized`: lowered through the same pipeline with its
+  `algebraic-kernel-fusion` option enabled.
 
 Both variants use the same native C++ driver, deterministic inputs, correctness
 check, warmup count, timed iteration count, and a `Kokkos::fence` around every

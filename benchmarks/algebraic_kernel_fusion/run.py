@@ -102,16 +102,13 @@ def require_runtime(args):
 
 
 def lower_module(args, case, variant, source, case_build):
+    pipeline_options = [
+        "parallelization-strategy=any-storage-any-loop",
+        "decompose-sparse-tensors",
+    ]
     if variant == "optimized":
-        source = run_checked(
-            [args.lapis_opt, "--algebraic-kernel-fusion"], input_text=source
-        )
-
-    pipeline = (
-        "--sparse-compiler-kokkos="
-        "parallelization-strategy=any-storage-any-loop "
-        "decompose-sparse-tensors"
-    )
+        pipeline_options.append("algebraic-kernel-fusion")
+    pipeline = "--sparse-compiler-kokkos=" + " ".join(pipeline_options)
     lowered = run_checked([args.lapis_opt, pipeline], input_text=source)
     module = case_build / f"{case}_{variant}_module.cpp"
     wrapper = case_build / f"{case}_{variant}_wrapper.py"

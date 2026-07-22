@@ -30,6 +30,13 @@
 build*/
 install*/
 
+# CMake in-source build artifacts
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+
 #==============================================================================#
 # Explicit files to ignore (only matches one).
 #==============================================================================#

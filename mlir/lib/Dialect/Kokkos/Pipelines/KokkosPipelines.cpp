@@ -65,8 +65,11 @@ void mlir::kokkos::buildSparseKokkosCompiler(
 
   pm.addPass(createInlinerPass());
 
-  // Rewrite named linalg ops into generic ops and apply fusion.
+  // Rewrite named linalg ops into generic ops before algebraic analysis.
   pm.addNestedPass<func::FuncOp>(createLinalgGeneralizeNamedOpsPass());
+
+  if (options.algebraicKernelFusion)
+    pm.addPass(createAlgebraicKernelFusionPass());
 
   // Remove compile-time unit extent dimensions from linalg ops.
   // For example, a 3D loop over (N, M, 1) will be rewritten to 2D loop over (N,
@@ -139,10 +142,12 @@ void mlir::kokkos::buildSparseKokkosCompiler(
   // rewrite
   pm.addPass(createInlinerPass());
 
-  // Algebraically selected contractions remain marked through bufferization.
-  // Outline them only after the last general inliner so the kernel boundary is
-  // preserved for loop lowering and Kokkos translation.
-  pm.addPass(createOutlineAlgebraicKernelsPass());
+  if (options.algebraicKernelFusion) {
+    // Algebraically selected contractions remain marked through bufferization.
+    // Outline them only after the last general inliner so the kernel boundary
+    // is preserved for loop lowering and Kokkos translation.
+    pm.addPass(createOutlineAlgebraicKernelsPass());
+  }
 
   #ifdef LAPIS_HAS_TORCH_MLIR
   pm.addNestedPass<func::FuncOp>(torch::TMTensor::createTMTensorToLoopsPass());
@@ -159,10 +164,12 @@ void mlir::kokkos::buildSparseKokkosCompiler(
   pm.addPass(memref::createExpandStridedMetadataPass());
   pm.addPass(createLowerAffinePass());
 
-  // Fuse only the parallel domains inside kernels selected and outlined by the
-  // algebraic layer, then scalar-forward eligible private intermediates.
-  // Unmarked code remains under the standard LAPIS policy.
-  pm.addPass(createFuseAlgebraicKernelLoopsPass());
+  if (options.algebraicKernelFusion) {
+    // Fuse only the parallel domains inside kernels selected and outlined by
+    // the algebraic layer, then scalar-forward eligible private intermediates.
+    // Unmarked code remains under the standard LAPIS policy.
+    pm.addPass(createFuseAlgebraicKernelLoopsPass());
+  }
 
   pm.addNestedPass<func::FuncOp>(createConvertComplexToStandardPass());
   // Ensure all casts are realized.

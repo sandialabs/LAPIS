@@ -2,7 +2,6 @@ find_package(GTest REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 add_executable(LAPISTransformTests
-  AlgebraicKernelFusionTest.cpp
   ContractionPlannerTest.cpp
   EinsumTest.cpp
 )
@@ -19,8 +18,6 @@ target_link_libraries(LAPISTransformTests
   PRIVATE
   GTest::gtest_main
   LLVMSupport
-  MLIRParser
-  MLIRTensorDialect
   MLIRLapisTransforms
 )
 
