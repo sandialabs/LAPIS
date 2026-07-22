@@ -13,7 +13,10 @@ summary speedup is the baseline median divided by the optimized median.
 
 The harness requires `lapis-opt`, `lapis-translate`, and CMake on `PATH`, plus
 the same `KOKKOS_ROOT` and `SUPPORT_LIB` variables used by LAPIS's numerical
-tests.
+tests. `KOKKOS_ROOT` may name either an installed prefix containing
+`lib/cmake/Kokkos/KokkosConfig.cmake` or a Kokkos build directory containing
+`KokkosConfig.cmake` directly. Set `CXX` to the compiler required by that
+Kokkos configuration, such as `nvcc_wrapper` for CUDA.
 
 ```sh
 python benchmarks/algebraic_kernel_fusion/run.py \

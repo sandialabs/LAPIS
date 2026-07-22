@@ -119,8 +119,10 @@ def lower_module(args, case, variant, source, case_build):
 
 def find_kokkos_config():
     root = Path(os.environ["KOKKOS_ROOT"])
+    candidates = [root]
     for library_directory in ("lib", "lib64"):
-        candidate = root / library_directory / "cmake" / "Kokkos"
+        candidates.append(root / library_directory / "cmake" / "Kokkos")
+    for candidate in candidates:
         if (candidate / "KokkosConfig.cmake").is_file():
             return candidate
     raise RuntimeError(f"KokkosConfig.cmake not found under {root}")
