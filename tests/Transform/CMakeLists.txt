@@ -32,9 +32,16 @@ add_test(
     ${CMAKE_COMMAND} -E env
       "PATH=${LAPIS_TOOL_BIN}:$ENV{PATH}"
       ${Python3_EXECUTABLE}
-      ${CMAKE_CURRENT_SOURCE_DIR}/AlgebraicKernelFusionNumericalTest.py
+      ${LAPIS_SOURCE_DIR}/benchmarks/algebraic_kernel_fusion/run.py
+      --case abx
+      --case pcg
+      --case linear_attention
+      --warmup 1
+      --iterations 1
       --lapis-opt $<TARGET_FILE:lapis-opt>
-      --work-dir ${CMAKE_CURRENT_BINARY_DIR}/AlgebraicKernelFusionNumerical
+      --lapis-translate $<TARGET_FILE:lapis-translate>
+      --build-dir ${CMAKE_CURRENT_BINARY_DIR}/AlgebraicKernelFusionNumerical
+      --skip-if-unavailable
 )
 set_tests_properties(
   AlgebraicKernelFusionNumerical

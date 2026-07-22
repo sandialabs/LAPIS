@@ -14,6 +14,10 @@ ROOT = Path(__file__).resolve().parent
 CASES = ROOT / "cases"
 
 
+class MissingPrerequisite(RuntimeError):
+    """A missing optional runtime dependency, as opposed to a test failure."""
+
+
 @dataclass(frozen=True)
 class Result:
     case: str
@@ -47,6 +51,11 @@ def parse_args():
     parser.add_argument("--lapis-opt", default=shutil.which("lapis-opt"))
     parser.add_argument(
         "--lapis-translate", default=shutil.which("lapis-translate")
+    )
+    parser.add_argument(
+        "--skip-if-unavailable",
+        action="store_true",
+        help="return CTest's skip code when optional prerequisites are missing",
     )
     args = parser.parse_args()
     if args.warmup <= 0 or args.iterations <= 0:
@@ -87,7 +96,9 @@ def require_runtime(args):
         if not os.environ.get(variable):
             missing.append(variable)
     if missing:
-        raise RuntimeError("missing benchmark prerequisites: " + ", ".join(missing))
+        raise MissingPrerequisite(
+            "missing benchmark prerequisites: " + ", ".join(missing)
+        )
 
 
 def lower_module(args, case, variant, source, case_build):
@@ -262,6 +273,9 @@ def main():
                 writer.writerow(Result.__dataclass_fields__)
                 for result in results:
                     writer.writerow(vars(result).values())
+    except MissingPrerequisite as error:
+        print(f"SKIP: {error}", file=sys.stderr)
+        return 77 if args.skip_if_unavailable else 1
     except RuntimeError as error:
         print(error, file=sys.stderr)
         return 1
