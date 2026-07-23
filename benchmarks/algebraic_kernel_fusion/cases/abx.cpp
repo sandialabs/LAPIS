@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 namespace {
 
@@ -59,15 +60,17 @@ double validateAndChecksum(MatrixA &a, MatrixB &b, VectorX &x) {
   const auto xHost = x.host_view();
   const auto resultHost = result.host_view();
 
+  std::vector<double> bx(k, 0.0);
+  for (std::size_t inner = 0; inner < k; ++inner) {
+    for (std::size_t column = 0; column < n; ++column)
+      bx[inner] += static_cast<double>(bHost(inner, column)) * xHost(column);
+  }
+
   double checksum = 0.0;
   for (std::size_t row = 0; row < m; ++row) {
     double expected = 0.0;
-    for (std::size_t inner = 0; inner < k; ++inner) {
-      double bx = 0.0;
-      for (std::size_t column = 0; column < n; ++column)
-        bx += static_cast<double>(bHost(inner, column)) * xHost(column);
-      expected += static_cast<double>(aHost(row, inner)) * bx;
-    }
+    for (std::size_t inner = 0; inner < k; ++inner)
+      expected += static_cast<double>(aHost(row, inner)) * bx[inner];
     const double actual = resultHost(row);
     const double tolerance = 2.0e-3 + 2.0e-4 * std::abs(expected);
     if (std::abs(actual - expected) > tolerance) {
