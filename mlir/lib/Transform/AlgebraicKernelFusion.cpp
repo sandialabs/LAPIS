@@ -308,12 +308,8 @@ evaluateFusionCandidate(const LinalgEinsumRegion &region,
     return llvm::createStringError(
         "optimized contraction plan is more expensive than the source region");
 
-  return FusionCandidateEvaluation{
-      /*originalWork=*/originalWork,
-      /*optimizedWork=*/optimizedCost->totalWork,
-      /*originalKernelCount=*/
-      static_cast<unsigned>(region.getOperations().size()),
-      /*fusedKernelCount=*/1};
+  return FusionCandidateEvaluation{/*originalWork=*/originalWork,
+                                   /*optimizedWork=*/optimizedCost->totalWork};
 }
 
 //===----------------------------------------------------------------------===//
@@ -757,20 +753,81 @@ bool hasDependencyLeavingAndReentering(
   return false;
 }
 
+bool hasReductionIterator(linalg::GenericOp operation) {
+  return llvm::is_contained(operation.getIteratorTypesArray(),
+                            utils::IteratorType::reduction);
+}
+
+bool hasOnlyReductionIterators(linalg::GenericOp operation) {
+  auto iteratorTypes = operation.getIteratorTypesArray();
+  return !iteratorTypes.empty() &&
+         llvm::all_of(iteratorTypes, [](utils::IteratorType type) {
+           return type == utils::IteratorType::reduction;
+         });
+}
+
+bool atomConsumesMemberResult(const FusionAtom &atom,
+                              const llvm::DenseSet<Operation *> &members) {
+  return llvm::any_of(atom.operations, [&](linalg::GenericOp operation) {
+    return llvm::any_of(operation->getOperands(), [&](Value operand) {
+      Operation *definition = operand.getDefiningOp();
+      return definition && members.contains(definition);
+    });
+  });
+}
+
+bool resultEscapesFusionSet(linalg::GenericOp operation,
+                            const llvm::DenseSet<Operation *> &members) {
+  return llvm::any_of(operation->getResults(), [&](Value result) {
+    return llvm::any_of(result.getUses(), [&](OpOperand &use) {
+      return !members.contains(use.getOwner());
+    });
+  });
+}
+
+/// A terminal reduction may consume a pointwise producer without changing the
+/// reduction hierarchy. By contrast, absorbing an escaping reduction result
+/// into another reduction couples two independently lowerable reductions while
+/// leaving the producer storage externally required. That transformation has
+/// no algebraic work or materialization benefit, so leave it unselected.
+bool introducesEscapingNestedReduction(
+    llvm::ArrayRef<linalg::GenericOp> operations) {
+  if (operations.size() < 2 || !hasOnlyReductionIterators(operations.back()))
+    return false;
+
+  llvm::DenseSet<Operation *> members;
+  for (linalg::GenericOp operation : operations)
+    members.insert(operation);
+
+  return llvm::any_of(operations.drop_back(), [&](linalg::GenericOp operation) {
+    return hasReductionIterator(operation) &&
+           resultEscapesFusionSet(operation, members);
+  });
+}
+
 bool canFuseAtoms(llvm::ArrayRef<FusionAtom> atoms) {
   if (atoms.size() < 2)
     return false;
 
   llvm::SmallVector<linalg::GenericOp, 8> operations;
+  llvm::DenseSet<Operation *> members;
   FusionSequence sequence;
-  for (const FusionAtom &atom : atoms) {
+  for (const auto &[atomNumber, atom] : llvm::enumerate(atoms)) {
+    // Same-domain sibling operations are not producer-consumer fusion. Require
+    // every appended atom to consume a result already in the sequence; this
+    // retains map/map/reduce chains without treating launch-count reduction as
+    // a platform-independent profitability objective.
+    if (atomNumber != 0 && !atomConsumesMemberResult(atom, members))
+      return false;
     for (linalg::GenericOp operation : atom.operations) {
       if (!appendToFusionSequence(sequence, operation))
         return false;
       operations.push_back(operation);
+      members.insert(operation);
     }
   }
-  return !hasDependencyLeavingAndReentering(operations);
+  return !introducesEscapingNestedReduction(operations) &&
+         !hasDependencyLeavingAndReentering(operations);
 }
 
 void partitionFusionAtoms(llvm::MutableArrayRef<FusionAtom> atoms,
@@ -1356,10 +1413,10 @@ struct AlgebraicKernelFusionPass
 
     // Treat algebraically planned regions as indivisible atoms and find an
     // exact, deterministic partition of each block-local atom sequence. A set
-    // must have a non-empty statically matching parallel domain, allowing
-    // permutations, and be closed under SSA dependencies. The
-    // post-bufferization legality pass still has final authority over aliasing
-    // and memory dependences.
+    // must form a producer-consumer chain, have a non-empty statically matching
+    // parallel domain (allowing permutations), preserve reduction topology,
+    // and be closed under SSA dependencies. The post-bufferization legality
+    // pass still has final authority over aliasing and memory dependences.
     mlir::lapis::selectFusionSets(module, nextFusionGroup);
 
     // Linalg-to-loop conversion faithfully preserves the iterator schedule

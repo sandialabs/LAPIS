@@ -1,5 +1,9 @@
 // RUN: %lapis-opt %s --algebraic-kernel-fusion | diff -B %s.gold -
 // RUN: %lapis-opt %s '--sparse-compiler-kokkos=parallelization-strategy=any-storage-any-loop decompose-sparse-tensors algebraic-kernel-fusion' | grep lapis.algebraic_kernel > /dev/null
+// RUN: %lapis-opt %S/../../../benchmarks/algebraic_kernel_fusion/cases/pcg.mlir --algebraic-kernel-fusion > %t.pcg
+// RUN: grep -c lapis.algebraic_fusion_group %t.pcg | grep '^3$'
+// RUN: grep 'iterator_types = \["reduction"\].*lapis.algebraic_fusion_group' %t.pcg > /dev/null
+// RUN: ! grep 'iterator_types = \["parallel", "reduction"\].*lapis.algebraic_fusion_group' %t.pcg
 
 // ABx exercises extraction, region composition, exact reassociation, plan
 // materialization, fusion-set marking, and the integrated Kokkos pipeline.

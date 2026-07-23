@@ -121,25 +121,18 @@ discoverLinalgEinsumRegions(func::FuncOp function);
 struct FusionCandidateEvaluation {
   WorkCost originalWork;
   WorkCost optimizedWork;
-  unsigned originalKernelCount;
-  unsigned fusedKernelCount;
 
-  /// Multiplication work is the primary objective. When work is equal, prefer
-  /// placing the region in fewer algebraic kernels. No backend characteristics
-  /// are part of either objective.
-  bool shouldRewrite() const {
-    return optimizedWork < originalWork ||
-           (optimizedWork == originalWork &&
-            fusedKernelCount < originalKernelCount);
-  }
+  /// Rewrite only when contraction planning strictly reduces multiplication
+  /// work. Equal-work producer-consumer fusion is considered separately from
+  /// contraction reassociation using reduction topology and dataflow.
+  bool shouldRewrite() const { return optimizedWork < originalWork; }
 };
 
 /// Compares the work performed by the source operations in `region` with the
 /// work performed by `optimizedPlan`.
 ///
-/// One work unit is one scalar multiplication. The secondary objective counts
-/// algebraic kernel boundaries only. Storage volume, locality, launch cost, and
-/// backend characteristics are intentionally excluded.
+/// One work unit is one scalar multiplication. Storage volume, locality,
+/// launch cost, and backend characteristics are intentionally excluded.
 llvm::Expected<FusionCandidateEvaluation>
 evaluateFusionCandidate(const LinalgEinsumRegion &region,
                         const ContractionPlan &optimizedPlan);
