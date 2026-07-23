@@ -4,6 +4,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Utils/StructuredOpsUtils.h"
 #include "mlir/IR/AffineExpr.h"
@@ -604,15 +605,6 @@ llvm::Expected<llvm::SmallVector<Value, 2>> materializeContractionPlan(
 //===----------------------------------------------------------------------===//
 namespace {
 
-unsigned commonDomainPrefix(llvm::ArrayRef<int64_t> lhs,
-                            llvm::ArrayRef<int64_t> rhs) {
-  unsigned prefix = 0;
-  while (prefix < std::min(lhs.size(), rhs.size()) &&
-         lhs[prefix] == rhs[prefix])
-    ++prefix;
-  return prefix;
-}
-
 struct FusionAtom {
   llvm::SmallVector<linalg::GenericOp, 4> operations;
   unsigned firstPosition = 0;
@@ -624,37 +616,54 @@ struct FusionSequence {
   bool terminalReduction = false;
 };
 
-/// Returns the static leading parallel domain. A reduction-only operation is
-/// represented by its complete domain because it may terminate a fused
-/// producer-consumer sequence.
-std::optional<std::pair<llvm::SmallVector<int64_t, 4>, bool>>
-getFusibleDomain(linalg::GenericOp operation) {
+struct FusibleDomain {
+  llvm::SmallVector<int64_t, 4> extents;
+  bool reductionOnly = false;
+};
+
+/// Returns every static parallel dimension in lowering order. The dense
+/// Linalg lowering hoists parallel iterators around reductions, so a parallel
+/// iterator remains fusible even when it is not a leading iterator in the
+/// structured operation. A reduction-only operation is represented by its
+/// complete domain because it may terminate a fused producer-consumer
+/// sequence.
+std::optional<FusibleDomain> getFusibleDomain(linalg::GenericOp operation) {
   llvm::SmallVector<int64_t, 4> loopRanges = operation.getStaticLoopRanges();
   auto iteratorTypes = operation.getIteratorTypesArray();
   if (loopRanges.empty() || loopRanges.size() != iteratorTypes.size())
     return std::nullopt;
 
-  unsigned leadingParallel = 0;
-  while (leadingParallel < iteratorTypes.size() &&
-         iteratorTypes[leadingParallel] == utils::IteratorType::parallel)
-    ++leadingParallel;
-
   bool reductionOnly =
       llvm::all_of(iteratorTypes, [](utils::IteratorType type) {
         return type == utils::IteratorType::reduction;
       });
-  if (leadingParallel == 0 && !reductionOnly)
-    return std::nullopt;
 
-  unsigned domainSize = reductionOnly ? loopRanges.size() : leadingParallel;
   llvm::SmallVector<int64_t, 4> domain;
-  domain.reserve(domainSize);
-  for (int64_t extent : llvm::ArrayRef(loopRanges).take_front(domainSize)) {
+  for (const auto &[extent, iteratorType] :
+       llvm::zip(loopRanges, iteratorTypes)) {
+    if (!reductionOnly && iteratorType != utils::IteratorType::parallel)
+      continue;
     if (ShapedType::isDynamic(extent) || extent <= 0)
       return std::nullopt;
     domain.push_back(extent);
   }
-  return std::pair(std::move(domain), reductionOnly);
+  if (domain.empty())
+    return std::nullopt;
+  return FusibleDomain{std::move(domain), reductionOnly};
+}
+
+llvm::SmallVector<int64_t, 4> intersectDomains(llvm::ArrayRef<int64_t> lhs,
+                                               llvm::ArrayRef<int64_t> rhs) {
+  llvm::SmallVector<int64_t, 4> remaining(rhs);
+  llvm::SmallVector<int64_t, 4> intersection;
+  for (int64_t extent : lhs) {
+    auto match = llvm::find(remaining, extent);
+    if (match == remaining.end())
+      continue;
+    intersection.push_back(extent);
+    remaining.erase(match);
+  }
+  return intersection;
 }
 
 bool appendToFusionSequence(FusionSequence &sequence,
@@ -674,12 +683,16 @@ bool appendToFusionSequence(FusionSequence &sequence,
     return true;
   }
 
-  unsigned prefix = commonDomainPrefix(sequence.domain, operationDomain);
-  if (prefix == 0)
-    return false;
-  if (reductionOnly && prefix != operationDomain.size())
-    return false;
-  sequence.domain.resize(prefix);
+  if (reductionOnly) {
+    auto common = intersectDomains(operationDomain, sequence.domain);
+    if (common.size() != operationDomain.size())
+      return false;
+    sequence.domain = std::move(operationDomain);
+  } else {
+    sequence.domain = intersectDomains(sequence.domain, operationDomain);
+    if (sequence.domain.empty())
+      return false;
+  }
   sequence.terminalReduction = reductionOnly;
   return true;
 }
@@ -873,6 +886,324 @@ void selectFusionSets(ModuleOp module, std::uint64_t &nextFusionGroup) {
   }
 }
 
+struct IndexedTensorAccess {
+  unsigned operation;
+  AffineMap map;
+};
+
+class DimensionEquivalence {
+public:
+  explicit DimensionEquivalence(unsigned size) : parents(size) {
+    for (unsigned index = 0; index < size; ++index)
+      parents[index] = index;
+  }
+
+  unsigned find(unsigned value) {
+    if (parents[value] != value)
+      parents[value] = find(parents[value]);
+    return parents[value];
+  }
+
+  void unite(unsigned lhs, unsigned rhs) {
+    lhs = find(lhs);
+    rhs = find(rhs);
+    if (lhs != rhs)
+      parents[std::max(lhs, rhs)] = std::min(lhs, rhs);
+  }
+
+private:
+  llvm::SmallVector<unsigned, 16> parents;
+};
+
+void addIndexedAccess(
+    llvm::DenseMap<Value, llvm::SmallVector<IndexedTensorAccess, 2>> &accesses,
+    Value value, unsigned operation, AffineMap map) {
+  if (isa<ShapedType>(value.getType()))
+    accesses[value].push_back(IndexedTensorAccess{operation, map});
+}
+
+/// Aligns the parallel iterators of one selected group without moving a
+/// parallel iterator across a reduction iterator. Tensor axes shared between
+/// operations establish semantic dimension equivalence; equal static extents
+/// provide a deterministic fallback for independent sibling operations. The
+/// post-lowering dependence analysis retains final authority over fusion.
+LogicalResult
+alignFusionGroupIterators(llvm::ArrayRef<linalg::GenericOp> operations,
+                          RewriterBase &rewriter) {
+  if (operations.size() < 2)
+    return success();
+
+  llvm::SmallVector<unsigned, 8> dimensionOffsets{0};
+  llvm::SmallVector<llvm::SmallVector<int64_t, 4>, 4> loopRanges;
+  llvm::SmallVector<llvm::SmallVector<utils::IteratorType, 4>, 4> iteratorTypes;
+  for (linalg::GenericOp operation : operations) {
+    loopRanges.push_back(operation.getStaticLoopRanges());
+    auto types = operation.getIteratorTypesArray();
+    iteratorTypes.emplace_back(types.begin(), types.end());
+    if (loopRanges.back().size() != iteratorTypes.back().size())
+      return success();
+    dimensionOffsets.push_back(dimensionOffsets.back() +
+                               iteratorTypes.back().size());
+  }
+
+  DimensionEquivalence equivalence(dimensionOffsets.back());
+  llvm::DenseMap<Value, llvm::SmallVector<IndexedTensorAccess, 2>> accesses;
+  for (const auto &indexedOperation : llvm::enumerate(operations)) {
+    unsigned operationNumber = indexedOperation.index();
+    linalg::GenericOp operation = indexedOperation.value();
+    for (OpOperand *input : operation.getDpsInputOperands()) {
+      addIndexedAccess(accesses, input->get(), operationNumber,
+                       operation.getMatchingIndexingMap(input));
+    }
+
+    auto inits = operation.getDpsInitsMutable();
+    for (const auto &[resultNumber, result] :
+         llvm::enumerate(operation.getResults())) {
+      OpOperand &init = inits[resultNumber];
+      addIndexedAccess(accesses, result, operationNumber,
+                       operation.getMatchingIndexingMap(&init));
+    }
+  }
+
+  for (auto &entry : accesses) {
+    auto &valueAccesses = entry.second;
+    for (std::size_t lhsNumber = 0; lhsNumber < valueAccesses.size();
+         ++lhsNumber) {
+      const IndexedTensorAccess &lhs = valueAccesses[lhsNumber];
+      for (std::size_t rhsNumber = lhsNumber + 1;
+           rhsNumber < valueAccesses.size(); ++rhsNumber) {
+        const IndexedTensorAccess &rhs = valueAccesses[rhsNumber];
+        if (lhs.operation == rhs.operation ||
+            lhs.map.getNumResults() != rhs.map.getNumResults())
+          continue;
+        for (auto [lhsExpression, rhsExpression] :
+             llvm::zip(lhs.map.getResults(), rhs.map.getResults())) {
+          auto lhsDimension = dyn_cast<AffineDimExpr>(lhsExpression);
+          auto rhsDimension = dyn_cast<AffineDimExpr>(rhsExpression);
+          if (!lhsDimension || !rhsDimension)
+            continue;
+          equivalence.unite(
+              dimensionOffsets[lhs.operation] + lhsDimension.getPosition(),
+              dimensionOffsets[rhs.operation] + rhsDimension.getPosition());
+        }
+      }
+    }
+  }
+
+  bool terminalReduction =
+      llvm::all_of(iteratorTypes.back(), [](utils::IteratorType iteratorType) {
+        return iteratorType == utils::IteratorType::reduction;
+      });
+  unsigned referenceOperation = terminalReduction ? operations.size() - 1 : 0;
+
+  llvm::SmallVector<llvm::DenseMap<unsigned, unsigned>, 4> rootDimensions(
+      operations.size());
+  llvm::SmallVector<llvm::DenseSet<unsigned>, 4> ambiguousRoots(
+      operations.size());
+  for (unsigned operationNumber = 0; operationNumber < operations.size();
+       ++operationNumber) {
+    for (const auto &[dimension, iteratorType] :
+         llvm::enumerate(iteratorTypes[operationNumber])) {
+      bool eligible =
+          iteratorType == utils::IteratorType::parallel ||
+          (terminalReduction && operationNumber == referenceOperation &&
+           iteratorType == utils::IteratorType::reduction);
+      if (!eligible)
+        continue;
+      unsigned root = equivalence.find(dimensionOffsets[operationNumber] +
+                                       static_cast<unsigned>(dimension));
+      auto [iterator, inserted] = rootDimensions[operationNumber].try_emplace(
+          root, static_cast<unsigned>(dimension));
+      if (!inserted && iterator->second != dimension) {
+        rootDimensions[operationNumber].erase(root);
+        ambiguousRoots[operationNumber].insert(root);
+      }
+    }
+  }
+
+  llvm::SmallVector<llvm::SmallVector<unsigned, 4>, 4> desiredDimensions(
+      operations.size());
+  llvm::SmallVector<llvm::DenseSet<unsigned>, 4> usedDimensions(
+      operations.size());
+  llvm::DenseSet<unsigned> selectedRoots;
+
+  for (unsigned referenceDimension = 0;
+       referenceDimension < iteratorTypes[referenceOperation].size();
+       ++referenceDimension) {
+    utils::IteratorType referenceType =
+        iteratorTypes[referenceOperation][referenceDimension];
+    if ((!terminalReduction &&
+         referenceType != utils::IteratorType::parallel) ||
+        (terminalReduction && referenceType != utils::IteratorType::reduction))
+      continue;
+
+    unsigned root = equivalence.find(dimensionOffsets[referenceOperation] +
+                                     referenceDimension);
+    if (!selectedRoots.insert(root).second)
+      continue;
+    bool presentEverywhere = true;
+    for (unsigned operationNumber = 0; operationNumber < operations.size();
+         ++operationNumber) {
+      if (ambiguousRoots[operationNumber].contains(root) ||
+          !rootDimensions[operationNumber].contains(root)) {
+        presentEverywhere = false;
+        break;
+      }
+    }
+    if (!presentEverywhere)
+      continue;
+    for (unsigned operationNumber = 0; operationNumber < operations.size();
+         ++operationNumber) {
+      unsigned dimension = rootDimensions[operationNumber].lookup(root);
+      desiredDimensions[operationNumber].push_back(dimension);
+      usedDimensions[operationNumber].insert(dimension);
+    }
+  }
+
+  // Complete the common prefix by shape for sibling operations that do not
+  // communicate through a tensor. Exact tensor-axis matches above are chosen
+  // first, which disambiguates repeated extents in producer-consumer chains.
+  for (unsigned referenceDimension = 0;
+       referenceDimension < iteratorTypes[referenceOperation].size();
+       ++referenceDimension) {
+    utils::IteratorType referenceType =
+        iteratorTypes[referenceOperation][referenceDimension];
+    if ((!terminalReduction &&
+         referenceType != utils::IteratorType::parallel) ||
+        (terminalReduction &&
+         referenceType != utils::IteratorType::reduction) ||
+        usedDimensions[referenceOperation].contains(referenceDimension))
+      continue;
+
+    int64_t extent = loopRanges[referenceOperation][referenceDimension];
+    if (ShapedType::isDynamic(extent) || extent <= 0)
+      continue;
+    llvm::SmallVector<unsigned, 4> matches(operations.size());
+    matches[referenceOperation] = referenceDimension;
+    bool presentEverywhere = true;
+    for (unsigned operationNumber = 0; operationNumber < operations.size();
+         ++operationNumber) {
+      if (operationNumber == referenceOperation)
+        continue;
+      std::optional<unsigned> match;
+      for (unsigned dimension = 0;
+           dimension < iteratorTypes[operationNumber].size(); ++dimension) {
+        if (iteratorTypes[operationNumber][dimension] ==
+                utils::IteratorType::parallel &&
+            !usedDimensions[operationNumber].contains(dimension) &&
+            loopRanges[operationNumber][dimension] == extent) {
+          match = dimension;
+          break;
+        }
+      }
+      if (!match) {
+        presentEverywhere = false;
+        break;
+      }
+      matches[operationNumber] = *match;
+    }
+    if (!presentEverywhere)
+      continue;
+    for (unsigned operationNumber = 0; operationNumber < operations.size();
+         ++operationNumber) {
+      desiredDimensions[operationNumber].push_back(matches[operationNumber]);
+      usedDimensions[operationNumber].insert(matches[operationNumber]);
+    }
+  }
+
+  llvm::SmallVector<llvm::SmallVector<unsigned, 4>, 4> permutations;
+  permutations.reserve(operations.size());
+  for (unsigned operationNumber = 0; operationNumber < operations.size();
+       ++operationNumber) {
+    llvm::SmallVector<unsigned, 4> permutation;
+    for (unsigned dimension = 0;
+         dimension < iteratorTypes[operationNumber].size(); ++dimension)
+      permutation.push_back(dimension);
+
+    if (terminalReduction && operationNumber == referenceOperation) {
+      permutations.push_back(std::move(permutation));
+      continue;
+    }
+
+    llvm::SmallVector<unsigned, 4> parallelSlots;
+    for (const auto &[dimension, iteratorType] :
+         llvm::enumerate(iteratorTypes[operationNumber])) {
+      if (iteratorType == utils::IteratorType::parallel)
+        parallelSlots.push_back(static_cast<unsigned>(dimension));
+    }
+    for (unsigned dimension : parallelSlots) {
+      if (!usedDimensions[operationNumber].contains(dimension))
+        desiredDimensions[operationNumber].push_back(dimension);
+    }
+    if (parallelSlots.size() != desiredDimensions[operationNumber].size())
+      return failure();
+    for (auto [slot, dimension] :
+         llvm::zip(parallelSlots, desiredDimensions[operationNumber]))
+      permutation[slot] = dimension;
+    permutations.push_back(std::move(permutation));
+  }
+
+  for (unsigned operationNumber = 0; operationNumber < operations.size();
+       ++operationNumber) {
+    linalg::GenericOp operation = operations[operationNumber];
+    llvm::ArrayRef<unsigned> permutation = permutations[operationNumber];
+    bool identity =
+        llvm::all_of(llvm::enumerate(permutation), [](const auto &indexed) {
+          return indexed.index() == indexed.value();
+        });
+    if (!identity && failed(linalg::interchangeGenericOp(rewriter, operation,
+                                                         permutation))) {
+      operation.emitError(
+          "failed to align parallel iterators for algebraic fusion");
+      return failure();
+    }
+  }
+  return success();
+}
+
+LogicalResult alignFusionGroupIterators(Block &block, RewriterBase &rewriter) {
+  llvm::SmallVector<llvm::SmallVector<linalg::GenericOp, 4>, 4> groups;
+  llvm::DenseMap<std::int64_t, unsigned> groupNumbers;
+  for (Operation &operation : block) {
+    auto generic = dyn_cast<linalg::GenericOp>(operation);
+    if (!generic)
+      continue;
+    auto group = generic->getAttrOfType<IntegerAttr>(kAlgebraicFusionGroupAttr);
+    if (!group)
+      continue;
+    auto [iterator, inserted] =
+        groupNumbers.try_emplace(group.getInt(), groups.size());
+    if (inserted)
+      groups.emplace_back();
+    groups[iterator->second].push_back(generic);
+  }
+
+  for (auto &group : groups) {
+    if (failed(alignFusionGroupIterators(group, rewriter)))
+      return failure();
+  }
+  for (Operation &operation : block) {
+    for (Region &region : operation.getRegions()) {
+      for (Block &nested : region) {
+        if (failed(alignFusionGroupIterators(nested, rewriter)))
+          return failure();
+      }
+    }
+  }
+  return success();
+}
+
+LogicalResult alignFusionGroupIterators(ModuleOp module) {
+  IRRewriter rewriter(module.getContext());
+  for (func::FuncOp function : module.getOps<func::FuncOp>()) {
+    for (Block &block : function.getBody()) {
+      if (failed(alignFusionGroupIterators(block, rewriter)))
+        return failure();
+    }
+  }
+  return success();
+}
+
 } // namespace
 } // namespace mlir::lapis
 
@@ -1025,10 +1356,20 @@ struct AlgebraicKernelFusionPass
 
     // Treat algebraically planned regions as indivisible atoms and find an
     // exact, deterministic partition of each block-local atom sequence. A set
-    // must have a statically matching leading domain and be closed under SSA
-    // dependencies. The post-bufferization legality pass still has final
-    // authority over aliasing and memory dependences.
+    // must have a non-empty statically matching parallel domain, allowing
+    // permutations, and be closed under SSA dependencies. The
+    // post-bufferization legality pass still has final authority over aliasing
+    // and memory dependences.
     mlir::lapis::selectFusionSets(module, nextFusionGroup);
+
+    // Linalg-to-loop conversion faithfully preserves the iterator schedule
+    // encoded by each operation. Align semantically corresponding parallel
+    // dimensions now so the selected groups lower to compatible loop prefixes.
+    // Reduction iterators retain their original positions and ordering.
+    if (failed(mlir::lapis::alignFusionGroupIterators(module))) {
+      signalPassFailure();
+      return;
+    }
   }
 };
 

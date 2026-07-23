@@ -17,6 +17,7 @@ add_mlir_library(MLIRLapisTransforms
   MLIRArithDialect
   MLIRIR
   MLIRLinalgDialect
+  MLIRLinalgTransforms
   MLIRMemRefDialect
   MLIRPass
   MLIRRewrite

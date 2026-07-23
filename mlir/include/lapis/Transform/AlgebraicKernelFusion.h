@@ -36,13 +36,13 @@ std::unique_ptr<Pass> createOutlineAlgebraicKernelsPass();
 
 /// Fuses adjacent top-level scf.parallel operations in outlined algebraic
 /// kernels when they have an equal, non-empty leading domain and every
-/// cross-loop memory dependence is partitioned by that domain.
+/// cross-loop memory dependence is partitioned by that domain. Selected
+/// Linalg groups align corresponding parallel iterators before loop lowering,
+/// without moving or reordering reduction iterators, so equivalent permuted
+/// domains can satisfy this requirement.
 /// Allocation-backed intermediates represented by a single dominating store
 /// and same-index loads in the resulting loop are forwarded as SSA scalars and
 /// removed.
-///
-/// TODO: Generalize from common leading domains to safe permutations of
-/// arbitrary common parallel dimensions.
 std::unique_ptr<Pass> createFuseAlgebraicKernelLoopsPass();
 
 #define GEN_PASS_REGISTRATION

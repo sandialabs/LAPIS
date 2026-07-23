@@ -1,6 +1,7 @@
 #map = affine_map<(d0, d1) -> (d0, d1)>
 #map1 = affine_map<(d0, d1) -> (d1)>
 #map2 = affine_map<(d0, d1) -> (d0)>
+#map3 = affine_map<(d0, d1) -> (d1, d0)>
 module {
   func.func @abx(%arg0: tensor<2x3xf32>, %arg1: tensor<3x5xf32>, %arg2: tensor<5xf32>) -> tensor<2xf32> {
     %cst = arith.constant dense<0.000000e+00> : tensor<2x5xf32>
@@ -21,5 +22,18 @@ module {
       linalg.yield %5 : f32
     } -> tensor<2xf32>
     return %3 : tensor<2xf32>
+  }
+  func.func @permuted_pointwise(%arg0: tensor<2x3xf32>) -> tensor<3x2xf32> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<2x3xf32>
+    %0 = linalg.generic {indexing_maps = [#map, #map], iterator_types = ["parallel", "parallel"]} ins(%arg0 : tensor<2x3xf32>) outs(%cst : tensor<2x3xf32>) attrs =  {lapis.algebraic_fusion_group = 1 : i64} {
+    ^bb0(%in: f32, %out: f32):
+      linalg.yield %in : f32
+    } -> tensor<2x3xf32>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<3x2xf32>
+    %1 = linalg.generic {indexing_maps = [#map, #map3], iterator_types = ["parallel", "parallel"]} ins(%0 : tensor<2x3xf32>) outs(%cst_0 : tensor<3x2xf32>) attrs =  {lapis.algebraic_fusion_group = 1 : i64} {
+    ^bb0(%in: f32, %out: f32):
+      linalg.yield %in : f32
+    } -> tensor<3x2xf32>
+    return %1 : tensor<3x2xf32>
   }
 }

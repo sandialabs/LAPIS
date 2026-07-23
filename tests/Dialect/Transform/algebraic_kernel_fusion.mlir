@@ -35,4 +35,34 @@ module {
     } -> tensor<2xf32>
     return %result : tensor<2xf32>
   }
+
+  // These pointwise operations have the same iteration space expressed in
+  // opposite orders. They are deliberately not contractions: this stresses
+  // fusion-set selection and semantic iterator alignment independently of the
+  // einsum planner.
+  func.func @permuted_pointwise(%input: tensor<2x3xf32>)
+      -> tensor<3x2xf32> {
+    %producer_zero = arith.constant dense<0.0> : tensor<2x3xf32>
+    %producer = linalg.generic {
+      indexing_maps = [affine_map<(i, j) -> (i, j)>,
+                       affine_map<(i, j) -> (i, j)>],
+      iterator_types = ["parallel", "parallel"]
+    } ins(%input : tensor<2x3xf32>)
+      outs(%producer_zero : tensor<2x3xf32>) {
+    ^bb0(%value: f32, %unused: f32):
+      linalg.yield %value : f32
+    } -> tensor<2x3xf32>
+
+    %consumer_zero = arith.constant dense<0.0> : tensor<3x2xf32>
+    %consumer = linalg.generic {
+      indexing_maps = [affine_map<(i, j) -> (j, i)>,
+                       affine_map<(i, j) -> (i, j)>],
+      iterator_types = ["parallel", "parallel"]
+    } ins(%producer : tensor<2x3xf32>)
+      outs(%consumer_zero : tensor<3x2xf32>) {
+    ^bb0(%value: f32, %unused: f32):
+      linalg.yield %value : f32
+    } -> tensor<3x2xf32>
+    return %consumer : tensor<3x2xf32>
+  }
 }
