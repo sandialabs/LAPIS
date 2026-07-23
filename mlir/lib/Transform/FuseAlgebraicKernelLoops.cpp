@@ -11,6 +11,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Interfaces/ViewLikeInterface.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -102,9 +103,28 @@ bool isPartitionedByCommonPrefix(const MemoryAccess &first,
   return true;
 }
 
+Value skipViewLikeOperations(Value value) {
+  while (Operation *definition = value.getDefiningOp()) {
+    if (auto metadata =
+            dyn_cast<memref::ExtractStridedMetadataOp>(definition)) {
+      if (value != metadata.getBaseBuffer())
+        break;
+      value = metadata.getSource();
+      continue;
+    }
+    auto view = dyn_cast<ViewLikeOpInterface>(definition);
+    if (!view || definition->getNumResults() != 1 ||
+        value != definition->getResult(0))
+      break;
+    value = view.getViewSource();
+  }
+  return value;
+}
+
 Value resolveCallSiteBuffer(Value buffer, func::FuncOp kernel,
                             func::CallOp call) {
-  auto argument = dyn_cast<BlockArgument>(buffer);
+  Value base = skipViewLikeOperations(buffer);
+  auto argument = dyn_cast<BlockArgument>(base);
   if (!argument || argument.getOwner() != &kernel.getBody().front())
     return buffer;
   return call.getOperand(argument.getArgNumber());
@@ -120,8 +140,10 @@ bool areProvablyDistinctFreshBuffers(Value first, Value second) {
     return false;
   bool firstFresh = isFreshAllocation(first);
   bool secondFresh = isFreshAllocation(second);
-  return (firstFresh && (secondFresh || isa<BlockArgument>(second))) ||
-         (secondFresh && isa<BlockArgument>(first));
+  Value firstBase = skipViewLikeOperations(first);
+  Value secondBase = skipViewLikeOperations(second);
+  return (firstFresh && (secondFresh || isa<BlockArgument>(secondBase))) ||
+         (secondFresh && isa<BlockArgument>(firstBase));
 }
 
 bool buffersCannotAlias(Value first, Value second,
@@ -166,6 +188,12 @@ bool operationsBetweenAreMovable(scf::ParallelOp first, scf::ParallelOp second,
 
   for (Operation *operation = first->getNextNode(); operation != second;
        operation = operation->getNextNode()) {
+    // Bufferization places a fresh destination allocation immediately before
+    // each lowered producer. Moving an earlier loop below that allocation is
+    // safe: the earlier loop cannot use a value that does not yet dominate it,
+    // and the allocation cannot alias any of its existing buffers.
+    if (isa<memref::AllocOp, memref::AllocaOp>(operation))
+      continue;
     llvm::SmallVector<MemoryAccess, 4> interveningAccesses;
     if (!collectMemoryAccesses(operation, interveningAccesses))
       return false;
@@ -348,7 +376,7 @@ getScalarForwardingCandidate(Operation *allocation, DominanceInfo &dominance) {
   return candidate;
 }
 
-void eliminateScalarIntermediates(func::FuncOp kernel) {
+bool eliminateScalarIntermediates(func::FuncOp kernel) {
   DominanceInfo dominance(kernel);
   llvm::SmallVector<ScalarForwardingCandidate, 4> candidates;
   kernel.walk([&](Operation *operation) {
@@ -368,6 +396,7 @@ void eliminateScalarIntermediates(func::FuncOp kernel) {
       deallocation.erase();
     candidate.allocation->erase();
   }
+  return !candidates.empty();
 }
 
 } // namespace
@@ -383,8 +412,14 @@ LogicalResult fuseAlgebraicKernelLoops(ModuleOp module) {
           "loop fusion requires an outlined kernel with exactly one call");
       continue;
     }
-    fuseKernelLoops(function, call, aliasAnalysis);
-    eliminateScalarIntermediates(function);
+    // An allocation for a later sibling producer can initially separate two
+    // otherwise fusible parallel loops. Fusing downstream loops may make that
+    // allocation scalar-forwardable; removing it then exposes the next fan-in
+    // edge. Iterate both transformations to a joint fixed point so an arbitrary
+    // number of sibling producers can collapse into their common consumer.
+    do {
+      fuseKernelLoops(function, call, aliasAnalysis);
+    } while (eliminateScalarIntermediates(function));
   }
   return success();
 }

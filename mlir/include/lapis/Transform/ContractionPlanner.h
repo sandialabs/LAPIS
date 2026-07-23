@@ -102,16 +102,23 @@ llvm::Error verifyContractionPlan(const EinsumExpression &expression,
 /// A platform-independent count of scalar contraction work.
 using WorkCost = uint64_t;
 
+/// A platform-independent count of logical tensor elements.
+using StorageVolume = uint64_t;
+
 struct ContractionPlanCost {
   llvm::SmallVector<WorkCost, 4> stepCosts;
+  llvm::SmallVector<StorageVolume, 4> stepResultVolumes;
   WorkCost totalWork = 0;
+  StorageVolume totalIntermediateVolume = 0;
 };
 
-/// Computes algebraic work from operand subsets and index extents.
+/// Computes algebraic work and logical storage from operand subsets and index
+/// extents.
 ///
 /// One work unit is one point in a binary contraction's iteration space,
-/// equivalently one scalar multiplication. This deliberately excludes
-/// backend-dependent execution and storage characteristics.
+/// equivalently one scalar multiplication. Storage volume counts elements in
+/// non-final plan results. Both deliberately exclude backend-dependent
+/// execution and memory characteristics.
 class ContractionCostModel {
 public:
   static llvm::Expected<ContractionCostModel>
@@ -122,6 +129,8 @@ public:
 
   llvm::Expected<WorkCost> getContractionWork(OperandSubset lhs,
                                               OperandSubset rhs) const;
+
+  llvm::Expected<StorageVolume> getResultVolume(OperandSubset operands) const;
 
   llvm::Expected<ContractionPlanCost>
   evaluatePlan(const ContractionPlan &plan) const;
@@ -151,8 +160,9 @@ struct ContractionResultConstraint {
 
 /// Finds a minimum-work binary contraction tree by subset dynamic programming.
 ///
-/// The objective is ContractionCostModel::totalWork. Equal-cost alternatives
-/// are resolved deterministically by lexicographic operand-subset order.
+/// The lexicographic objective minimizes total work, then logical intermediate
+/// volume. Remaining ties are resolved deterministically by operand-subset
+/// order.
 class ExactContractionPlanner {
 public:
   static llvm::Expected<ExactContractionPlanner>

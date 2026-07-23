@@ -121,18 +121,24 @@ discoverLinalgEinsumRegions(func::FuncOp function);
 struct FusionCandidateEvaluation {
   WorkCost originalWork;
   WorkCost optimizedWork;
+  StorageVolume originalTemporaryVolume;
+  StorageVolume optimizedTemporaryVolume;
 
-  /// Rewrite only when contraction planning strictly reduces multiplication
-  /// work. Equal-work producer-consumer fusion is considered separately from
-  /// contraction reassociation using reduction topology and dataflow.
-  bool shouldRewrite() const { return optimizedWork < originalWork; }
+  /// Scalar work is primary. Equal-work reassociation is authorized only when
+  /// it strictly reduces logical temporary volume.
+  bool shouldRewrite() const {
+    return optimizedWork < originalWork ||
+           (optimizedWork == originalWork &&
+            optimizedTemporaryVolume < originalTemporaryVolume);
+  }
 };
 
 /// Compares the work performed by the source operations in `region` with the
 /// work performed by `optimizedPlan`.
 ///
-/// One work unit is one scalar multiplication. Storage volume, locality,
-/// launch cost, and backend characteristics are intentionally excluded.
+/// One work unit is one scalar multiplication. Temporary volume counts logical
+/// tensor elements rather than target bytes. Locality, launch cost, and backend
+/// characteristics are intentionally excluded.
 llvm::Expected<FusionCandidateEvaluation>
 evaluateFusionCandidate(const LinalgEinsumRegion &region,
                         const ContractionPlan &optimizedPlan);

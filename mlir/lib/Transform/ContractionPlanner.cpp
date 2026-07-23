@@ -255,6 +255,22 @@ llvm::Expected<WorkCost> checkedAdd(WorkCost lhs, WorkCost rhs,
   return lhs + rhs;
 }
 
+llvm::Expected<StorageVolume>
+checkedMultiplyVolume(StorageVolume lhs, StorageVolume rhs, IndexId index) {
+  if (rhs != 0 && lhs > std::numeric_limits<StorageVolume>::max() / rhs)
+    return llvm::createStringError(
+        "logical storage volume overflows at index " + llvm::Twine(index));
+  return lhs * rhs;
+}
+
+llvm::Expected<StorageVolume>
+checkedAddVolume(StorageVolume lhs, StorageVolume rhs, std::size_t step) {
+  if (lhs > std::numeric_limits<StorageVolume>::max() - rhs)
+    return llvm::createStringError(
+        "total logical storage volume overflows at step " + llvm::Twine(step));
+  return lhs + rhs;
+}
+
 } // namespace
 
 ContractionCostModel::ContractionCostModel(EinsumExpression expression,
@@ -320,6 +336,27 @@ ContractionCostModel::getContractionWork(OperandSubset lhs,
   return work;
 }
 
+llvm::Expected<StorageVolume>
+ContractionCostModel::getResultVolume(OperandSubset operands) const {
+  auto indices = getValueIndices(operands);
+  if (!indices)
+    return indices.takeError();
+
+  StorageVolume volume = 1;
+  for (IndexId index : *indices) {
+    auto extent = expression.getExtent(index);
+    if (!extent)
+      return llvm::createStringError("missing extent for index " +
+                                     llvm::Twine(index));
+    auto product = checkedMultiplyVolume(
+        volume, static_cast<StorageVolume>(*extent), index);
+    if (!product)
+      return product.takeError();
+    volume = *product;
+  }
+  return volume;
+}
+
 llvm::Expected<ContractionPlanCost>
 ContractionCostModel::evaluatePlan(const ContractionPlan &plan) const {
   if (llvm::Error error = verifyContractionPlan(expression, plan))
@@ -331,6 +368,7 @@ ContractionCostModel::evaluatePlan(const ContractionPlan &plan) const {
 
   ContractionPlanCost planCost;
   planCost.stepCosts.reserve(plan.getSteps().size());
+  planCost.stepResultVolumes.reserve(plan.getSteps().size());
   for (const auto &[stepNumber, step] : llvm::enumerate(plan.getSteps())) {
     auto stepCost = getContractionWork((*valueOperands)[step.lhs],
                                        (*valueOperands)[step.rhs]);
@@ -339,7 +377,20 @@ ContractionCostModel::evaluatePlan(const ContractionPlan &plan) const {
     auto totalWork = checkedAdd(planCost.totalWork, *stepCost, stepNumber);
     if (!totalWork)
       return totalWork.takeError();
+    OperandSubset resultOperands =
+        (*valueOperands)[step.lhs] | (*valueOperands)[step.rhs];
+    auto resultVolume = getResultVolume(resultOperands);
+    if (!resultVolume)
+      return resultVolume.takeError();
+    if (plan.getStepResult(stepNumber) != plan.getResult()) {
+      auto totalVolume = checkedAddVolume(planCost.totalIntermediateVolume,
+                                          *resultVolume, stepNumber);
+      if (!totalVolume)
+        return totalVolume.takeError();
+      planCost.totalIntermediateVolume = *totalVolume;
+    }
     planCost.stepCosts.push_back(*stepCost);
+    planCost.stepResultVolumes.push_back(*resultVolume);
     planCost.totalWork = *totalWork;
   }
   return planCost;
@@ -353,6 +404,7 @@ namespace {
 
 struct PlannerState {
   WorkCost totalWork;
+  StorageVolume totalResultVolume;
   OperandSubset lhs;
   OperandSubset rhs;
 };
@@ -368,12 +420,27 @@ std::optional<WorkCost> checkedPlanWork(WorkCost lhsWork, WorkCost rhsWork,
   return childWork + stepWork;
 }
 
-bool isBetterPlan(WorkCost totalWork, OperandSubset lhs, OperandSubset rhs,
+std::optional<StorageVolume> checkedPlanVolume(StorageVolume lhsVolume,
+                                               StorageVolume rhsVolume,
+                                               StorageVolume resultVolume) {
+  constexpr StorageVolume max = std::numeric_limits<StorageVolume>::max();
+  if (lhsVolume > max - rhsVolume)
+    return std::nullopt;
+  StorageVolume childVolume = lhsVolume + rhsVolume;
+  if (childVolume > max - resultVolume)
+    return std::nullopt;
+  return childVolume + resultVolume;
+}
+
+bool isBetterPlan(WorkCost totalWork, StorageVolume totalResultVolume,
+                  OperandSubset lhs, OperandSubset rhs,
                   const std::optional<PlannerState> &current) {
   if (!current)
     return true;
   if (totalWork != current->totalWork)
     return totalWork < current->totalWork;
+  if (totalResultVolume != current->totalResultVolume)
+    return totalResultVolume < current->totalResultVolume;
   return std::tie(lhs, rhs) < std::tie(current->lhs, current->rhs);
 }
 
@@ -479,7 +546,10 @@ llvm::Expected<ContractionPlan> ExactContractionPlanner::plan(
 
   for (unsigned operand = 0; operand < operandCount; ++operand) {
     OperandSubset singleton = OperandSubset{1} << operand;
-    best[singleton] = PlannerState{/*totalWork=*/0, /*lhs=*/0, /*rhs=*/0};
+    best[singleton] = PlannerState{/*totalWork=*/0,
+                                   /*totalResultVolume=*/0,
+                                   /*lhs=*/0,
+                                   /*rhs=*/0};
   }
 
   for (OperandSubset operands = 1; operands <= allOperands; ++operands) {
@@ -487,6 +557,12 @@ llvm::Expected<ContractionPlan> ExactContractionPlanner::plan(
       continue;
     if (isSingleton(operands))
       continue;
+
+    auto resultVolume = costModel.getResultVolume(operands);
+    if (!resultVolume) {
+      llvm::consumeError(resultVolume.takeError());
+      continue;
+    }
 
     // Requiring the lowest set bit to appear on one side enumerates each
     // unordered bipartition exactly once.
@@ -513,9 +589,17 @@ llvm::Expected<ContractionPlan> ExactContractionPlanner::plan(
       if (!totalWork)
         continue;
 
+      auto totalResultVolume =
+          checkedPlanVolume(best[lhs]->totalResultVolume,
+                            best[rhs]->totalResultVolume, *resultVolume);
+      if (!totalResultVolume)
+        continue;
+
       auto [canonicalLhs, canonicalRhs] = std::minmax(lhs, rhs);
-      if (isBetterPlan(*totalWork, canonicalLhs, canonicalRhs, best[operands]))
-        best[operands] = PlannerState{*totalWork, canonicalLhs, canonicalRhs};
+      if (isBetterPlan(*totalWork, *totalResultVolume, canonicalLhs,
+                       canonicalRhs, best[operands]))
+        best[operands] = PlannerState{*totalWork, *totalResultVolume,
+                                      canonicalLhs, canonicalRhs};
     }
   }
 
@@ -578,6 +662,16 @@ llvm::Expected<ContractionPlan> ExactContractionPlanner::plan(
   if (reconstructedCost->totalWork != best[allOperands]->totalWork)
     return llvm::createStringError(
         "reconstructed contraction plan does not match its planned work");
+  auto finalVolume = costModel.getResultVolume(allOperands);
+  if (!finalVolume)
+    return finalVolume.takeError();
+  auto reconstructedResultVolume =
+      checkedPlanVolume(reconstructedCost->totalIntermediateVolume,
+                        /*rhsVolume=*/0, *finalVolume);
+  if (!reconstructedResultVolume ||
+      *reconstructedResultVolume != best[allOperands]->totalResultVolume)
+    return llvm::createStringError(
+        "reconstructed contraction plan does not match its planned storage");
 
   return plan;
 }

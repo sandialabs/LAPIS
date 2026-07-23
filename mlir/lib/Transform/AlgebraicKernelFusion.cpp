@@ -281,6 +281,34 @@ llvm::Expected<WorkCost> checkedAdd(WorkCost accumulated, WorkCost next,
   return accumulated + next;
 }
 
+llvm::Expected<StorageVolume> getStaticTensorVolume(Value value) {
+  auto type = dyn_cast<RankedTensorType>(value.getType());
+  if (!type || !type.hasStaticShape())
+    return llvm::createStringError(
+        "logical storage requires a statically shaped tensor result");
+
+  StorageVolume volume = 1;
+  for (const auto &[dimensionNumber, extent] :
+       llvm::enumerate(type.getShape())) {
+    if (extent <= 0 || volume > std::numeric_limits<StorageVolume>::max() /
+                                    static_cast<StorageVolume>(extent))
+      return llvm::createStringError(
+          "logical storage volume overflows at result dimension " +
+          llvm::Twine(dimensionNumber));
+    volume *= static_cast<StorageVolume>(extent);
+  }
+  return volume;
+}
+
+llvm::Expected<StorageVolume> checkedAddStorage(StorageVolume accumulated,
+                                                StorageVolume next,
+                                                const llvm::Twine &context) {
+  if (accumulated > std::numeric_limits<StorageVolume>::max() - next)
+    return llvm::createStringError("logical storage volume overflows " +
+                                   context);
+  return accumulated + next;
+}
+
 } // namespace
 
 llvm::Expected<FusionCandidateEvaluation>
@@ -308,8 +336,54 @@ evaluateFusionCandidate(const LinalgEinsumRegion &region,
     return llvm::createStringError(
         "optimized contraction plan is more expensive than the source region");
 
+  llvm::DenseSet<Value> preservedValues;
+  for (const LinalgEinsumRegionOutput &output : region.getOutputs())
+    preservedValues.insert(output.value);
+
+  StorageVolume originalTemporaryVolume = 0;
+  for (linalg::GenericOp operation : region.getOperations()) {
+    for (Value result : operation->getResults()) {
+      if (preservedValues.contains(result))
+        continue;
+      auto resultVolume = getStaticTensorVolume(result);
+      if (!resultVolume)
+        return resultVolume.takeError();
+      auto totalVolume =
+          checkedAddStorage(originalTemporaryVolume, *resultVolume,
+                            "while evaluating the source contraction region");
+      if (!totalVolume)
+        return totalVolume.takeError();
+      originalTemporaryVolume = *totalVolume;
+    }
+  }
+
+  StorageVolume optimizedTemporaryVolume =
+      optimizedCost->totalIntermediateVolume;
+  llvm::DenseSet<OperandSubset> preservedSubsets;
+  OperandSubset allOperands = costModel->getIndexLiveness().getAllOperands();
+  for (const LinalgEinsumRegionOutput &output : region.getOutputs()) {
+    if (output.operandSubset == allOperands ||
+        !preservedSubsets.insert(output.operandSubset).second)
+      continue;
+    auto resultVolume = costModel->getResultVolume(output.operandSubset);
+    if (!resultVolume)
+      return resultVolume.takeError();
+    if (*resultVolume > optimizedTemporaryVolume)
+      return llvm::createStringError(
+          "preserved contraction result exceeds planned temporary volume");
+    optimizedTemporaryVolume -= *resultVolume;
+  }
+  if (optimizedCost->totalWork == originalWork &&
+      optimizedTemporaryVolume > originalTemporaryVolume)
+    return llvm::createStringError(
+        "equal-work contraction plan increases logical temporary volume");
+
   return FusionCandidateEvaluation{/*originalWork=*/originalWork,
-                                   /*optimizedWork=*/optimizedCost->totalWork};
+                                   /*optimizedWork=*/optimizedCost->totalWork,
+                                   /*originalTemporaryVolume=*/
+                                   originalTemporaryVolume,
+                                   /*optimizedTemporaryVolume=*/
+                                   optimizedTemporaryVolume};
 }
 
 //===----------------------------------------------------------------------===//
@@ -766,14 +840,43 @@ bool hasOnlyReductionIterators(linalg::GenericOp operation) {
          });
 }
 
-bool atomConsumesMemberResult(const FusionAtom &atom,
-                              const llvm::DenseSet<Operation *> &members) {
-  return llvm::any_of(atom.operations, [&](linalg::GenericOp operation) {
-    return llvm::any_of(operation->getOperands(), [&](Value operand) {
-      Operation *definition = operand.getDefiningOp();
-      return definition && members.contains(definition);
-    });
-  });
+bool hasConnectedDataflow(llvm::ArrayRef<FusionAtom> atoms) {
+  llvm::DenseMap<Operation *, unsigned> atomNumbers;
+  for (const auto &[atomNumber, atom] : llvm::enumerate(atoms)) {
+    for (linalg::GenericOp operation : atom.operations)
+      atomNumbers.insert({operation, static_cast<unsigned>(atomNumber)});
+  }
+
+  llvm::SmallVector<llvm::SmallVector<unsigned, 4>, 8> neighbors(atoms.size());
+  for (const auto &[atomNumber, atom] : llvm::enumerate(atoms)) {
+    for (linalg::GenericOp operation : atom.operations) {
+      for (Value operand : operation->getOperands()) {
+        Operation *definition = operand.getDefiningOp();
+        if (!definition)
+          continue;
+        auto producer = atomNumbers.find(definition);
+        if (producer == atomNumbers.end() || producer->second == atomNumber)
+          continue;
+        neighbors[atomNumber].push_back(producer->second);
+        neighbors[producer->second].push_back(
+            static_cast<unsigned>(atomNumber));
+      }
+    }
+  }
+
+  llvm::SmallVector<bool, 8> visited(atoms.size(), false);
+  llvm::SmallVector<unsigned, 8> worklist{0};
+  visited.front() = true;
+  while (!worklist.empty()) {
+    unsigned atomNumber = worklist.pop_back_val();
+    for (unsigned neighbor : neighbors[atomNumber]) {
+      if (visited[neighbor])
+        continue;
+      visited[neighbor] = true;
+      worklist.push_back(neighbor);
+    }
+  }
+  return llvm::all_of(visited, [](bool value) { return value; });
 }
 
 bool resultEscapesFusionSet(linalg::GenericOp operation,
@@ -810,50 +913,106 @@ bool canFuseAtoms(llvm::ArrayRef<FusionAtom> atoms) {
     return false;
 
   llvm::SmallVector<linalg::GenericOp, 8> operations;
-  llvm::DenseSet<Operation *> members;
   FusionSequence sequence;
-  for (const auto &[atomNumber, atom] : llvm::enumerate(atoms)) {
-    // Same-domain sibling operations are not producer-consumer fusion. Require
-    // every appended atom to consume a result already in the sequence; this
-    // retains map/map/reduce chains without treating launch-count reduction as
-    // a platform-independent profitability objective.
-    if (atomNumber != 0 && !atomConsumesMemberResult(atom, members))
-      return false;
+  for (const FusionAtom &atom : atoms) {
     for (linalg::GenericOp operation : atom.operations) {
       if (!appendToFusionSequence(sequence, operation))
         return false;
       operations.push_back(operation);
-      members.insert(operation);
     }
   }
-  return !introducesEscapingNestedReduction(operations) &&
+  // Judge connectivity over the complete set rather than requiring every
+  // prefix to be connected. This admits fan-in such as dx, dy, dz -> rhs while
+  // still rejecting same-domain operations with no dataflow relationship.
+  return hasConnectedDataflow(atoms) &&
+         !introducesEscapingNestedReduction(operations) &&
          !hasDependencyLeavingAndReentering(operations);
 }
 
-void partitionFusionAtoms(llvm::MutableArrayRef<FusionAtom> atoms,
-                          std::uint64_t &nextFusionGroup, Builder &builder) {
+llvm::Expected<StorageVolume>
+getEliminatedTemporaryVolume(llvm::ArrayRef<FusionAtom> atoms) {
+  llvm::DenseSet<Operation *> members;
+  for (const FusionAtom &atom : atoms) {
+    for (linalg::GenericOp operation : atom.operations)
+      members.insert(operation);
+  }
+
+  StorageVolume eliminated = 0;
+  for (const FusionAtom &atom : atoms) {
+    for (linalg::GenericOp operation : atom.operations) {
+      for (Value result : operation->getResults()) {
+        if (result.use_empty() ||
+            llvm::any_of(result.getUses(), [&](OpOperand &use) {
+              return !members.contains(use.getOwner());
+            }))
+          continue;
+        auto resultVolume = getStaticTensorVolume(result);
+        if (!resultVolume)
+          return resultVolume.takeError();
+        auto total =
+            checkedAddStorage(eliminated, *resultVolume,
+                              "while evaluating a candidate fusion partition");
+        if (!total)
+          return total.takeError();
+        eliminated = *total;
+      }
+    }
+  }
+  return eliminated;
+}
+
+LogicalResult partitionFusionAtoms(llvm::MutableArrayRef<FusionAtom> atoms,
+                                   std::uint64_t &nextFusionGroup,
+                                   Builder &builder) {
   if (atoms.size() < 2)
-    return;
+    return success();
 
   struct Partition {
+    StorageVolume eliminatedVolume = 0;
     unsigned kernelCount = std::numeric_limits<unsigned>::max();
     unsigned next = 0;
   };
   llvm::SmallVector<Partition, 8> best(atoms.size() + 1);
-  best.back() = Partition{0, static_cast<unsigned>(atoms.size())};
+  best.back() = Partition{/*eliminatedVolume=*/0, /*kernelCount=*/0,
+                          /*next=*/static_cast<unsigned>(atoms.size())};
 
   for (std::size_t begin = atoms.size(); begin-- > 0;) {
-    best[begin] = Partition{1 + best[begin + 1].kernelCount,
-                            static_cast<unsigned>(begin + 1)};
+    best[begin] = Partition{/*eliminatedVolume=*/
+                            best[begin + 1].eliminatedVolume,
+                            /*kernelCount=*/
+                            1 + best[begin + 1].kernelCount,
+                            /*next=*/static_cast<unsigned>(begin + 1)};
     for (std::size_t end = begin + 2; end <= atoms.size(); ++end) {
-      if (!canFuseAtoms(atoms.slice(begin, end - begin)))
+      auto candidate = atoms.slice(begin, end - begin);
+      if (!canFuseAtoms(candidate))
         continue;
+      auto groupVolume = getEliminatedTemporaryVolume(candidate);
+      if (!groupVolume) {
+        atoms.front().operations.front().emitError(
+            "fusion storage evaluation failed: ")
+            << llvm::toString(groupVolume.takeError());
+        return failure();
+      }
+      auto eliminatedVolume =
+          checkedAddStorage(*groupVolume, best[end].eliminatedVolume,
+                            "while combining fusion partitions");
+      if (!eliminatedVolume) {
+        atoms.front().operations.front().emitError(
+            "fusion storage evaluation failed: ")
+            << llvm::toString(eliminatedVolume.takeError());
+        return failure();
+      }
       unsigned kernelCount = 1 + best[end].kernelCount;
-      // Prefer the longest first set when two exact partitions remove the
-      // same number of kernel boundaries. This makes selection deterministic.
-      if (kernelCount < best[begin].kernelCount ||
-          (kernelCount == best[begin].kernelCount && end > best[begin].next)) {
-        best[begin] = Partition{kernelCount, static_cast<unsigned>(end)};
+      // Logical materialization is the platform-independent profitability
+      // objective for equal-work fusion. Kernel count and longest-first order
+      // are deterministic tie-breakers after storage volume.
+      if (*eliminatedVolume > best[begin].eliminatedVolume ||
+          (*eliminatedVolume == best[begin].eliminatedVolume &&
+           (kernelCount < best[begin].kernelCount ||
+            (kernelCount == best[begin].kernelCount &&
+             end > best[begin].next)))) {
+        best[begin] = Partition{*eliminatedVolume, kernelCount,
+                                static_cast<unsigned>(end)};
       }
     }
   }
@@ -870,10 +1029,11 @@ void partitionFusionAtoms(llvm::MutableArrayRef<FusionAtom> atoms,
     }
     begin = end;
   }
+  return success();
 }
 
-void selectFusionSets(Block &block, std::uint64_t &nextFusionGroup,
-                      Builder &builder) {
+LogicalResult selectFusionSets(Block &block, std::uint64_t &nextFusionGroup,
+                               Builder &builder) {
   llvm::SmallVector<FusionAtom, 8> atoms;
   llvm::DenseMap<std::int64_t, unsigned> markedAtoms;
 
@@ -902,9 +1062,11 @@ void selectFusionSets(Block &block, std::uint64_t &nextFusionGroup,
   }
 
   llvm::SmallVector<FusionAtom, 8> run;
-  auto finishRun = [&] {
-    partitionFusionAtoms(run, nextFusionGroup, builder);
+  auto finishRun = [&]() -> LogicalResult {
+    if (failed(partitionFusionAtoms(run, nextFusionGroup, builder)))
+      return failure();
     run.clear();
+    return success();
   };
   for (FusionAtom &atom : atoms) {
     if (!run.empty()) {
@@ -912,7 +1074,8 @@ void selectFusionSets(Block &block, std::uint64_t &nextFusionGroup,
       if (previous.lastPosition >= atom.firstPosition) {
         // Pre-existing atoms must not interleave. Leave their original group
         // attributes intact and conservatively decline further grouping.
-        finishRun();
+        if (failed(finishRun()))
+          return failure();
       } else {
         auto first = std::next(block.begin(), previous.lastPosition + 1);
         auto last = std::next(block.begin(), atom.firstPosition);
@@ -920,27 +1083,36 @@ void selectFusionSets(Block &block, std::uint64_t &nextFusionGroup,
                          [](Operation &operation) {
                            return !isTransparentBetweenFusionAtoms(operation);
                          }))
-          finishRun();
+          if (failed(finishRun()))
+            return failure();
       }
     }
     run.push_back(std::move(atom));
   }
-  finishRun();
+  if (failed(finishRun()))
+    return failure();
 
   for (Operation &operation : block) {
     for (Region &region : operation.getRegions()) {
-      for (Block &nested : region)
-        selectFusionSets(nested, nextFusionGroup, builder);
+      for (Block &nested : region) {
+        if (failed(selectFusionSets(nested, nextFusionGroup, builder)))
+          return failure();
+      }
     }
   }
+  return success();
 }
 
-void selectFusionSets(ModuleOp module, std::uint64_t &nextFusionGroup) {
+LogicalResult selectFusionSets(ModuleOp module,
+                               std::uint64_t &nextFusionGroup) {
   Builder builder(module.getContext());
   for (func::FuncOp function : module.getOps<func::FuncOp>()) {
-    for (Block &block : function.getBody())
-      selectFusionSets(block, nextFusionGroup, builder);
+    for (Block &block : function.getBody()) {
+      if (failed(selectFusionSets(block, nextFusionGroup, builder)))
+        return failure();
+    }
   }
+  return success();
 }
 
 struct IndexedTensorAccess {
@@ -1413,11 +1585,16 @@ struct AlgebraicKernelFusionPass
 
     // Treat algebraically planned regions as indivisible atoms and find an
     // exact, deterministic partition of each block-local atom sequence. A set
-    // must form a producer-consumer chain, have a non-empty statically matching
-    // parallel domain (allowing permutations), preserve reduction topology,
-    // and be closed under SSA dependencies. The post-bufferization legality
-    // pass still has final authority over aliasing and memory dependences.
-    mlir::lapis::selectFusionSets(module, nextFusionGroup);
+    // must form a connected producer-consumer graph, have a non-empty
+    // statically matching parallel domain (allowing permutations), preserve
+    // reduction topology, and be closed under SSA dependencies. Equal-work
+    // partitions maximize eliminated logical temporary volume before using
+    // kernel count as a tie-breaker. The post-bufferization legality pass still
+    // has final authority over aliasing and memory dependences.
+    if (failed(mlir::lapis::selectFusionSets(module, nextFusionGroup))) {
+      signalPassFailure();
+      return;
+    }
 
     // Linalg-to-loop conversion faithfully preserves the iterator schedule
     // encoded by each operation. Align semantically corresponding parallel

@@ -9,6 +9,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Interfaces/ViewLikeInterface.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -141,6 +142,19 @@ bool canMoveGroupToLastOperation(OutlineGroup &group) {
   return true;
 }
 
+void addCloneableViewDependencies(Operation *operation, Block *block,
+                                  llvm::DenseSet<Operation *> &operations) {
+  for (Value operand : operation->getOperands()) {
+    Operation *definition = operand.getDefiningOp();
+    if (!definition || definition->getBlock() != block ||
+        !isa<ViewLikeOpInterface>(definition) ||
+        !isMemoryEffectFree(definition) ||
+        !operations.insert(definition).second)
+      continue;
+    addCloneableViewDependencies(definition, block, operations);
+  }
+}
+
 std::string getUniqueKernelName(ModuleOp module, StringRef parentName,
                                 std::int64_t group) {
   std::string base =
@@ -182,6 +196,14 @@ LogicalResult outlineGroup(ModuleOp module, OutlineGroup &group) {
     clonedOperations.insert(operation);
     operationsToErase.insert(operation);
   }
+
+  // Keep aliasing view construction inside the outlined kernel. Passing a
+  // strided subview through the function boundary currently loses its layout
+  // in LAPIS's generated C++ signature. Cloning pure view-like dependencies
+  // also gives the kernel one base buffer argument instead of one argument per
+  // shifted stencil view.
+  for (linalg::GenericOp operation : group.operations)
+    addCloneableViewDependencies(operation, block, clonedOperations);
 
   // Keep constant initialization self-contained. Passing a memref.get_global
   // result through the outlined signature both obscures ownership and causes

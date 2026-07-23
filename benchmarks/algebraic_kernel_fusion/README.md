@@ -45,6 +45,7 @@ The current cases are:
 | Large linear attention | `(Q K^T) V` | Larger sequence-length profile. |
 | Batched linear attention | Batched `(Q K^T) V` | Exercise batch-index liveness and backend mapping. |
 | PCG | One dense preconditioned-CG iteration | Exercise equal-work fusion selection and externally visible intermediates. |
+| Burgers | 20 SSP-RK2 steps for a 128x128 2D scalar viscous Burgers solve | Fuse three derivative primitives, RHS formation, and Euler update without materializing derivative fields. |
 
 Each timed sample is one complete generated function call. It therefore
 includes output and private-intermediate allocation, zero initialization,

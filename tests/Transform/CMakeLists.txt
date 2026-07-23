@@ -32,6 +32,7 @@ add_test(
       ${LAPIS_SOURCE_DIR}/benchmarks/algebraic_kernel_fusion/run.py
       --case abx
       --case batched_linear_attention
+      --case burgers
       --case pcg
       --case linear_attention
       --warmup 1
