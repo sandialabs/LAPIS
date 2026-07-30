@@ -1,0 +1,112 @@
+name: CMake Build for Doxygen
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    permissions:
+      contents: read # to push pages branch (peaceiris/actions-gh-pages)
+
+    name: ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        config:
+        - {
+            name: "Ubuntu Latest GCC Release",
+            os: ubuntu-latest,
+            build_type: "Release", cc: "gcc", cxx: "g++",
+            build_gen: "Ninja",
+            llvm_version: "19",
+            cmake_extra_opts: ""
+          }
+    steps:
+    - name: Checkout doxygen
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Download llvm nightly installation script
+      uses: suisei-cn/actions-download-file@v1
+      with:
+        url: "https://apt.llvm.org/llvm.sh"
+        target: .
+
+    - name: Install llvm nightly
+      shell: bash
+      run: |
+        LLVM_VERSION=${{ matrix.config.llvm_version }}
+        sudo bash ./llvm.sh $LLVM_VERSION
+        sudo apt install libmlir-${LLVM_VERSION}-dev \
+          mlir-${LLVM_VERSION}-tools
+
+    - uses: seanmiddleditch/gha-setup-ninja@master
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install libffi-dev libbz2-dev bzip2 autoconf
+
+    - name: Setup cmake
+      uses: jwlawson/actions-setup-cmake@v2
+    - name: install python 3.9
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.9'
+        cache: 'pip' # caching pip dependencies
+        cache-dependency-path: scripts/notchpeak.requirements.txt
+    - run: pip install -r scripts/notchpeak.requirements.txt
+    - name: Check tool versions (Linux / MacOS)
+      shell: bash
+      run: |
+        echo "=== cmake ===";
+        cmake --version;
+        echo "=== python ===";
+        python --version;
+
+    - name: Configure
+      shell: cmake -P {0}
+      run: |
+        set(ENV{CC} ${{ matrix.config.cc }})
+        set(ENV{CXX} ${{ matrix.config.cxx }})
+
+        execute_process(
+          COMMAND cmake
+            -S .
+            -B build
+            -D CMAKE_BUILD_TYPE=${{ matrix.config.build_type }}
+            -D MLIR_ENABLE_BINDINGS_PYTHON=ON
+            -D CMAKE_PREFIX_PATH=/usr/lib/llvm-${{ matrix.config.llvm_version }}/lib/cmake/mlir
+            -G "${{ matrix.config.build_gen }}"
+            ${{ matrix.config.cmake_extra_opts }}
+          RESULT_VARIABLE result
+        )
+        if (NOT result EQUAL 0)
+          message(FATAL_ERROR "Bad exit status")
+        endif()
+
+    - name: Build
+      shell: cmake -P {0}
+      run: |
+        include(ProcessorCount)
+        ProcessorCount(N)
+        execute_process(
+          COMMAND cmake --build build --parallel ${N}
+          RESULT_VARIABLE result
+          OUTPUT_VARIABLE output
+          ERROR_VARIABLE output
+          ECHO_OUTPUT_VARIABLE ECHO_ERROR_VARIABLE
+        )
+        if (NOT result EQUAL 0)
+          string(REGEX MATCH "FAILED:.*$" error_message "${output}")
+          string(REPLACE "\n" "%0A" error_message "${error_message}")
+          message("::error::${error_message}")
+          message(FATAL_ERROR "Build failed")
+        endif()
+
+    - name: Archive build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: "${{ matrix.config.name }} build artifacts"
+        path: build/bin/
+
