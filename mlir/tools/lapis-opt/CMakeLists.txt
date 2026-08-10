@@ -14,6 +14,7 @@ target_link_libraries(lapis-opt
   MLIRCastInterfaces
   MLIRDialect
   MLIROptLib
+  MLIRKernelPasses
   MLIRParser
   MLIRPass
   MLIRTransforms

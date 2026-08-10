@@ -59,6 +59,17 @@ struct LapisCompilerOptions
     *this, "decompose-sparse-tensors",
     desc("Decompose sparse tensors into memrefs (default off)"), init(false)};
 
+  PassOptions::Option<bool> kernel_fusion{
+      *this, "kernel-fusion",
+      desc("Attempt to fuse kernels based on kernel call fuse_with attributes"),
+      init(false)};
+
+  PassOptions::Option<bool> reorder_linalg_generics{
+      *this, "reorder-linalg-generics",
+      desc("Reorder tensor contraction-like generic operations to minimize "
+           "asymptoptic computational cost"),
+      init(false)};
+
 #ifdef LAPIS_ENABLE_PART_TENSOR
   PassOptions::Option<mlir::PartTensorDistBackend> partTensorBackend{
       *this, "pt-backend",

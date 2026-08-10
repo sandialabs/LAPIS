@@ -56,10 +56,12 @@ module {
     %f0 = arith.constant 0.0 : f64
     %f1 = arith.constant 1.0 : f64
     %fm1 = arith.constant -1.0 : f64
+
     // Preallocate some intermediate tensors for dst-passing style
     %buf0 = tensor.empty(%n) : tensor<?xf64>
     %buf1 = tensor.empty(%n) : tensor<?xf64>
     %buf2 = tensor.empty(%n) : tensor<?xf64>
+
     // Assume initial guess x0 = 0
     // Then r0 = b - A*x0 = b
     %r0 = linalg.copy ins(%b : tensor<?xf64>) outs(%buf0 : tensor<?xf64>) -> tensor<?xf64>
@@ -69,26 +71,34 @@ module {
     %Apbuf = tensor.empty(%n) : tensor<?xf64>
     %rr0 = func.call @dot(%r0, %r0) : (tensor<?xf64>, tensor<?xf64>) -> f64
     %initres = math.sqrt %rr0 : f64
+
     %x, %p, %z, %r, %final_relres, %rz, %iters = scf.while (%xiter = %x0, %piter = %p0, %ziter = %z0, %riter = %r0, %rziter = %f0, %i = %c1) : (tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, f64, index) -> (tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, f64, f64, index)
     {
-      %Ap = func.call @spmv(%A, %piter, %Apbuf) : (tensor<?x?xf64, #sparse>, tensor<?xf64>, tensor<?xf64>) -> tensor<?xf64>
-      %pAp = func.call @dot(%piter, %Ap) : (tensor<?xf64>, tensor<?xf64>) -> f64
+      %Ap = func.call @spmv(%A, %piter, %Apbuf) { fuse_with = "dot" } : (tensor<?x?xf64, #sparse>, tensor<?xf64>, tensor<?xf64>) -> tensor<?xf64>
+      %pAp = func.call @dot(%piter, %Ap) { fuse_with = "spmv" } : (tensor<?xf64>, tensor<?xf64>) -> f64
       %rz = func.call @dot(%riter, %ziter) : (tensor<?xf64>, tensor<?xf64>) -> f64
       %alpha = arith.divf %rz, %pAp : f64
       %malpha = arith.negf %alpha : f64
+
       // Update x and r
-      %xnext = func.call @axpby(%f1, %xiter, %alpha, %piter, %xiter) : (f64, tensor<?xf64>, f64, tensor<?xf64>, tensor<?xf64>) -> tensor<?xf64>
-      %rnext = func.call @axpby(%f1, %riter, %malpha, %Ap, %riter) : (f64, tensor<?xf64>, f64, tensor<?xf64>, tensor<?xf64>) -> tensor<?xf64>
+      %xnext = func.call @axpby(%f1, %xiter, %alpha, %piter, %xiter) { fuse_with
+      = "axpby" } : (f64, tensor<?xf64>, f64, tensor<?xf64>, tensor<?xf64>) -> tensor<?xf64>
+      %rnext = func.call @axpby(%f1, %riter, %malpha, %Ap, %riter) { fuse_with =
+      "axpby" } : (f64, tensor<?xf64>, f64, tensor<?xf64>, tensor<?xf64>) -> tensor<?xf64>
+
       // Test against tolerance and 
       %rr = func.call @dot(%rnext, %rnext) : (tensor<?xf64>, tensor<?xf64>) -> f64
       %rnorm = math.sqrt %rr : f64
       %relres = arith.divf %rnorm, %initres : f64
       %not_converged = arith.cmpf ogt, %relres, %tol : f64
+
       // we have already completed an iteration, which is why i is intially 1
       %below_maxiter = arith.cmpi ne, %i, %maxiter : index
       %continue = arith.andi %not_converged, %below_maxiter : i1
+
       scf.condition(%continue) %xnext, %piter, %ziter, %rnext, %relres, %rz, %i: tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, tensor<?xf64>, f64, f64, index
-    } do {
+    } 
+    do {
     ^bb0(%xiter : tensor<?xf64>, %piter : tensor<?xf64>, %ziter : tensor<?xf64>, %riter : tensor<?xf64>, %unused : f64, %rziter : f64, %i : index):
       %znext = func.call @mult(%riter, %dinv, %ziter) : (tensor<?xf64>, tensor<?xf64>, tensor<?xf64>) -> tensor<?xf64>
       %rznext = func.call @dot(%riter, %znext) : (tensor<?xf64>, tensor<?xf64>) -> f64
@@ -121,7 +131,7 @@ def main():
     reltol = 1e-10
     maxiter = 40
 
-    backend = KokkosBackend.KokkosBackend(decompose_tensors=True)
+    backend = KokkosBackend.KokkosBackend(decompose_tensors=True, dump_mlir=True)
     module_kokkos = backend.compile(moduleText)
 
     print("x exact solution (first 10 elements):", xgold[:10])

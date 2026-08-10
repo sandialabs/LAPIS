@@ -6,6 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "Transform/Kernel/KernelFusionDriver.h"
+#include "Transform/Kernel/KernelPasses.h"
 #include "lapis/LAPIS_config.h"
 #include "lapis/Dialect/Kokkos/Pipelines/Passes.h"
 #include "mlir/Conversion/Passes.h"
@@ -54,6 +56,11 @@ void mlir::kokkos::buildSparseKokkosCompiler(
 
   // Rewrite named linalg ops into generic ops and apply fusion.
   pm.addNestedPass<func::FuncOp>(createLinalgGeneralizeNamedOpsPass());
+
+  if (options.kernel_fusion)
+    pm.addPass(kernel::createKernelFusionDriver());
+  if (options.reorder_linalg_generics)
+    pm.addPass(kernel::createLinalgGenericReorderingPass());
 
   // Remove compile-time unit extent dimensions from linalg ops.
   // For example, a 3D loop over (N, M, 1) will be rewritten to 2D loop over (N, M).
@@ -134,6 +141,7 @@ void mlir::kokkos::buildSparseKokkosCompiler(
   pm.addNestedPass<func::FuncOp>(createDenseLinalgToParallelLoopsPass());
   // The built-in lowering will take care of any remaining linalg ops
   pm.addNestedPass<func::FuncOp>(createConvertLinalgToParallelLoopsPass());
+  // pm.addNestedPass<func::FuncOp>(kernel::createKernelDomainFusionPass());
 
   // pm.addNestedPass<func::FuncOp>(arith::createArithExpandOpsPass());
   pm.addPass(memref::createExpandStridedMetadataPass());
