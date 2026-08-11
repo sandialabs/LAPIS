@@ -11,37 +11,54 @@ check, warmup count, timed iteration count, and a `Kokkos::fence` around every
 sample. The benchmark reports minimum, median, and mean wall-clock time. The
 summary speedup is the baseline median divided by the optimized median.
 
-The harness lowers every selected case, creates one CMake project, and builds
-all baseline/optimized executables in a single configuration. The selected
-Kokkos package determines the backend; there is no backend-specific compilation
-logic in the harness.
+The compiled harness lowers every selected case, creates one CMake project, and
+builds all baseline/optimized executables in a single configuration. The Kokkos
+package determines its default execution space. The required `--backend` option
+checks that the package enables the requested device and that the generated
+executables actually use it; it does not change a Kokkos package's default.
+
+Running benchmarks and the corresponding CTest requires no Python or Conda.
+Python is used only by the optional plotting script.
 
 ## Quick start
 
-The harness requires `lapis-opt`, `lapis-translate`, and CMake on `PATH`, plus
-the same `KOKKOS_ROOT` and `SUPPORT_LIB` variables used by LAPIS's numerical
-tests. From the repository root, source the workspace environment before
-returning to the repository:
+Build the runner with LAPIS:
 
 ```sh
-cd ..
-source ./lapis-env.sh
-cd LAPIS
+cmake --build /path/to/lapis-build \
+  --target lapis-algebraic-kernel-fusion-benchmark
+```
 
-python benchmarks/algebraic_kernel_fusion/run.py \
+The runner requires `lapis-opt`, `lapis-translate`, and CMake on `PATH`, a
+Kokkos package, the compiler or wrapper used for that package, and MLIR's C
+runner support library. A benchmark invocation names the expected backend
+explicitly:
+
+```sh
+/path/to/lapis-build/bin/lapis-algebraic-kernel-fusion-benchmark \
+  --backend serial \
+  --kokkos-root /path/to/kokkos-serial \
+  --cxx /path/to/compatible-c++ \
+  --support-lib /path/to/libmlir_c_runner_utils.so \
   --case abx --warmup 3 --iterations 20 \
   --label workstation-serial --output serial.csv
 
 # Run every discovered case and retain the raw measurements.
-python benchmarks/algebraic_kernel_fusion/run.py \
+/path/to/lapis-build/bin/lapis-algebraic-kernel-fusion-benchmark \
+  --backend serial \
+  --kokkos-root /path/to/kokkos-serial \
+  --cxx /path/to/compatible-c++ \
+  --support-lib /path/to/libmlir_c_runner_utils.so \
   --case all --warmup 3 --iterations 20 \
   --label workstation --output results.csv
 ```
 
-Command-line arguments override the environment:
+`LAPIS_BENCHMARK_BACKEND`, `KOKKOS_ROOT`, `CXX`, and `SUPPORT_LIB` provide the
+corresponding defaults. Command-line arguments override them:
 
 ```sh
-python benchmarks/algebraic_kernel_fusion/run.py \
+/path/to/lapis-build/bin/lapis-algebraic-kernel-fusion-benchmark \
+  --backend openmp \
   --case all \
   --lapis-opt /path/to/lapis-opt \
   --lapis-translate /path/to/lapis-translate \
@@ -67,8 +84,25 @@ automatically, and the C++ driver supplies that function's typed inputs and
 validation logic.
 
 Use `--list-cases` to inspect the suite without requiring a LAPIS or Kokkos
-installation. `--expect-backend` provides a useful guard against accidentally
-benchmarking a Serial build when a GPU build was intended.
+installation. Run the executable with `--help` for all options.
+
+The `AlgebraicKernelFusionNumerical` CTest captures its runtime configuration
+from CMake cache variables. Set them when configuring LAPIS, or export the
+corresponding environment variables before configuration:
+
+```sh
+cmake -S /path/to/LAPIS -B /path/to/lapis-build \
+  -DLAPIS_BENCHMARK_BACKEND=serial \
+  -DLAPIS_BENCHMARK_KOKKOS_ROOT=/path/to/kokkos-serial \
+  -DLAPIS_BENCHMARK_CXX=/path/to/compatible-c++ \
+  -DLAPIS_BENCHMARK_SUPPORT_LIB=/path/to/libmlir_c_runner_utils.so
+
+ctest --test-dir /path/to/lapis-build \
+  --tests-regex AlgebraicKernelFusionNumerical --output-on-failure
+```
+
+If these optional prerequisites are not configured, CTest reports the
+numerical test as skipped rather than failed.
 
 ## Backend examples
 
@@ -80,9 +114,10 @@ OpenMP:
 
 ```sh
 OMP_NUM_THREADS=16 OMP_PROC_BIND=spread OMP_PLACES=cores \
-python benchmarks/algebraic_kernel_fusion/run.py \
+/path/to/lapis-build/bin/lapis-algebraic-kernel-fusion-benchmark \
+  --backend openmp \
   --case all --kokkos-root /opt/kokkos-openmp \
-  --cxx /usr/bin/g++ --expect-backend OpenMP \
+  --cxx /usr/bin/g++ \
   --label cpu-openmp-16t --output openmp.csv
 ```
 
@@ -90,9 +125,10 @@ CUDA:
 
 ```sh
 CUDA_VISIBLE_DEVICES=0 \
-python benchmarks/algebraic_kernel_fusion/run.py \
+/path/to/lapis-build/bin/lapis-algebraic-kernel-fusion-benchmark \
+  --backend cuda \
   --case all --kokkos-root /opt/kokkos-cuda \
-  --cxx /opt/kokkos/bin/nvcc_wrapper --expect-backend Cuda \
+  --cxx /opt/kokkos/bin/nvcc_wrapper \
   --label nvidia-gpu0 --output cuda.csv
 ```
 
@@ -100,9 +136,10 @@ HIP:
 
 ```sh
 ROCR_VISIBLE_DEVICES=0 \
-python benchmarks/algebraic_kernel_fusion/run.py \
+/path/to/lapis-build/bin/lapis-algebraic-kernel-fusion-benchmark \
+  --backend hip \
   --case all --kokkos-root /opt/kokkos-hip \
-  --cxx /opt/rocm/bin/hipcc --expect-backend HIP \
+  --cxx /opt/rocm/bin/hipcc \
   --label amd-gpu0 --output hip.csv
 ```
 
@@ -111,9 +148,10 @@ Intel GPU through Kokkos SYCL:
 ```sh
 source /opt/intel/oneapi/setvars.sh
 ONEAPI_DEVICE_SELECTOR=level_zero:gpu \
-python benchmarks/algebraic_kernel_fusion/run.py \
+/path/to/lapis-build/bin/lapis-algebraic-kernel-fusion-benchmark \
+  --backend sycl \
   --case all --kokkos-root /opt/kokkos-sycl \
-  --cxx "$(command -v icpx)" --expect-backend SYCL \
+  --cxx "$(command -v icpx)" \
   --label intel-gpu --output sycl.csv
 ```
 
@@ -146,8 +184,8 @@ median and includes a 1x reference line.
 Rows sharing a case and configuration but carrying different timestamps are
 treated as repeated runs. Their plotted center is the median and their whiskers
 span the observed minimum and maximum. Give each machine/backend configuration
-a distinct `run.py --label`; the remaining system metadata prevents unlike
-Kokkos builds from being combined accidentally.
+a distinct runner `--label`; the plotter also separates Kokkos versions and
+architectures, LAPIS revisions, runtime environments, and run notes.
 
 Use repeated `--case` options to select and order cases, `--metric speedup` or
 `--metric time` for one figure, `--speedup-scale log` when regressions and gains

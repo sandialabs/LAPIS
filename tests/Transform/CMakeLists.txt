@@ -1,5 +1,3 @@
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
-
 add_executable(LAPISTransformTests
   ContractionPlannerTest.cpp
   EinsumTest.cpp
@@ -22,28 +20,46 @@ target_link_libraries(LAPISTransformTests
 
 add_test(NAME LAPISTransformTests COMMAND LAPISTransformTests)
 
+set(algebraic_kernel_fusion_numerical_args
+  --case abx
+  --case batched_linear_attention
+  --case burgers
+  --case pcg
+  --case linear_attention
+  --warmup 1
+  --iterations 1
+  --lapis-opt $<TARGET_FILE:lapis-opt>
+  --lapis-translate $<TARGET_FILE:lapis-translate>
+  --build-dir ${CMAKE_CURRENT_BINARY_DIR}/AlgebraicKernelFusionNumerical
+  --skip-if-unavailable
+)
+if(LAPIS_BENCHMARK_BACKEND)
+  list(APPEND algebraic_kernel_fusion_numerical_args
+    --backend ${LAPIS_BENCHMARK_BACKEND})
+endif()
+if(LAPIS_BENCHMARK_KOKKOS_ROOT)
+  list(APPEND algebraic_kernel_fusion_numerical_args
+    --kokkos-root ${LAPIS_BENCHMARK_KOKKOS_ROOT})
+endif()
+if(LAPIS_BENCHMARK_CXX)
+  list(APPEND algebraic_kernel_fusion_numerical_args
+    --cxx ${LAPIS_BENCHMARK_CXX})
+endif()
+if(LAPIS_BENCHMARK_SUPPORT_LIB)
+  list(APPEND algebraic_kernel_fusion_numerical_args
+    --support-lib ${LAPIS_BENCHMARK_SUPPORT_LIB})
+endif()
+
 add_test(
   NAME AlgebraicKernelFusionNumerical
   COMMAND
-    ${CMAKE_COMMAND} -E env
-      "PATH=${LAPIS_TOOL_BIN}:$ENV{PATH}"
-      ${Python3_EXECUTABLE}
-      ${LAPIS_SOURCE_DIR}/benchmarks/algebraic_kernel_fusion/run.py
-      --case abx
-      --case batched_linear_attention
-      --case burgers
-      --case pcg
-      --case linear_attention
-      --warmup 1
-      --iterations 1
-      --lapis-opt $<TARGET_FILE:lapis-opt>
-      --lapis-translate $<TARGET_FILE:lapis-translate>
-      --build-dir ${CMAKE_CURRENT_BINARY_DIR}/AlgebraicKernelFusionNumerical
-      --skip-if-unavailable
+    $<TARGET_FILE:lapis-algebraic-kernel-fusion-benchmark>
+      ${algebraic_kernel_fusion_numerical_args}
 )
 set_tests_properties(
   AlgebraicKernelFusionNumerical
   PROPERTIES
     SKIP_RETURN_CODE 77
-    TIMEOUT 180
+    RUN_SERIAL TRUE
+    TIMEOUT 300
 )

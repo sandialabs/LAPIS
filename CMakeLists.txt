@@ -108,6 +108,7 @@ add_subdirectory(mlir)
 if(MLIR_ENABLE_BINDINGS_PYTHON)
   add_subdirectory(python)
 endif()
+add_subdirectory(benchmarks/algebraic_kernel_fusion)
 
 # This should be at the end after traversal of all subdirectories.
 add_subdirectory(cmake)
@@ -115,4 +116,3 @@ add_subdirectory(cmake)
 enable_testing()
 add_subdirectory(tests)
 add_subdirectory(examples)
-

@@ -4,10 +4,12 @@
 #include <Kokkos_Core.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <stdexcept>
 #include <string>
@@ -22,11 +24,17 @@ struct Options {
 };
 
 inline std::size_t parseCount(const char *value, std::string_view option) {
+  const std::string_view text(value);
+  if (text.empty() ||
+      !std::all_of(text.begin(), text.end(), [](unsigned char character) {
+        return std::isdigit(character);
+      }))
+    throw std::runtime_error(std::string(option) +
+                             " requires a positive integer");
   try {
-    std::size_t parsedCharacters = 0;
-    const unsigned long parsed = std::stoul(value, &parsedCharacters);
-    if (value[parsedCharacters] != '\0' || parsed == 0)
-      throw std::invalid_argument("not a positive integer");
+    const unsigned long long parsed = std::stoull(value);
+    if (parsed == 0 || parsed > std::numeric_limits<std::size_t>::max())
+      throw std::out_of_range("not a positive size_t");
     return static_cast<std::size_t>(parsed);
   } catch (const std::exception &) {
     throw std::runtime_error(std::string(option) +
