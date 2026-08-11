@@ -1,9 +1,9 @@
-find_package(GTest REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 add_executable(LAPISTransformTests
   ContractionPlannerTest.cpp
   EinsumTest.cpp
+  TransformTestMain.cpp
 )
 add_dependencies(LAPISTransformTests MLIRLapisTransformPassIncGen)
 llvm_update_compile_flags(LAPISTransformTests)
@@ -16,7 +16,6 @@ target_include_directories(LAPISTransformTests
 
 target_link_libraries(LAPISTransformTests
   PRIVATE
-  GTest::gtest_main
   LLVMSupport
   MLIRLapisTransforms
 )
