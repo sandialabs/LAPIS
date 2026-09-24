@@ -152,9 +152,6 @@ std::string getUniqueKernelName(ModuleOp module, StringRef parentName,
 }
 
 LogicalResult outlineGroup(ModuleOp module, OutlineGroup &group) {
-  if (group.operations.size() < 2)
-    return group.operations.front().emitError(
-        "an algebraic fusion group must contain at least two contractions");
   Block *block = group.operations.front()->getBlock();
   if (!llvm::all_of(group.operations, [&](linalg::GenericOp operation) {
         return operation->getBlock() == block &&
@@ -165,10 +162,13 @@ LogicalResult outlineGroup(ModuleOp module, OutlineGroup &group) {
         "algebraic kernels must be outlined after bufferization from one "
         "block");
   }
-  if (!canMoveGroupToLastOperation(group)) {
-    return group.operations.front().emitError(
-        "cannot outline an algebraic group across an intervening "
-        "side-effecting operation");
+  // Tensor-level groups are provisional: intervening passes may fold away
+  // members or introduce conflicting buffer accesses. Leave rejected groups
+  // in place for ordinary lowering, without undoing algebraic reassociation.
+  if (group.operations.size() < 2 || !canMoveGroupToLastOperation(group)) {
+    for (linalg::GenericOp operation : group.operations)
+      operation->removeAttr(kAlgebraicFusionGroupAttr);
+    return success();
   }
 
   PrivateBufferAnalysis privateBuffers = findPrivateBuffers(group);
