@@ -4420,7 +4420,7 @@ LogicalResult KokkosCppEmitter::emitInitAndFinalize(bool finalizeKokkos = true)
           return failure();
         *this << "(" << op.getSymName() << "_host);\n";
         // And sync it to device upfront
-        *this << op.getSymName() << ".sync_device();\n";
+        *this << op.getSymName() << ".syncDevice();\n";
       }
       else if(space == kokkos::MemorySpace::Device) {
         // Create temporary unmanaged host view, and copy to a new device view.

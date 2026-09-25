@@ -13,6 +13,7 @@
 #include "lapis/Dialect/Kokkos/IR/KokkosDialect.h"
 #include "lapis/Dialect/Kokkos/Pipelines/Passes.h"
 #include "lapis/Dialect/Kokkos/Transforms/Passes.h"
+#include "lapis/Transform/AlgebraicKernelFusion.h"
 #ifdef LAPIS_ENABLE_PART_TENSOR
 #include "lapis/Dialect/PartTensor/IR/PartTensor.h"
 #include "lapis/Dialect/PartTensor/Pipelines/Passes.h"
@@ -104,6 +105,7 @@ int main(int argc, char **argv) {
 
   kokkos::registerKokkosPipelines();
   mlir::registerKokkosPasses();
+  mlir::registerLapisTransformPasses();
 
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "LAPIS/MLIR pass driver\n", registry));
