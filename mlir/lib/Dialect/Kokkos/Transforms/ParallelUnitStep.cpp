@@ -132,7 +132,7 @@ struct ParallelUnitStepPass
     auto *ctx = &getContext();
     RewritePatternSet patterns(ctx);
     patterns.add<ParallelUnitStepRewriter>(patterns.getContext());
-    (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+    (void) applyPatternsGreedily(getOperation(), std::move(patterns));
   }
 };
 

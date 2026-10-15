@@ -138,7 +138,7 @@ void RangeParallelOp::getSuccessorRegions(
   // back into the operation itself. It is possible for loop not to enter the
   // body.
   regions.push_back(RegionSuccessor(&getRegion()));
-  regions.push_back(RegionSuccessor());
+  regions.push_back(RegionSuccessor::parent());
 }
 
 LogicalResult RangeParallelOp::verify() {
@@ -328,7 +328,7 @@ void TeamParallelOp::getSuccessorRegions(
   // back into the operation itself. It is possible for loop not to enter the
   // body.
   regions.push_back(RegionSuccessor(&getRegion()));
-  regions.push_back(RegionSuccessor());
+  regions.push_back(RegionSuccessor::parent());
 }
 
 /*
@@ -441,7 +441,7 @@ void ThreadParallelOp::getSuccessorRegions(
   // back into the operation itself. It is possible for loop not to enter the
   // body.
   regions.push_back(RegionSuccessor(&getRegion()));
-  regions.push_back(RegionSuccessor());
+  regions.push_back(RegionSuccessor::parent());
 }
 
 kokkos::UpdateReductionOp ThreadParallelOp::getReduction() {

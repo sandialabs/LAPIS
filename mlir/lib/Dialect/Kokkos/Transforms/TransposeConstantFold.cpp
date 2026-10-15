@@ -31,7 +31,7 @@ struct TransposeConstantFoldPass
 
     linalg::populateConstantFoldLinalgOperations(patterns, alwaysFold);
 
-    (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+    (void) applyPatternsGreedily(getOperation(), std::move(patterns));
   }
 };
 
