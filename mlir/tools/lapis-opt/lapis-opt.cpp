@@ -32,6 +32,7 @@
 #include "mlir/Dialect/Linalg/Transforms/AllInterfaces.h"
 #include "mlir/Dialect/Linalg/Transforms/RuntimeOpVerification.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/MemRef/IR/ValueBoundsOpInterfaceImpl.h"
 #include "mlir/Dialect/MLProgram/IR/MLProgram.h"

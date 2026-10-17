@@ -544,13 +544,13 @@ static LogicalResult printOperation(KokkosCppEmitter &emitter,
   // Need this because op's offset, sizes and strides
   // can have mixed runtime and static values.
   auto emitOpFoldResult = [&](OpFoldResult ofr) -> LogicalResult {
-    if(ofr.is<Attribute>()) {
-      Attribute attr = ofr.get<Attribute>();
+    if(isa<Attribute>(ofr)) {
+      Attribute attr = cast<Attribute>(ofr);
       if(failed(emitter.emitAttribute(op.getLoc(), attr)))
         return failure();
     }
     else {
-      Value value = ofr.get<Value>();
+      Value value = cast<Value>(ofr);
       if(failed(emitter.emitValue(value)))
         return failure();
     }
@@ -2337,7 +2337,7 @@ static bool matchSimpleReduction(Block &block) {
   Value reducedVal = matchReduction({block.getArguments()[1]},
                                     /*redPos=*/0, combinerOps);
 
-  if (!reducedVal || !reducedVal.isa<BlockArgument>() ||
+  if (!reducedVal || !isa<BlockArgument>(reducedVal) ||
       combinerOps.size() != 1)
     return false;
 

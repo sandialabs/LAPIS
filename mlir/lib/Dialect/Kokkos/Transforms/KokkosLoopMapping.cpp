@@ -1046,7 +1046,7 @@ struct KokkosLoopMappingPass
       patterns.add<KokkosTeamLevelLoopRewriter>(patterns.getContext());
     else
       patterns.add<KokkosLoopRewriter>(patterns.getContext());
-    (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+    (void) applyPatternsGreedily(getOperation(), std::move(patterns));
   }
 };
 

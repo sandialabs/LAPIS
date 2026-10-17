@@ -62,7 +62,7 @@ struct MemrefCopyToParallelPass
     MLIRContext* ctx = &getContext();
     RewritePatternSet patterns(ctx);
     patterns.add<MemrefCopyRewriter>(patterns.getContext());
-    (void) applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+    (void) applyPatternsGreedily(getOperation(), std::move(patterns));
   }
 };
 
