@@ -1,6 +1,6 @@
-torch==2.5.0
-torchvision==0.20.0
-pybind11==2.13.6
+torch==2.12.1
+torchvision==0.27.1
+nanobind==2.9.0
 packaging
 PyYAML
 requests

@@ -26,6 +26,17 @@
 #ifdef LAPIS_HAS_TORCH_MLIR
 #include "torch-mlir-dialects/Dialect/TMTensor/Transforms/Passes.h"
 #include "torch-mlir/RefBackend/Passes.h"
+// Include the generated pass declarations wrapped in the appropriate namespace
+// so we can use create* functions from torch::RefBackend.
+namespace mlir {
+namespace torch {
+namespace RefBackend {
+#define GEN_PASS_DECL
+#include "torch-mlir/RefBackend/Passes.h.inc"
+#undef GEN_PASS_DECL
+}
+}
+}
 #endif
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
@@ -104,8 +115,8 @@ void mlir::kokkos::buildSparseKokkosCompiler(
   pm.addNestedPass<func::FuncOp>(memref::createExpandReallocPass());
 
   #ifdef LAPIS_HAS_TORCH_MLIR
-  pm.addNestedPass<func::FuncOp>(torch::RefBackend::createGeneralizeTensorPadPass());
-  pm.addNestedPass<func::FuncOp>(torch::RefBackend::createGeneralizeTensorConcatPass());
+   pm.addNestedPass<func::FuncOp>(torch::RefBackend::createGeneralizeTensorPad());
+   pm.addNestedPass<func::FuncOp>(torch::RefBackend::createGeneralizeTensorConcat());
   pm.addNestedPass<func::FuncOp>(torch::TMTensor::createTMTensorBufferizePass());
   #endif
 
@@ -117,7 +128,7 @@ void mlir::kokkos::buildSparseKokkosCompiler(
   pm.addPass(createOneShotBufferizePass(oneShotBuffOptions));
 
   #ifdef LAPIS_HAS_TORCH_MLIR
-  pm.addPass(torch::RefBackend::createMLProgramBufferizePass());
+   pm.addPass(torch::RefBackend::createMLProgramBufferize());
   #endif
 
   pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());
@@ -218,8 +229,8 @@ void mlir::kokkos::buildSparseKokkosCompilerPreAD(
   pm.addNestedPass<func::FuncOp>(memref::createExpandReallocPass());
 
   #ifdef LAPIS_HAS_TORCH_MLIR
-  pm.addNestedPass<func::FuncOp>(torch::RefBackend::createGeneralizeTensorPadPass());
-  pm.addNestedPass<func::FuncOp>(torch::RefBackend::createGeneralizeTensorConcatPass());
+   pm.addNestedPass<func::FuncOp>(torch::RefBackend::createGeneralizeTensorPad());
+   pm.addNestedPass<func::FuncOp>(torch::RefBackend::createGeneralizeTensorConcat());
   pm.addNestedPass<func::FuncOp>(torch::TMTensor::createTMTensorBufferizePass());
   #endif
 
@@ -231,7 +242,7 @@ void mlir::kokkos::buildSparseKokkosCompilerPreAD(
   pm.addPass(createOneShotBufferizePass(oneShotBuffOptions));
 
   #ifdef LAPIS_HAS_TORCH_MLIR
-  pm.addPass(torch::RefBackend::createMLProgramBufferizePass());
+   pm.addPass(torch::RefBackend::createMLProgramBufferize());
   #endif
 
   pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());
@@ -311,8 +322,8 @@ void mlir::kokkos::buildTeamLevelKokkosCompiler(OpPassManager &pm, const TeamLev
   pm.addNestedPass<func::FuncOp>(memref::createExpandReallocPass());
 
   #ifdef LAPIS_HAS_TORCH_MLIR
-  pm.addNestedPass<func::FuncOp>(torch::RefBackend::createGeneralizeTensorPadPass());
-  pm.addNestedPass<func::FuncOp>(torch::RefBackend::createGeneralizeTensorConcatPass());
+   pm.addNestedPass<func::FuncOp>(torch::RefBackend::createGeneralizeTensorPad());
+   pm.addNestedPass<func::FuncOp>(torch::RefBackend::createGeneralizeTensorConcat());
   pm.addNestedPass<func::FuncOp>(torch::TMTensor::createTMTensorBufferizePass());
   #endif
 
@@ -324,7 +335,7 @@ void mlir::kokkos::buildTeamLevelKokkosCompiler(OpPassManager &pm, const TeamLev
   pm.addPass(createOneShotBufferizePass(oneShotBuffOptions));
 
   #ifdef LAPIS_HAS_TORCH_MLIR
-  pm.addPass(torch::RefBackend::createMLProgramBufferizePass());
+   pm.addPass(torch::RefBackend::createMLProgramBufferize());
   #endif
 
   pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());

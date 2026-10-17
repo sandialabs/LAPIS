@@ -15,13 +15,10 @@ export WORKSPACE=`pwd`
 ### Get source code and dependencies
 
 * LAPIS: this repository, main branch
-* [llvm-project](https://github.com/llvm/llvm-project.git): required, version b6603e1b. 
+* [llvm-project](https://github.com/llvm/llvm-project.git): required, version bcd8819aee05.
 * [kokkos](https://github.com/kokkos/kokkos): required for building and running the generated C++ code. Any recent release or develop branch will work.
-* [torch-mlir](https://github.com/llvm/torch-mlir.git): optional, version 6934ab81. 
-  * This includes the correct llvm-project version as a submodule, in ``externals/llvm-project``.
-* [mpact](https://github.com/MPACT-ORG/mpact-compiler): optional, version 556009cd. Requires torch-mlir. 
-  * This includes the correct torch-mlir version as a submodule, in ``externals/torch-mlir``.
-  * This torch-mlir also has the correct llvm-project as a submodule.
+* [torch-mlir](https://github.com/llvm/torch-mlir.git): optional, version 17ae730d. 
+  This also requires torch 2.12.1 and torchvision 0.27.1.
 * Python: optional for dialect development, lowering and C++ emitter. 3.10+ required for running end-to-end examples from PyTorch.
 
 The remaining instructions assume that environment variables ``LAPIS_SRC``, ``LLVM_SRC``, ``TORCH_MLIR_SRC``, and ``MPACT_SRC``
@@ -29,18 +26,17 @@ are set to the paths of these repositories.
 
 The following commands will clone the correct versions of all the repositories and set these environment variables.
 ```
-git clone https://github.com/MPACT-ORG/mpact-compiler
-cd mpact-compiler
-git checkout 556009cd
-git submodule update --init --recursive
-export MPACT_SRC=`pwd`
-export TORCH_MLIR_SRC="$MPACT_SRC/externals/torch-mlir"
-export LLVM_SRC="$TORCH_MLIR_SRC/externals/llvm-project"
+git clone https://github.com/llvm/llvm-project.git
+cd llvm-project
+git checkout bcd8819aee05
+export LLVM_SRC=`pwd`
+cd ..
+git clone https://github.com/llvm/torch-mlir.git
+cd torch-mlir
+export TORCH_MLIR_SRC=`pwd`
 cd ..
 git clone https://github.com/sandialabs/LAPIS
-cd LAPIS
-export LAPIS_SRC=`pwd`
-cd ..
+export LAPIS_SRC=`pwd`/LAPIS
 git clone -b master https://github.com/kokkos/kokkos
 ```
 
@@ -128,11 +124,6 @@ cmake \
   -DLLVM_EXTERNAL_PROJECTS="torch-mlir;lapis" \
   -DLLVM_EXTERNAL_TORCH_MLIR_SOURCE_DIR="$TORCH_MLIR_SRC" \
   -DTORCH_MLIR_ENABLE_PYTORCH_EXTENSIONS=ON \
-
-# To also enable mpact, set:
-  -DLLVM_EXTERNAL_PROJECTS="torch-mlir;mpact;lapis" \
-  -DLLVM_EXTERNAL_MPACT_SOURCE_DIR="$MPACT_SRC" \
-
 # Then run ninja.
 ```
 
