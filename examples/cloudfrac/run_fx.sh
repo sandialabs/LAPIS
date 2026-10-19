@@ -2,6 +2,9 @@
 
 set -e
 
+# Uncomment to regenerate the MLIR from model
+# python3 cloud.py
+
 echo "Lowering with team-level pipeline..."
 lapis-opt --team-compiler-kokkos cloudfrac_torchfx.mlir -o cloudfrac_lowered.mlir
 echo "Emitting Kokkos..."
