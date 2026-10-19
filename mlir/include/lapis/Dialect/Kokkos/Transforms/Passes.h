@@ -14,6 +14,8 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "mlir/Dialect/Bufferization/Transforms/OneShotAnalysis.h"
+#include "mlir/Dialect/SparseTensor/Transforms/Passes.h"
 
 namespace mlir {
 
@@ -37,6 +39,17 @@ std::unique_ptr<Pass> createKokkosLoopMappingPass(bool teamLevel = false);
 std::unique_ptr<Pass> createKokkosDualViewManagementPass();
 
 std::unique_ptr<Pass> createKokkosMdrangeIterationPass();
+
+std::unique_ptr<Pass> createLapisSparsificationAndBufferizationPass();
+
+std::unique_ptr<Pass> createLapisSparsificationAndBufferizationPass(
+    const bufferization::OneShotBufferizationOptions &bufferizationOptions,
+    const SparsificationOptions &sparsificationOptions,
+    bool createSparseDeallocs, bool enableRuntimeLibrary,
+    bool enableBufferInitialization, unsigned vectorLength,
+    bool enableVLAVectorization, bool enableSIMDIndex32, bool enableGPULibgen,
+    SparseEmitStrategy emitStrategy,
+    SparseParallelizationStrategy parallelizationStrategy);
 
 //===----------------------------------------------------------------------===//
 // Registration.

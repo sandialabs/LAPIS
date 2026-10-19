@@ -130,4 +130,62 @@ def KokkosMdrangeIteration : Pass<"kokkos-mdrange-iteration", "ModuleOp"> {
   ];
 }
 
+def LapisSparsificationAndBufferization : Pass<"lapis-sparsification-and-bufferization", "ModuleOp"> {
+  let summary = "LAPIS-patched mini-pipeline that combines bufferization and sparsification";
+  let description = [{
+    LAPIS-maintained copy of LLVM's SparsificationAndBufferization pass with
+    a patched LICM behavior to avoid incorrect hoisting of linalg.fill
+    operations (see LAPIS pcg_solve issue).
+  }];
+  let constructor = "mlir::createLapisSparsificationAndBufferizationPass()";
+  let dependentDialects = [
+    "affine::AffineDialect",
+    "arith::ArithDialect",
+    "bufferization::BufferizationDialect",
+    "gpu::GPUDialect",
+    "LLVM::LLVMDialect",
+    "linalg::LinalgDialect",
+    "memref::MemRefDialect",
+    "scf::SCFDialect",
+    "sparse_tensor::SparseTensorDialect",
+    "vector::VectorDialect"
+  ];
+  let options = [
+    Option<"vectorLength", "vl", "int32_t", "0",
+           "Set the vector length (use 0 to disable vectorization)">,
+    Option<"enableVLAVectorization", "enable-vla-vectorization", "bool", "false",
+           "Enable vector length agnostic vectorization">,
+    Option<"enableSIMDIndex32", "enable-simd-index32", "bool", "false",
+           "Enable i32 indexing into vectors (for efficient gather/scatter)">,
+    Option<"enableGPULibgen", "enable-gpu-libgen", "bool", "false",
+           "Enable GPU acceleration by means of direct library calls">,
+    Option<"sparseEmitStrategy", "sparse-emit-strategy", "mlir::SparseEmitStrategy",
+           "mlir::SparseEmitStrategy::kFunctional",
+           "Emit functional code or interfaces (to debug) for sparse loops", [{llvm::cl::values(
+             clEnumValN(mlir::SparseEmitStrategy::kFunctional, "functional",
+                        "Emit functional code (with scf.for/while)."),
+             clEnumValN(mlir::SparseEmitStrategy::kSparseIterator, "sparse-iterator",
+                        "Emit (experimental) loops (with sparse.iterate)."),
+             clEnumValN(mlir::SparseEmitStrategy::kDebugInterface, "debug-interface",
+                        "Emit non-functional but easy-to-read interfaces to debug."))}]>,
+    Option<"parallelization", "parallelization-strategy", "mlir::SparseParallelizationStrategy",
+           "mlir::SparseParallelizationStrategy::kNone",
+           "Set the parallelization strategy", [{llvm::cl::values(
+             clEnumValN(mlir::SparseParallelizationStrategy::kNone, "none",
+                        "Turn off sparse parallelization."),
+             clEnumValN(mlir::SparseParallelizationStrategy::kDenseOuterLoop,
+                        "dense-outer-loop",
+                        "Enable dense outer loop sparse parallelization."),
+             clEnumValN(mlir::SparseParallelizationStrategy::kAnyStorageOuterLoop,
+                        "any-storage-outer-loop",
+                        "Enable sparse parallelization regardless of storage for the outer loop."),
+             clEnumValN(mlir::SparseParallelizationStrategy::kDenseAnyLoop,
+                        "dense-any-loop",
+                        "Enable dense parallelization for any loop."),
+             clEnumValN(mlir::SparseParallelizationStrategy::kAnyStorageAnyLoop,
+                        "any-storage-any-loop",
+                        "Enable sparse parallelization for any storage and loop."))}]>,
+  ];
+}
+
 #endif // MLIR_DIALECT_KOKKOS_TRANSFORMS_PASSES

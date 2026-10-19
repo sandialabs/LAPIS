@@ -8,6 +8,7 @@ add_mlir_dialect_library(MLIRKokkosTransforms
   KokkosLoopMapping.cpp
   KokkosDualViewManagement.cpp
   KokkosMdrangeIterationPass.cpp
+  LapisSparsificationAndBufferizationPass.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Dialect/Kokkos
@@ -31,6 +32,8 @@ add_mlir_dialect_library(MLIRKokkosTransforms
   MLIRSCFDialect
   MLIRSCFTransforms
   MLIRSCFUtils
+  MLIRSparseTensorDialect
+  MLIRSparseTensorTransforms
   MLIRKokkosDialect
   MLIRTensorDialect
   MLIRTransforms
