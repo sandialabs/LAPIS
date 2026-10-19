@@ -1,12 +1,10 @@
 import torch
 from torch import Tensor
-import torch_mlir
-from torch_mlir import torchscript
+from torch_mlir import fx
 from lapis import KokkosBackend
 from torch import nn
 import sys
 from numpy import allclose
-from torch_mlir.compiler_utils import TensorPlaceholder
 
 def main():
     N = 2
@@ -25,8 +23,10 @@ def main():
     m = nn.MaxPool2d(3, stride=None, padding=1, dilation=2)
     m.train(False)
 
-    ph = TensorPlaceholder([-1, C, H, W], torch.float32)
-    mlir_module = torchscript.compile(m, ph, output_type='linalg-on-tensors')
+    dim_n = torch.export.Dim("n", min=1)
+    dynamic_shapes = ({0: dim_n},)
+
+    mlir_module = fx.export_and_import(m, T, output_type='linalg-on-tensors', func_name='forward', dynamic_shapes=dynamic_shapes)
 
     backend = KokkosBackend.KokkosBackend(dump_mlir=False)
     k_backend = backend.compile(mlir_module)

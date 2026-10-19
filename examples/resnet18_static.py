@@ -9,9 +9,7 @@ import math
 import torch
 import torchvision.models as models
 from torchvision import transforms
-from torch_mlir import torchscript
-from torch_mlir.compiler_utils import TensorPlaceholder
-from torch_mlir_e2e_test.linalg_on_tensors_backends import refbackend
+from torch_mlir import fx
 from lapis import KokkosBackend
 from PIL import Image
 
@@ -62,9 +60,7 @@ print(img.shape)
 labels = load_labels()
 
 resnet18 = models.resnet18(pretrained=True).eval()
-
-imgPH = TensorPlaceholder([1, 3, 224, 224], torch.float32)
-kModule = torchscript.compile(resnet18, imgPH, output_type="linalg-on-tensors")
+kModule = fx.export_and_import(resnet18, img, output_type="linalg-on-tensors", func_name='forward')
 kBackend = KokkosBackend.KokkosBackend()
 kCompiledModule = kBackend.compile(kModule)
 

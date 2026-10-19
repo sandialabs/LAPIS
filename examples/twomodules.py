@@ -1,7 +1,6 @@
 import torch
 from torch import Tensor
-import torch_mlir
-from torch_mlir import torchscript
+from torch_mlir import fx
 from lapis import KokkosBackend
 from torch import nn
 import sys
@@ -30,8 +29,8 @@ def main():
     m2 = Matmul()
     m2.train(False)
 
-    ir1 = torchscript.compile(m1, (a, b), output_type='linalg-on-tensors')
-    ir2 = torchscript.compile(m2, (a, b), output_type='linalg-on-tensors')
+    ir1 = fx.export_and_import(m1, a, b, output_type='linalg-on-tensors', func_name='forward')
+    ir2 = fx.export_and_import(m2, a, b, output_type='linalg-on-tensors', func_name='forward')
 
     backend1 = KokkosBackend.KokkosBackend(index_instance=0, num_instances=2)
     k1 = backend1.compile(ir1)
