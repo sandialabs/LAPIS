@@ -1,9 +1,7 @@
 import torch
 from torch import Tensor
-import torch_mlir
-from torch_mlir import torchscript
+from torch_mlir import fx
 from lapis import KokkosBackend
-from torch import nn
 import sys
 from numpy import allclose
 
@@ -22,7 +20,7 @@ def main():
     m = Adder()
     m.train(False)
 
-    mlir_module = torchscript.compile(m, (a, b), output_type='linalg-on-tensors')
+    mlir_module = fx.export_and_import(m, a, b, output_type='linalg-on-tensors', func_name='forward')
 
     print(mlir_module)
 
