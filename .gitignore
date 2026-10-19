@@ -162,3 +162,6 @@ examples/maxpool_nchw_teamlevel/maxpool.cpp
 examples/maxpool_nchw_teamlevel/maxpool.hpp
 examples/maxpool_nchw_teamlevel/maxpool_lowered.mlir
 
+# Resnet18 model weights and class labels
+examples/data/resnet18-f37072fd.pth
+examples/data/imagenet-classes.txt

@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 import math
 import torch
-import torchvision.models as models
 from torchvision import transforms
 from torch_mlir import fx
 from lapis import KokkosBackend
@@ -16,8 +15,14 @@ from PIL import Image
 sys.path.append(str(Path(__file__).absolute().parent))
 from utils._example_utils import (
     top3_possibilities,
-    load_labels
+    load_labels,
+    load_resnet18_weights,
 )
+# Pretrained weights and labels are loaded via load_resnet18_weights() and
+# load_labels(). To use real weights offline, download:
+#   https://download.pytorch.org/models/resnet18-f37072fd.pth
+#   https://raw.githubusercontent.com/cathyzhyi/ml-data/main/imagenet-classes.txt
+# and place them in examples/data/ as resnet18-f37072fd.pth and imagenet-classes.txt.
 
 def load_and_preprocess_image_file(path: str):
     img = Image.open(path).convert("RGB")
@@ -58,7 +63,7 @@ images = load_multiple_images(['images/' + name + '.jpg' for name in ['goldfish'
 print("Loaded 3 images: overall tensor shape is", images.shape)
 labels = load_labels()
 
-resnet18 = models.resnet18(pretrained=True).eval()
+resnet18 = load_resnet18_weights().eval()
 
 dim_batch = torch.export.Dim("batch", min=1)
 dynamic_shapes = ({0: dim_batch},)
