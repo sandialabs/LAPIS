@@ -1,10 +1,8 @@
 import torch
 from torch import Tensor
-import torch_mlir
-from torch_mlir import torchscript
+from torch_mlir import fx
 from lapis import KokkosBackend
 from torch import nn
-from torch_mlir.compiler_utils import TensorPlaceholder
 import numpy as np
 import sys
 
@@ -24,10 +22,13 @@ def main():
     m = BatchedMatmul()
     m.train(False)
 
-    aPH = TensorPlaceholder([-1, -1, -1], a.dtype)
-    bPH = TensorPlaceholder([-1, -1, -1], b.dtype)
+    dim_batch = torch.export.Dim("batch", min=1)
+    dim_m = torch.export.Dim("m", min=1)
+    dim_k = torch.export.Dim("k", min=1)
+    dim_n = torch.export.Dim("n", min=1)
+    dynamic_shapes = ({0: dim_batch, 1: dim_m, 2: dim_k}, {0: dim_batch, 1: dim_k, 2: dim_n})
 
-    mlir_module = torchscript.compile(m, (aPH, bPH), output_type='linalg-on-tensors')
+    mlir_module = fx.export_and_import(m, a, b, output_type='linalg-on-tensors', func_name='forward', dynamic_shapes=dynamic_shapes)
 
     print(mlir_module)
 

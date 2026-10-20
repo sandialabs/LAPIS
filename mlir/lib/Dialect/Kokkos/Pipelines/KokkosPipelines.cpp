@@ -96,7 +96,7 @@ void mlir::kokkos::buildSparseKokkosCompiler(
       /* enableRuntimeLibrary*/ enableRuntimeLib);
 
   // Sparsification and bufferization mini-pipeline.
-  pm.addPass(createSparsificationAndBufferizationPass(
+  pm.addPass(createLapisSparsificationAndBufferizationPass(
         getBufferizationOptionsForSparsification(false),
         sparseOptions,
         /* createSparseDeallocs */ false,
@@ -210,7 +210,7 @@ void mlir::kokkos::buildSparseKokkosCompilerPreAD(
       /* enableRuntimeLibrary*/ enableRuntimeLib);
 
   // Sparsification and bufferization mini-pipeline.
-  pm.addPass(createSparsificationAndBufferizationPass(
+  pm.addPass(createLapisSparsificationAndBufferizationPass(
         getBufferizationOptionsForSparsification(false),
         sparseOptions,
         /* createSparseDeallocs */ false,
@@ -303,7 +303,7 @@ void mlir::kokkos::buildTeamLevelKokkosCompiler(OpPassManager &pm, const TeamLev
       /* enableRuntimeLibrary*/ false);
 
   // Sparsification and bufferization mini-pipeline.
-  pm.addPass(createSparsificationAndBufferizationPass(
+  pm.addPass(createLapisSparsificationAndBufferizationPass(
         getBufferizationOptionsForSparsification(false),
         sparseOptions,
         /* createSparseDeallocs */ false,
@@ -400,4 +400,3 @@ void mlir::kokkos::registerKokkosPipelines() {
       "The pipeline for compiling dense models to team-level functions",
       buildTeamLevelKokkosCompiler);
 }
-

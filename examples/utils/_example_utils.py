@@ -4,6 +4,7 @@
 # Also available under a BSD-style license. See LICENSE.
 
 from PIL import Image
+from pathlib import Path
 import requests
 
 import torch
@@ -16,6 +17,11 @@ DEFAULT_IMAGE_URL = (
 DEFAULT_LABEL_URL = (
     "https://raw.githubusercontent.com/cathyzhyi/ml-data/main/imagenet-classes.txt"
 )
+
+# Directory for cached data files (weights, labels, etc.)
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+LOCAL_LABEL_FILE = DATA_DIR / "imagenet-classes.txt"
+LOCAL_WEIGHTS_FILE = DATA_DIR / "resnet18-f37072fd.pth"
 
 
 def load_and_preprocess_image(url: str = DEFAULT_IMAGE_URL):
@@ -37,12 +43,44 @@ def load_and_preprocess_image(url: str = DEFAULT_IMAGE_URL):
 
 
 def load_labels(url: str = DEFAULT_LABEL_URL):
-    classes_text = requests.get(
-        url=url,
-        stream=True,
-    ).text
-    labels = [line.strip() for line in classes_text.splitlines()]
+    if LOCAL_LABEL_FILE.exists():
+        with open(LOCAL_LABEL_FILE, "r") as f:
+            classes_text = f.read()
+    else:
+        try:
+            classes_text = requests.get(
+                url=url,
+                stream=True,
+            ).text
+        except Exception:
+            classes_text = ""
+    labels = [line.strip() for line in classes_text.splitlines()] if classes_text else [f"class_{i}" for i in range(1000)]
     return labels
+
+
+def load_resnet18_weights():
+    """Load ResNet18 pretrained weights from local file if available.
+
+    Looks for examples/data/resnet18-f37072fd.pth first. If that file
+    does not exist, falls back to torchvision's default download behavior.
+    If no network is available, returns a model with random weights
+    (using a fixed seed for reproducibility).
+    """
+    import torchvision.models as models
+
+    if LOCAL_WEIGHTS_FILE.exists():
+        state_dict = torch.load(LOCAL_WEIGHTS_FILE, map_location="cpu")
+        if "state_dict" in state_dict:
+            state_dict = state_dict["state_dict"]
+        model = models.resnet18(weights=None)
+        model.load_state_dict(state_dict)
+        return model
+    else:
+        try:
+            return models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
+        except Exception:
+            torch.manual_seed(42)
+            return models.resnet18(weights=None)
 
 
 def top3_possibilities(res, labels):

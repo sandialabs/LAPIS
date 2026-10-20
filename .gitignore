@@ -152,3 +152,16 @@ examples/mala_batch/forward_snap.hpp
 examples/mala_batch/forward_snap_lowered.mlir
 examples/mala_batch/build/
 
+# Temporary files produced by cloudfrac_fx test
+examples/cloudfrac/cloudfrac.cpp
+examples/cloudfrac/cloudfrac.hpp
+examples/cloudfrac/cloudfrac_lowered.mlir
+
+# Temporary files produced by maxpool_nchw test
+examples/maxpool_nchw_teamlevel/maxpool.cpp
+examples/maxpool_nchw_teamlevel/maxpool.hpp
+examples/maxpool_nchw_teamlevel/maxpool_lowered.mlir
+
+# Resnet18 model weights and class labels
+examples/data/resnet18-f37072fd.pth
+examples/data/imagenet-classes.txt
