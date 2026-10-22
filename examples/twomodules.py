@@ -38,9 +38,9 @@ def main():
     k2 = backend2.compile(ir2)
 
     print("Sum:")
-    print(k1.forward(a,b))
+    print(k1.forward(a,b).asnumpy())
     print("Prod:")
-    print(k2.forward(a,b))
+    print(k2.forward(a,b).asnumpy())
 
     del k1
     del k2

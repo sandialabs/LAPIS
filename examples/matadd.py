@@ -32,7 +32,7 @@ def main():
     print(sumTorch)
 
     print("a+b from kokkos")
-    sumKokkos = k_backend.forward(a, b)
+    sumKokkos = k_backend.forward(a, b).asnumpy()
     print(sumKokkos)
 
     sys.exit(0 if allclose(sumTorch, sumKokkos) else 1)

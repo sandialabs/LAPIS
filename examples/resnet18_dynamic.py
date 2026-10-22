@@ -44,7 +44,7 @@ def load_multiple_images(paths):
 
 def predictions(torch_func, kokkos_func, images, labels):
     torch_pred = torch_func(images)
-    kokkos_pred = torch.from_numpy(kokkos_func(images.numpy()))
+    kokkos_pred = torch.from_numpy(kokkos_func(images.numpy()).asnumpy())
     success = True
     for i in range(3):
         print("Image", i, "top 3 predictions:")

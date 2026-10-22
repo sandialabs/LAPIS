@@ -23,11 +23,7 @@ def main():
     ykokkos = np.zeros((m), dtype=np.double)
 
     backend = KokkosBackend.KokkosBackend(decompose_tensors=True)
-    should_compile = True
-    if should_compile:
-        module_kokkos = backend.compile(moduleText)
-    else:
-        import lapis_package.lapis_package as module_kokkos
+    module_kokkos = backend.compile(moduleText)
 
     print("y = Ax from kokkos:")
     module_kokkos.spmv(rowptrs, colinds, values, ((m, n), (len(rowptrs), len(colinds), len(values))), x, ykokkos)

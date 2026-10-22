@@ -32,11 +32,7 @@ def main():
     ckokkos = torch.zeros((m, n))
 
     backend = KokkosBackend.KokkosBackend(dump_mlir=False)
-    should_compile = True
-    if should_compile:
-        k_backend = backend.compile(module)
-    else:
-        import lapis_package.lapis_package as k_backend
+    k_backend = backend.compile(module)
 
     print("a*b from kokkos")
     print(f"{type(a)=} {type(b)=} {type(ckokkos)=}")

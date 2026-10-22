@@ -37,11 +37,7 @@ def main():
         xcorrect[i] += alpha
 
     backend = KokkosBackend.KokkosBackend(decompose_tensors=True)
-    should_compile = True
-    if should_compile:
-        module_kokkos = backend.compile(moduleText)
-    else:
-        import lapis_package.lapis_package as module_kokkos
+    module_kokkos = backend.compile(moduleText)
     x = module_kokkos.f(A, alpha, k, False).asnumpy()
     print("Result 1:", x)
 

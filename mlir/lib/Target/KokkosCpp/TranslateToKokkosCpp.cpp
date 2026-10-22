@@ -2726,6 +2726,7 @@ static LogicalResult printFunctionDeviceLevel(KokkosCppEmitter &emitter, func::F
     if(memrefType)
     {
       emitter << "auto param" << i << " = param" << i << "_wrapper->toView();\n";
+      emitter << "param" << i << ".syncHostOnDestroy();\n";
     }
   }
   // Emit the call
