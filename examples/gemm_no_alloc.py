@@ -35,7 +35,6 @@ def main():
     k_backend = backend.compile(module)
 
     print("a*b from kokkos")
-    print(f"{type(a)=} {type(b)=} {type(ckokkos)=}")
     k_backend.forward(a, b, ckokkos)
     print(ckokkos)
 
