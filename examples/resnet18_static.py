@@ -42,7 +42,7 @@ def predictions(torch_func, kokkos_func, img, labels):
     pred1 = top3_possibilities(torch_func(img), labels)
     print("PyTorch prediction")
     print(pred1)
-    pred2 = top3_possibilities(torch.from_numpy(kokkos_func(img.numpy())), labels)
+    pred2 = top3_possibilities(torch.from_numpy(kokkos_func(img.numpy()).asnumpy()), labels)
     print("LAPIS prediction")
     print(pred2)
     # Return success if top class is correct, and its probability is close to torch's

@@ -36,7 +36,7 @@ def main():
     k_backend = backend.compile(mlir_module)
 
     print("a*b from kokkos (showing slice [0,:,:] only)")
-    ckokkos = k_backend.forward(a, b)
+    ckokkos = k_backend.forward(a, b).asnumpy()
     print(ckokkos[0, :, :])
 
     print("a*b from pytorch (showing slice [0,:,:] only)")

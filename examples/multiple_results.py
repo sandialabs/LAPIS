@@ -30,6 +30,7 @@ def main():
     print("y:", y)
 
     (x_plus_y, norm) = module_kokkos.plus_norm(x, y)
+    x_plus_y = x_plus_y.asnumpy()
 
     print("x + y:", x_plus_y)
     print("norm(x+y):", norm)

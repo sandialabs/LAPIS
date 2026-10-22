@@ -38,7 +38,7 @@ def main():
 
     backend = KokkosBackend.KokkosBackend(decompose_tensors=True)
     module_kokkos = backend.compile(moduleText)
-    x = module_kokkos.f(A, alpha, k, False)
+    x = module_kokkos.f(A, alpha, k, False).asnumpy()
     print("Result 1:", x)
 
     if not np.allclose(x, xcorrect):
@@ -49,7 +49,7 @@ def main():
     for i in range(8):
         xcorrect[i] -= alpha
 
-    x = module_kokkos.f(A, alpha, k, True)
+    x = module_kokkos.f(A, alpha, k, True).asnumpy()
     print("Result 2:", x)
 
     if not np.allclose(x, xcorrect):

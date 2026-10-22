@@ -32,7 +32,7 @@ def main():
     k_backend = backend.compile(mlir_module)
 
     mpTorch = m(T).numpy()
-    mpKokkos = k_backend.forward(T)
+    mpKokkos = k_backend.forward(T).asnumpy()
 
     if allclose(mpTorch, mpKokkos):
         print("Success, results match with torch")

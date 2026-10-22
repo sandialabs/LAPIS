@@ -29,7 +29,7 @@ def main():
     k_backend = backend.compile(mlir_module)
 
     print("a*b from kokkos")
-    print(k_backend.forward(a, b))
+    print(k_backend.forward(a, b).asnumpy())
 
     print("a*b from pytorch")
     print(m.forward(a, b).numpy())

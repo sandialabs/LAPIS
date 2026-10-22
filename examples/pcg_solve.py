@@ -127,6 +127,7 @@ def main():
     print("x exact solution (first 10 elements):", xgold[:10])
 
     (x, numiter, relres) = module_kokkos.pcg(A.indptr, A.indices, A.data, ((n, n), (n + 1, nnz, nnz)), b, dinv, reltol, maxiter)
+    x = x.asnumpy()
     print("Ran CG for", numiter, "iterations and achieved relative residual norm", relres)
     print("x vector from LAPIS (first 10 elements):", x[:10])
 
