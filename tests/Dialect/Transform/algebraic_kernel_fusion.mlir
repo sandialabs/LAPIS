@@ -1,4 +1,4 @@
-// RUN: %lapis-opt %s --algebraic-kernel-fusion | diff -B %s.gold -
+// RUN: %lapis-opt %s --algebraic-kernel-fusion | diff %s.gold -
 // RUN: %lapis-opt %s '--sparse-compiler-kokkos=parallelization-strategy=any-storage-any-loop decompose-sparse-tensors algebraic-kernel-fusion' > %t.kokkos
 // RUN: grep lapis.algebraic_kernel %t.kokkos > /dev/null
 // RUN: sed -n '/func.func private @fan_in__lapis_algebraic_kernel/,/func.func @fan_in/p' %t.kokkos > %t.fan_in
