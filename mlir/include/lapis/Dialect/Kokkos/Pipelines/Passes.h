@@ -59,6 +59,12 @@ struct LapisCompilerOptions
     *this, "decompose-sparse-tensors",
     desc("Decompose sparse tensors into memrefs (default off)"), init(false)};
 
+  PassOptions::Option<bool> algebraicKernelFusion{
+      *this, "algebraic-kernel-fusion",
+      desc("Enable algebraic contraction planning and selected kernel fusion "
+           "(default off)"),
+      init(false)};
+
 #ifdef LAPIS_ENABLE_PART_TENSOR
   PassOptions::Option<mlir::PartTensorDistBackend> partTensorBackend{
       *this, "pt-backend",

@@ -1,0 +1,6 @@
+#define LAPIS_ATTENTION_QUERY_LENGTH 512
+#define LAPIS_ATTENTION_KEY_LENGTH 2048
+#define LAPIS_ATTENTION_FEATURE_SIZE 64
+#define LAPIS_ATTENTION_VALUE_SIZE 64
+#define LAPIS_ATTENTION_CASE "linear_attention_large"
+#include "linear_attention.cpp"

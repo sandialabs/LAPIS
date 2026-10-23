@@ -9,4 +9,5 @@ set_property(
 file(COPY ${TESTFILES} DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/.)
 
 add_subdirectory(Dialect)
+add_subdirectory(Transform)
 #add_subdirectory(PartTensor)

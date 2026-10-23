@@ -20,6 +20,7 @@ target_link_libraries(lapis-opt
   MLIRTransformUtils
   MLIRSupport
   MLIRIR
+  MLIRLapisTransforms
   MLIRFuncAllExtensions
   )
 
